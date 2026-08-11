@@ -10,6 +10,12 @@ pub struct Document {
     pub(crate) pages: Vec<Page>,
     #[serde(default)]
     pub(crate) color_library: Vec<ColorAsset>,
+    #[serde(default)]
+    pub(crate) number_variables: Vec<NumberVariable>,
+    #[serde(default)]
+    pub(crate) text_styles: Vec<TextStyleAsset>,
+    #[serde(default)]
+    pub(crate) media_assets: Vec<MediaAsset>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -17,6 +23,40 @@ pub struct ColorAsset {
     pub(crate) id: EntityId,
     pub(crate) name: String,
     pub(crate) value: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NumberVariable {
+    pub(crate) id: EntityId,
+    pub(crate) name: String,
+    pub(crate) value: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TextStyleAsset {
+    pub(crate) id: EntityId,
+    pub(crate) name: String,
+    pub(crate) style: TypographyStyle,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MediaAsset {
+    pub(crate) id: EntityId,
+    pub(crate) name: String,
+    pub(crate) kind: MediaAssetKind,
+    pub(crate) mime_type: String,
+    pub(crate) source: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    #[serde(default)]
+    pub(crate) tags: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaAssetKind {
+    Image,
+    Icon,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -87,6 +127,26 @@ pub struct Node {
     pub(crate) locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) text: Option<TextStyle>,
+    #[serde(default)]
+    pub(crate) variable_bindings: VariableBindings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) text_style_id: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) asset_id: Option<EntityId>,
+    #[serde(default)]
+    pub(crate) image_fit: ImageFit,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct VariableBindings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) width: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) height: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) gap: Option<EntityId>,
+    #[serde(default)]
+    pub(crate) padding: [Option<EntityId>; 4],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -127,6 +187,50 @@ impl Default for TextStyle {
             font_style: FontStyle::Normal,
             sizing: TextSizing::AutoWidth,
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TypographyStyle {
+    pub(crate) font_family: String,
+    pub(crate) font_weight: u16,
+    pub(crate) font_size: f32,
+    pub(crate) line_height: f32,
+    pub(crate) letter_spacing: f32,
+    pub(crate) horizontal_align: TextAlign,
+    pub(crate) vertical_align: TextVerticalAlign,
+    pub(crate) font_style: FontStyle,
+    #[serde(default)]
+    pub(crate) sizing: TextSizing,
+}
+
+impl From<&TextStyle> for TypographyStyle {
+    fn from(text: &TextStyle) -> Self {
+        Self {
+            font_family: text.font_family.clone(),
+            font_weight: text.font_weight,
+            font_size: text.font_size,
+            line_height: text.line_height,
+            letter_spacing: text.letter_spacing,
+            horizontal_align: text.horizontal_align,
+            vertical_align: text.vertical_align,
+            font_style: text.font_style,
+            sizing: text.sizing,
+        }
+    }
+}
+
+impl TypographyStyle {
+    pub(crate) fn apply_to(&self, text: &mut TextStyle) {
+        text.font_family = self.font_family.clone();
+        text.font_weight = self.font_weight;
+        text.font_size = self.font_size;
+        text.line_height = self.line_height;
+        text.letter_spacing = self.letter_spacing;
+        text.horizontal_align = self.horizontal_align;
+        text.vertical_align = self.vertical_align;
+        text.font_style = self.font_style;
+        text.sizing = self.sizing;
     }
 }
 
@@ -269,6 +373,17 @@ pub enum NodeKind {
     Rectangle,
     Group,
     Text,
+    Image,
+    Icon,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFit {
+    #[default]
+    Cover,
+    Contain,
+    Fill,
 }
 
 #[derive(Serialize)]
@@ -278,6 +393,9 @@ pub(crate) struct DocumentReadModel<'a> {
     pub(crate) pages: Vec<PageSummary<'a>>,
     pub(crate) nodes: &'a [Node],
     pub(crate) document_colors: &'a [ColorAsset],
+    pub(crate) number_variables: &'a [NumberVariable],
+    pub(crate) text_styles: &'a [TextStyleAsset],
+    pub(crate) media_assets: &'a [MediaAsset],
 }
 
 #[derive(Serialize)]

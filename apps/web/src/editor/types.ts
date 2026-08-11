@@ -2,6 +2,29 @@ export type Mode = "design" | "developer" | "review";
 export type EntityId = string;
 export type PageSummary = { id: EntityId; name: string; description: string };
 export type ColorAsset = { id: EntityId; name: string; value: string };
+export type NumberVariable = { id: EntityId; name: string; value: number };
+export type TypographyStyle = Omit<TextStyleSummary, "content">;
+export type TextStyleAsset = {
+  id: EntityId;
+  name: string;
+  style: TypographyStyle;
+};
+export type MediaAsset = {
+  id: EntityId;
+  name: string;
+  kind: "image" | "icon";
+  mime_type: string;
+  source: string;
+  width: number;
+  height: number;
+  tags: string[];
+};
+export type VariableBindings = {
+  width?: EntityId;
+  height?: EntityId;
+  gap?: EntityId;
+  padding: Array<EntityId | null>;
+};
 export type ShadowSummary = {
   kind: "outer" | "inner";
   color: number[];
@@ -26,7 +49,7 @@ export type TextStyleSummary = {
 export type NodeSummary = {
   id: EntityId;
   name: string;
-  kind: "frame" | "rectangle" | "group" | "text";
+  kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon";
   parent_id?: EntityId;
   x: number;
   y: number;
@@ -57,6 +80,10 @@ export type NodeSummary = {
   guide_opacity: number;
   locked: boolean;
   text?: TextStyleSummary;
+  variable_bindings: VariableBindings;
+  text_style_id?: EntityId;
+  asset_id?: EntityId;
+  image_fit: "cover" | "contain" | "fill";
 };
 export type DocumentReadModel = {
   schema_version: number;
@@ -64,4 +91,7 @@ export type DocumentReadModel = {
   pages: PageSummary[];
   nodes: NodeSummary[];
   document_colors: ColorAsset[];
+  number_variables: NumberVariable[];
+  text_styles: TextStyleAsset[];
+  media_assets: MediaAsset[];
 };

@@ -29,13 +29,19 @@ import {
 } from "../editor/font-catalog";
 import type {
   NodeSummary,
+  MediaAsset,
+  NumberVariable,
   ShadowSummary,
+  TextStyleAsset,
   TextStyleSummary,
 } from "../editor/types";
 
 export function Properties(props: {
   selected: NodeSummary[];
   documentColors: string[];
+  numberVariables: NumberVariable[];
+  textStyles: TextStyleAsset[];
+  mediaAssets: MediaAsset[];
   onAddDocumentColor: (color: string) => void;
   onAlign: (alignment: string) => void;
   onDelete: () => void;
@@ -58,6 +64,20 @@ export function Properties(props: {
   onOpacityChange: (node: NodeSummary, opacity: number) => void;
   onShadowsChange: (node: NodeSummary, shadows: ShadowSummary[]) => void;
   onTextChange: (node: NodeSummary, text: TextStyleSummary) => void;
+  onVariableBind: (
+    node: NodeSummary,
+    property: string,
+    variableId?: string,
+  ) => void;
+  onTextStyleBind: (node: NodeSummary, styleId?: string) => void;
+  onCreateVariable: (
+    node: NodeSummary,
+    property: string,
+    value: number,
+  ) => void;
+  onCreateTextStyle: (node: NodeSummary) => void;
+  onImageFitChange: (node: NodeSummary, fit: NodeSummary["image_fit"]) => void;
+  onAssetChange: (node: NodeSummary, assetId: string) => void;
   onTransformChange: (
     node: NodeSummary,
     change: Partial<Pick<NodeSummary, "rotation" | "flip_x" | "flip_y">>,
@@ -143,6 +163,18 @@ export function Properties(props: {
                 />
               )}
             </PropertySection>
+            <PropertySection title="Variables">
+              <VariableBindingControls
+                node={node}
+                variables={props.numberVariables}
+                onBind={(property, variableId) =>
+                  props.onVariableBind(node, property, variableId)
+                }
+                onCreate={(property, value) =>
+                  props.onCreateVariable(node, property, value)
+                }
+              />
+            </PropertySection>
             {(node.kind === "frame" || node.kind === "group") && (
               <PropertySection title="Auto layout">
                 <AutoLayoutControls
@@ -166,25 +198,41 @@ export function Properties(props: {
             {node.kind === "text" && node.text && (
               <TypographyControls
                 text={node.text}
+                textStyles={props.textStyles}
+                textStyleId={node.text_style_id}
+                onTextStyleChange={(styleId) =>
+                  props.onTextStyleBind(node, styleId)
+                }
+                onCreateTextStyle={() => props.onCreateTextStyle(node)}
                 onChange={(change) =>
                   props.onTextChange(node, { ...node.text!, ...change })
                 }
               />
             )}
-            {node.kind !== "group" && (
-              <StyleControls
-                node={node}
-                documentColors={props.documentColors}
-                onAddDocumentColor={props.onAddDocumentColor}
-                onChange={(change) => props.onStyleChange(node, change)}
-                onOpacityChange={(opacity) =>
-                  props.onOpacityChange(node, opacity)
-                }
-                onShadowsChange={(shadows) =>
-                  props.onShadowsChange(node, shadows)
-                }
-              />
+            {(node.kind === "image" || node.kind === "icon") && (
+              <PropertySection title="Media">
+                <MediaControls
+                  node={node}
+                  assets={props.mediaAssets}
+                  onAssetChange={(assetId) =>
+                    props.onAssetChange(node, assetId)
+                  }
+                  onFitChange={(fit) => props.onImageFitChange(node, fit)}
+                />
+              </PropertySection>
             )}
+            <StyleControls
+              node={node}
+              documentColors={props.documentColors}
+              onAddDocumentColor={props.onAddDocumentColor}
+              onChange={(change) => props.onStyleChange(node, change)}
+              onOpacityChange={(opacity) =>
+                props.onOpacityChange(node, opacity)
+              }
+              onShadowsChange={(shadows) =>
+                props.onShadowsChange(node, shadows)
+              }
+            />
           </>
         )}
         <PropertySection title="Actions">
@@ -195,6 +243,54 @@ export function Properties(props: {
         <EmptyState text="Drag on the canvas or use arrow keys to move. Hold Shift with arrows for 10 px." />
       </div>
     </>
+  );
+}
+
+function MediaControls({
+  node,
+  assets,
+  onAssetChange,
+  onFitChange,
+}: {
+  node: NodeSummary;
+  assets: MediaAsset[];
+  onAssetChange: (assetId: string) => void;
+  onFitChange: (fit: NodeSummary["image_fit"]) => void;
+}) {
+  const compatibleAssets = assets.filter((asset) => asset.kind === node.kind);
+  return (
+    <div className="media-controls">
+      <label className="select-control">
+        <span>Asset</span>
+        <select
+          aria-label="Media asset"
+          value={node.asset_id ?? ""}
+          onChange={(event) => onAssetChange(event.target.value)}
+        >
+          {compatibleAssets.map((asset) => (
+            <option key={asset.id} value={asset.id}>
+              {asset.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {node.kind === "image" && (
+        <label className="select-control">
+          <span>Fit</span>
+          <select
+            aria-label="Image fit"
+            value={node.image_fit}
+            onChange={(event) =>
+              onFitChange(event.target.value as NodeSummary["image_fit"])
+            }
+          >
+            <option value="cover">Cover</option>
+            <option value="contain">Contain</option>
+            <option value="fill">Fill</option>
+          </select>
+        </label>
+      )}
+    </div>
   );
 }
 
@@ -236,9 +332,17 @@ function EmptyState({ text }: { text: string }) {
 
 function TypographyControls({
   text,
+  textStyles,
+  textStyleId,
+  onTextStyleChange,
+  onCreateTextStyle,
   onChange,
 }: {
   text: TextStyleSummary;
+  textStyles: TextStyleAsset[];
+  textStyleId?: string;
+  onTextStyleChange: (styleId?: string) => void;
+  onCreateTextStyle: () => void;
   onChange: (change: Partial<TextStyleSummary>) => void;
 }) {
   return (
@@ -250,6 +354,33 @@ function TypographyControls({
         />
       </PropertySection>
       <PropertySection title="Typography">
+        <div className="token-assignment-row">
+          <label className="select-control">
+            <span>Text style</span>
+            <select
+              aria-label="Text style"
+              value={textStyleId ?? ""}
+              onChange={(event) =>
+                onTextStyleChange(event.target.value || undefined)
+              }
+            >
+              <option value="">No style</option>
+              {textStyles.map((style) => (
+                <option key={style.id} value={style.id}>
+                  {style.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="token-add-button"
+            aria-label="Create text style from selection"
+            title="Create text style from this text"
+            onClick={onCreateTextStyle}
+          >
+            +
+          </button>
+        </div>
         <label className="select-control">
           <span>Family</span>
           <select
@@ -373,6 +504,106 @@ function TypographyControls({
         />
       </PropertySection>
     </>
+  );
+}
+
+function VariableBindingControls({
+  node,
+  variables,
+  onBind,
+  onCreate,
+}: {
+  node: NodeSummary;
+  variables: NumberVariable[];
+  onBind: (property: string, variableId?: string) => void;
+  onCreate: (property: string, value: number) => void;
+}) {
+  const bindings = node.variable_bindings;
+  return (
+    <div className="variable-binding-list">
+      <VariableSelect
+        label="Width"
+        value={bindings.width}
+        variables={variables}
+        onChange={(id) => onBind("width", id)}
+        onCreate={() => onCreate("width", node.width)}
+      />
+      <VariableSelect
+        label="Height"
+        value={bindings.height}
+        variables={variables}
+        onChange={(id) => onBind("height", id)}
+        onCreate={() => onCreate("height", node.height)}
+      />
+      {(node.kind === "frame" || node.kind === "group") && (
+        <>
+          <VariableSelect
+            label="Gap"
+            value={bindings.gap}
+            variables={variables}
+            onChange={(id) => onBind("gap", id)}
+            onCreate={() => onCreate("gap", node.layout_gap)}
+          />
+          {(["Top", "Right", "Bottom", "Left"] as const).map((label, index) => (
+            <VariableSelect
+              key={label}
+              label={`Padding ${label}`}
+              value={bindings.padding[index] ?? undefined}
+              variables={variables}
+              onChange={(id) => onBind(`padding_${label.toLowerCase()}`, id)}
+              onCreate={() =>
+                onCreate(
+                  `padding_${label.toLowerCase()}`,
+                  node.layout_padding[index],
+                )
+              }
+            />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function VariableSelect({
+  label,
+  value,
+  variables,
+  onChange,
+  onCreate,
+}: {
+  label: string;
+  value?: string;
+  variables: NumberVariable[];
+  onChange: (value?: string) => void;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="token-assignment-row">
+      <label className="select-control compact variable-select">
+        <span>{label}</span>
+        <select
+          aria-label={`${label} variable`}
+          value={value ?? ""}
+          onChange={(event) => onChange(event.target.value || undefined)}
+        >
+          <option value="">px</option>
+          {variables.map((variable) => (
+            <option key={variable.id} value={variable.id}>
+              {variable.name} · {variable.value}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        className="token-add-button"
+        aria-label={`Create ${label.toLowerCase()} variable`}
+        title={`Create variable from current ${label.toLowerCase()}`}
+        onClick={onCreate}
+      >
+        +
+      </button>
+    </div>
   );
 }
 

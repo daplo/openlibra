@@ -102,20 +102,23 @@ Goal: make reusable design-system values part of the document model.
 ### Todos
 
 - [ ] Define typed color, spacing, size, radius, and typography tokens
+- [x] Persist document-level numeric variables for width, height, gap, and per-side padding
+- [x] Persist reusable text styles and node-to-style references
 - [x] Add a curated system-font catalog and lazily loaded Google Fonts catalog
 - [ ] Add searchable font discovery and recent/favorite font sections
 - [ ] Add permission-based local font discovery as progressive enhancement
 - [ ] Persist font source, fallback stack, requested faces, and availability status
 - [ ] Cache or bundle permitted web fonts for offline documents and deterministic export
 - [ ] Show loading, missing-font, substituted-font, and unsupported-weight states
-- [ ] Give tokens stable IDs independent of their names
+- [x] Give tokens stable IDs independent of their names
+- [x] Add create, edit, rename, and delete workflows for numeric variables and text styles
 - [ ] Add create, edit, rename, group, and delete workflows
-- [ ] Allow node properties and layout values to reference tokens
+- [x] Allow width, height, gap, padding, and typography values to reference tokens
 - [ ] Resolve aliases safely and detect reference cycles
 - [ ] Show where each token is used
-- [ ] Preserve a fallback value when a reference becomes unavailable
+- [x] Preserve a fallback value when a reference becomes unavailable
 - [ ] Add initial light and dark token modes if the base model remains simple
-- [ ] Serialize tokens and references in document fixtures
+- [x] Serialize tokens and references in document fixtures
 - [ ] Update the sample design to use tokens instead of copied values
 
 Exit criterion: changing a token updates every consuming node, and a small interface can be built without duplicating its core visual values.
@@ -197,6 +200,12 @@ Goal: make imported visual assets durable, editable, and exportable without comp
 
 ### Todos
 
+- [x] Add a document-level media asset collection and reusable image/icon references
+- [x] Add an initial searchable built-in SVG icon library
+- [x] Import PNG, JPEG, and WebP up to 10 MB into the local document Vault
+- [x] Add cover, contain, and fill controls for image nodes
+- [ ] Move embedded MVP media sources into a content-addressed binary asset store
+- [ ] Render media through native WebGPU textures; the MVP uses a synchronized canvas overlay
 - [ ] Add image nodes with stable asset references, intrinsic dimensions, alt text, and crop state
 - [ ] Import PNG, JPEG, WebP, GIF, and SVG with explicit size and safety limits
 - [ ] Store local assets by content hash and deduplicate identical files

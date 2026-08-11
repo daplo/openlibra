@@ -18,6 +18,9 @@ impl Document {
                 benchmark_modified_node_ids: Vec::new(),
             }],
             color_library: Vec::new(),
+            number_variables: Vec::new(),
+            text_styles: Vec::new(),
+            media_assets: Vec::new(),
         };
 
         let mobile = document.insert_node(
@@ -119,104 +122,13 @@ impl Document {
         document.style_demo_shape(desktop_metric_b, 18.0, [0.46, 0.91, 0.72, 1.0], 0.0, true);
         document.style_demo_shape(desktop_chart, 18.0, [0.84, 0.86, 0.90, 1.0], 1.0, true);
 
-        document.insert_demo_text(
+        document.build_real_estate_mobile(
             mobile,
-            "Mobile brand",
-            "NOVA",
-            [126.0, 128.0, 120.0, 24.0],
-            18.0,
-            800,
-            [0.93, 0.96, 1.0, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Mobile menu",
-            "•••",
-            [380.0, 127.0, 42.0, 24.0],
-            18.0,
-            700,
-            [0.70, 0.74, 0.82, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Hero title",
-            "Your money,\nfinally clear.",
-            [128.0, 216.0, 270.0, 68.0],
-            30.0,
-            800,
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Hero subtitle",
-            "Spending, saving, and goals—together.",
-            [128.0, 342.0, 280.0, 20.0],
-            12.0,
-            400,
-            [0.84, 0.88, 1.0, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Action label",
-            "Start planning  →",
-            [142.0, 297.0, 170.0, 22.0],
-            12.0,
-            700,
-            [0.08, 0.12, 0.11, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Flow label",
-            "MONTHLY FLOW",
-            [122.0, 422.0, 120.0, 16.0],
-            10.0,
-            700,
-            [0.39, 0.43, 0.51, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Flow value",
-            "$8,420",
-            [122.0, 452.0, 120.0, 32.0],
-            24.0,
-            800,
-            [0.08, 0.10, 0.14, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Flow change",
-            "+12.4% this month",
-            [122.0, 510.0, 130.0, 20.0],
-            11.0,
-            600,
-            [0.16, 0.55, 0.37, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Goals label",
-            "GOALS",
-            [304.0, 422.0, 100.0, 16.0],
-            10.0,
-            700,
-            [0.39, 0.43, 0.51, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Goals value",
-            "82%",
-            [304.0, 452.0, 110.0, 32.0],
-            24.0,
-            800,
-            [0.08, 0.10, 0.14, 1.0],
-        );
-        document.insert_demo_text(
-            mobile,
-            "Goals status",
-            "3 goals on track",
-            [304.0, 510.0, 125.0, 20.0],
-            11.0,
-            600,
-            [0.23, 0.36, 0.78, 1.0],
+            mobile_nav,
+            mobile_hero,
+            mobile_action,
+            mobile_card_a,
+            mobile_card_b,
         );
         document.insert_demo_text(
             desktop,
@@ -308,12 +220,16 @@ impl Document {
             700,
             [0.23, 0.36, 0.78, 1.0],
         );
-        document.build_demo_auto_layouts(
-            mobile,
-            desktop,
-            [mobile_card_a, mobile_card_b],
-            [desktop_metric_a, desktop_metric_b],
-        );
+        document.build_demo_auto_layouts(desktop, [desktop_metric_a, desktop_metric_b]);
+
+        // Keep the original construction above as coverage for the editing helpers, then
+        // present a coherent, fully editable finance product on the Home page.
+        document.active_page_mut().nodes.clear();
+        document.color_library.clear();
+        document.number_variables.clear();
+        document.text_styles.clear();
+        document.media_assets.clear();
+        document.build_finance_mobile_demo();
 
         for (name, description, count) in [
             (
@@ -367,6 +283,513 @@ impl Document {
         }
     }
 
+    fn build_finance_mobile_demo(&mut self) {
+        for (name, value) in [
+            ("Finance / Ink", "#103D20"),
+            ("Finance / Lime", "#A6EB67"),
+            ("Finance / Surface", "#FFFFFF"),
+            ("Finance / Muted", "#F4F7F1"),
+        ] {
+            self.add_document_color(name.into(), value.into());
+        }
+        for (name, value) in [
+            ("Space / 8", 8.0),
+            ("Space / 12", 12.0),
+            ("Space / 16", 16.0),
+            ("Space / 24", 24.0),
+            ("Radius / Card", 18.0),
+            ("Size / Mobile", 320.0),
+        ] {
+            self.add_number_variable(name.into(), value);
+        }
+        let display = self.finance_text_style("Display / Large", 32.0, 500, 1.18);
+        let title = self.finance_text_style("Title / Section", 18.0, 650, 1.2);
+        let body = self.finance_text_style("Body / Regular", 13.0, 400, 1.35);
+        let label = self.finance_text_style("Label / Small", 10.0, 500, 1.25);
+
+        let home_icon = self.finance_icon_asset(
+            "Home",
+            "<path d='M4 11 12 4l8 7v9H4Z'/><path d='M9 20v-6h6v6'/>",
+        );
+        let chart_icon =
+            self.finance_icon_asset("Analytics", "<path d='M5 19V10M12 19V5M19 19v-7'/>");
+        let scan_icon = self.finance_icon_asset(
+            "Scan",
+            "<path d='M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5'/><path d='M8 12h8'/>",
+        );
+        let card_icon = self.finance_icon_asset(
+            "Card",
+            "<rect x='3' y='6' width='18' height='12' rx='2'/><path d='M3 10h18'/>",
+        );
+        let user_icon = self.finance_icon_asset(
+            "Profile",
+            "<circle cx='12' cy='8' r='4'/><path d='M4 21a8 8 0 0 1 16 0'/>",
+        );
+
+        let welcome = self.finance_frame("Finance · Welcome", 80.0, [0.65, 0.92, 0.40, 1.0]);
+        self.finance_status_bar(welcome, 104.0, label, true);
+        let mark = self.finance_group(
+            welcome,
+            "Brand mark",
+            [108.0, 138.0, 38.0, 38.0],
+            LayoutMode::Row,
+            0.0,
+            [0.04, 0.28, 0.12, 1.0],
+            8.0,
+        );
+        self.finance_text(
+            mark,
+            "Brand glyph",
+            "◼",
+            [115.0, 143.0, 24.0, 24.0],
+            title,
+            [0.65, 0.92, 0.40, 1.0],
+        );
+        let hero = self.finance_group(
+            welcome,
+            "Welcome copy · Auto layout",
+            [108.0, 360.0, 272.0, 190.0],
+            LayoutMode::Column,
+            14.0,
+            [0.0; 4],
+            0.0,
+        );
+        self.finance_text(
+            hero,
+            "Welcome headline",
+            "Track Your\nSpending\nEffortlessly.",
+            [108.0, 360.0, 272.0, 116.0],
+            display,
+            [0.03, 0.22, 0.10, 1.0],
+        );
+        self.finance_text(
+            hero,
+            "Welcome description",
+            "Manage your finances easily using our intuitive interface and monitor your progress.",
+            [108.0, 490.0, 272.0, 58.0],
+            body,
+            [0.16, 0.35, 0.22, 1.0],
+        );
+        let cta = self.finance_group(
+            welcome,
+            "Get started button",
+            [108.0, 574.0, 272.0, 44.0],
+            LayoutMode::Row,
+            0.0,
+            [0.03, 0.27, 0.11, 1.0],
+            22.0,
+        );
+        self.finance_text(
+            cta,
+            "Get started label",
+            "Get Started",
+            [108.0, 586.0, 272.0, 20.0],
+            body,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        self.finance_text(
+            welcome,
+            "Login prompt",
+            "Already have an account?  Login",
+            [108.0, 636.0, 272.0, 22.0],
+            label,
+            [0.12, 0.31, 0.17, 1.0],
+        );
+
+        let wallet = self.finance_frame("Finance · Wallet", 440.0, [1.0, 1.0, 1.0, 1.0]);
+        self.finance_status_bar(wallet, 464.0, label, false);
+        let wallet_content = self.finance_group(
+            wallet,
+            "Wallet content · Auto layout",
+            [468.0, 144.0, 272.0, 486.0],
+            LayoutMode::Column,
+            16.0,
+            [0.0; 4],
+            0.0,
+        );
+        self.finance_text(
+            wallet_content,
+            "Greeting",
+            "Hi, Jonathan",
+            [468.0, 144.0, 220.0, 28.0],
+            title,
+            [0.06, 0.08, 0.07, 1.0],
+        );
+        self.finance_text(
+            wallet_content,
+            "Greeting subtitle",
+            "Welcome Back!",
+            [468.0, 174.0, 160.0, 18.0],
+            label,
+            [0.45, 0.47, 0.45, 1.0],
+        );
+        self.finance_text(
+            wallet_content,
+            "Balance label",
+            "Wallet Balance",
+            [468.0, 212.0, 150.0, 18.0],
+            label,
+            [0.45, 0.47, 0.45, 1.0],
+        );
+        self.finance_text(
+            wallet_content,
+            "Balance",
+            "$17,298.92  •",
+            [468.0, 234.0, 272.0, 48.0],
+            display,
+            [0.03, 0.05, 0.04, 1.0],
+        );
+        let cards = self.finance_group(
+            wallet_content,
+            "Cards · Auto layout",
+            [468.0, 302.0, 272.0, 58.0],
+            LayoutMode::Row,
+            10.0,
+            [0.0; 4],
+            0.0,
+        );
+        self.finance_text(
+            cards,
+            "Cards label",
+            "Cards   +",
+            [468.0, 318.0, 82.0, 22.0],
+            body,
+            [0.05, 0.07, 0.06, 1.0],
+        );
+        for (index, text) in ["•••• 7391", "•••• 7391"].iter().enumerate() {
+            let card = self.finance_group(
+                cards,
+                &format!("Payment card {}", index + 1),
+                [560.0 + index as f32 * 92.0, 302.0, 82.0, 46.0],
+                LayoutMode::Row,
+                0.0,
+                if index == 0 {
+                    [0.18, 0.49, 0.32, 1.0]
+                } else {
+                    [0.04, 0.12, 0.09, 1.0]
+                },
+                8.0,
+            );
+            self.finance_text(
+                card,
+                "Card ending",
+                text,
+                [566.0 + index as f32 * 92.0, 316.0, 70.0, 18.0],
+                label,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+        }
+        let actions = self.finance_group(
+            wallet_content,
+            "Quick actions · Auto layout",
+            [468.0, 378.0, 272.0, 44.0],
+            LayoutMode::Row,
+            8.0,
+            [0.0; 4],
+            0.0,
+        );
+        for (index, text) in ["↗  Send", "↙  Request", "••"].iter().enumerate() {
+            let width = if index == 2 { 44.0 } else { 104.0 };
+            let x = 468.0
+                + if index == 0 {
+                    0.0
+                } else if index == 1 {
+                    112.0
+                } else {
+                    224.0
+                };
+            let action = self.finance_group(
+                actions,
+                text,
+                [x, 378.0, width, 40.0],
+                LayoutMode::Row,
+                0.0,
+                if index == 0 {
+                    [0.02, 0.36, 0.10, 1.0]
+                } else {
+                    [0.70, 0.96, 0.48, 1.0]
+                },
+                20.0,
+            );
+            self.finance_text(
+                action,
+                "Action label",
+                text,
+                [x, 389.0, width, 18.0],
+                label,
+                if index == 0 {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.02, 0.25, 0.08, 1.0]
+                },
+            );
+        }
+        self.finance_text(
+            wallet_content,
+            "Recent heading",
+            "Recent Activity                         See Details ›",
+            [468.0, 448.0, 272.0, 22.0],
+            label,
+            [0.05, 0.07, 0.06, 1.0],
+        );
+        for (index, row) in [
+            "●   Dribbble                         -$120",
+            "WM  Wilson Mango                 -$240",
+            "●   Abram Botosh                  +$450",
+        ]
+        .iter()
+        .enumerate()
+        {
+            self.finance_text(
+                wallet_content,
+                "Transaction row",
+                row,
+                [468.0, 486.0 + index as f32 * 48.0, 272.0, 34.0],
+                body,
+                [0.05, 0.08, 0.06, 1.0],
+            );
+        }
+        self.finance_bottom_nav(
+            wallet,
+            464.0,
+            [home_icon, chart_icon, scan_icon, card_icon, user_icon],
+        );
+
+        let analytics = self.finance_frame("Finance · Analytics", 800.0, [1.0, 1.0, 1.0, 1.0]);
+        self.finance_status_bar(analytics, 824.0, label, false);
+        self.finance_text(
+            analytics,
+            "Analytics title",
+            "Analytics",
+            [828.0, 154.0, 272.0, 28.0],
+            title,
+            [0.05, 0.07, 0.06, 1.0],
+        );
+        let spending = self.finance_group(
+            analytics,
+            "Spending summary · Auto layout",
+            [828.0, 210.0, 272.0, 92.0],
+            LayoutMode::Column,
+            7.0,
+            [0.98, 0.99, 0.97, 1.0],
+            12.0,
+        );
+        self.finance_text(
+            spending,
+            "Spending label",
+            "My Spending",
+            [844.0, 224.0, 130.0, 18.0],
+            label,
+            [0.45, 0.47, 0.45, 1.0],
+        );
+        self.finance_text(
+            spending,
+            "Spending value",
+            "$7,221.18       ▁▃▂▅▇▆▃",
+            [844.0, 248.0, 240.0, 30.0],
+            title,
+            [0.05, 0.08, 0.06, 1.0],
+        );
+        let expense = self.finance_group(
+            analytics,
+            "Expense chart · Auto layout",
+            [828.0, 324.0, 272.0, 190.0],
+            LayoutMode::Column,
+            8.0,
+            [1.0, 1.0, 1.0, 1.0],
+            12.0,
+        );
+        self.finance_text(
+            expense,
+            "Expense label",
+            "Expense                         Jul 2024⌄",
+            [828.0, 332.0, 272.0, 20.0],
+            label,
+            [0.43, 0.45, 0.43, 1.0],
+        );
+        self.finance_text(
+            expense,
+            "Expense value",
+            "-$2,082.12",
+            [828.0, 360.0, 200.0, 34.0],
+            title,
+            [0.04, 0.06, 0.05, 1.0],
+        );
+        self.finance_text(
+            expense,
+            "Chart",
+            "╭──╮      ╭────╮\n╯  ╰──────╯    ╰──",
+            [828.0, 408.0, 272.0, 62.0],
+            body,
+            [0.39, 0.75, 0.12, 1.0],
+        );
+        self.finance_text(
+            expense,
+            "Chart months",
+            "Feb      Mar      Apr      May      Jun      Jul",
+            [828.0, 482.0, 272.0, 18.0],
+            label,
+            [0.48, 0.50, 0.48, 1.0],
+        );
+        let categories = self.finance_group(
+            analytics,
+            "Expense categories · Auto layout",
+            [828.0, 526.0, 272.0, 104.0],
+            LayoutMode::Column,
+            8.0,
+            [0.0; 4],
+            0.0,
+        );
+        for (index, row) in [
+            "●  Healthcare                                  $450.00",
+            "●  Food                                             $250.00",
+            "●  Utilities                                       $275.00",
+            "●  Supplies                                      $150.00",
+        ]
+        .iter()
+        .enumerate()
+        {
+            self.finance_text(
+                categories,
+                "Category row",
+                row,
+                [828.0, 526.0 + index as f32 * 25.0, 272.0, 20.0],
+                label,
+                [0.03, 0.25, 0.09, 1.0],
+            );
+        }
+        self.finance_bottom_nav(
+            analytics,
+            824.0,
+            [home_icon, chart_icon, scan_icon, card_icon, user_icon],
+        );
+    }
+
+    fn finance_frame(&mut self, name: &str, x: f32, fill: [f32; 4]) -> EntityId {
+        let id = self.insert_node(name, NodeKind::Frame, None, [x, 80.0, 320.0, 680.0], fill);
+        self.style_demo_shape(id, 34.0, [0.12, 0.14, 0.13, 1.0], 2.0, true);
+        if let Some(variable_id) = self
+            .number_variables
+            .iter()
+            .find(|variable| variable.name == "Size / Mobile")
+            .map(|variable| variable.id)
+        {
+            self.bind_node_variable(id, "width", Some(variable_id));
+        }
+        id
+    }
+
+    fn finance_text_style(&mut self, name: &str, size: f32, weight: u16, line: f32) -> EntityId {
+        let text = TextStyle {
+            font_family: "Inter".into(),
+            font_size: size,
+            font_weight: weight,
+            line_height: line,
+            ..TextStyle::default()
+        };
+        self.add_text_style(name.into(), TypographyStyle::from(&text))
+    }
+
+    fn finance_text(
+        &mut self,
+        parent: EntityId,
+        name: &str,
+        content: &str,
+        bounds: [f32; 4],
+        style: EntityId,
+        color: [f32; 4],
+    ) -> EntityId {
+        let id = self.insert_demo_text(parent, name, content, bounds, 13.0, 400, color);
+        self.bind_node_text_style(id, Some(style));
+        id
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finance_group(
+        &mut self,
+        parent: EntityId,
+        name: &str,
+        bounds: [f32; 4],
+        mode: LayoutMode,
+        gap: f32,
+        fill: [f32; 4],
+        radius: f32,
+    ) -> EntityId {
+        let id = self.insert_demo_group(parent, name, bounds, mode, gap);
+        let node = self.active_node_mut(id).unwrap();
+        node.fill = fill;
+        node.corner_radii = [radius; 4];
+        if gap > 0.0
+            && let Some(variable_id) = self
+                .number_variables
+                .iter()
+                .find(|variable| (variable.value - gap).abs() < f32::EPSILON)
+                .map(|variable| variable.id)
+        {
+            self.bind_node_variable(id, "gap", Some(variable_id));
+        }
+        id
+    }
+
+    fn finance_status_bar(&mut self, frame: EntityId, x: f32, style: EntityId, dark: bool) {
+        let color = if dark {
+            [0.02, 0.20, 0.08, 1.0]
+        } else {
+            [0.05, 0.07, 0.06, 1.0]
+        };
+        self.finance_text(
+            frame,
+            "Status bar",
+            "9:41                              ▮▮▮  ◉  ▰",
+            [x + 4.0, 102.0, 272.0, 20.0],
+            style,
+            color,
+        );
+        let island = self.finance_group(
+            frame,
+            "Dynamic island",
+            [x + 96.0, 98.0, 92.0, 28.0],
+            LayoutMode::Row,
+            0.0,
+            [0.0, 0.0, 0.0, 1.0],
+            16.0,
+        );
+        self.active_node_mut(island).unwrap().locked = false;
+    }
+
+    fn finance_icon_asset(&mut self, name: &str, paths: &str) -> EntityId {
+        let id = self.allocate_id();
+        self.media_assets.push(MediaAsset { id, name: name.into(), kind: MediaAssetKind::Icon, mime_type: "image/svg+xml".into(), source: format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>{paths}</svg>"), width: 24, height: 24, tags: vec!["finance".into(), "navigation".into()] });
+        id
+    }
+
+    fn finance_bottom_nav(&mut self, frame: EntityId, x: f32, assets: [EntityId; 5]) {
+        let nav = self.finance_group(
+            frame,
+            "Bottom navigation · Auto layout",
+            [x + 4.0, 692.0, 272.0, 48.0],
+            LayoutMode::Row,
+            25.0,
+            [1.0, 1.0, 1.0, 0.96],
+            18.0,
+        );
+        for (index, asset_id) in assets.into_iter().enumerate() {
+            if let Some(id) = self.add_node_from_asset(asset_id, Some(nav)) {
+                let node = self.active_node_mut(id).unwrap();
+                node.name = format!("Navigation icon {}", index + 1);
+                node.x = x + 14.0 + index as f32 * 52.0;
+                node.y = 704.0;
+                node.width = 22.0;
+                node.height = 22.0;
+                node.fill = if index == 2 {
+                    [0.18, 0.55, 0.12, 1.0]
+                } else {
+                    [0.18, 0.22, 0.19, 1.0]
+                };
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn insert_demo_text(
         &mut self,
@@ -405,25 +828,461 @@ impl Document {
         id
     }
 
-    fn build_demo_auto_layouts(
+    #[allow(clippy::too_many_arguments)]
+    fn build_real_estate_mobile(
         &mut self,
         mobile: EntityId,
-        desktop: EntityId,
-        mobile_cards: [EntityId; 2],
-        desktop_metrics: [EntityId; 2],
+        search_background: EntityId,
+        property_image: EntityId,
+        category_all: EntityId,
+        category_house: EntityId,
+        category_villa: EntityId,
     ) {
-        let card_row = self.insert_demo_group(
-            mobile,
-            "Overview cards · Auto layout",
-            [104.0, 400.0, 342.0, 170.0],
-            LayoutMode::Row,
-            22.0,
-        );
-        for id in mobile_cards {
-            self.active_node_mut(id).unwrap().parent_id = Some(card_row);
+        {
+            let frame = self.active_node_mut(mobile).unwrap();
+            frame.name = "Real estate · Home".into();
+            frame.fill = [0.95, 0.95, 0.89, 1.0];
+            frame.layout_mode = LayoutMode::Column;
+            frame.layout_gap = 0.0;
+            frame.layout_padding = [24.0; 4];
+            frame.layout_align = LayoutAlign::Center;
+            frame.layout_justify = LayoutAlign::Start;
         }
-        self.relayout_container(card_row);
+        let content = self.insert_demo_group(
+            mobile,
+            "Mobile content · Auto layout",
+            [104.0, 104.0, 342.0, 712.0],
+            LayoutMode::Column,
+            12.0,
+        );
+        {
+            let group = self.active_node_mut(content).unwrap();
+            group.layout_align = LayoutAlign::Start;
+            group.layout_justify = LayoutAlign::Start;
+            group.width_sizing = LayoutSizing::Fill;
+        }
 
+        let status = self.insert_demo_group(
+            content,
+            "Status bar · Auto layout",
+            [104.0, 104.0, 342.0, 24.0],
+            LayoutMode::Row,
+            8.0,
+        );
+        let time = self.insert_demo_text(
+            status,
+            "Time",
+            "9:41",
+            [104.0, 104.0, 238.0, 24.0],
+            15.0,
+            700,
+            [0.08, 0.09, 0.08, 1.0],
+        );
+        self.active_node_mut(time).unwrap().width_sizing = LayoutSizing::Fill;
+        self.insert_demo_text(
+            status,
+            "Phone status",
+            "▮▮▮  ◉  ▰",
+            [350.0, 106.0, 96.0, 20.0],
+            11.0,
+            700,
+            [0.08, 0.09, 0.08, 1.0],
+        );
+        self.relayout_container(status);
+
+        let location = self.insert_demo_group(
+            content,
+            "Location header · Auto layout",
+            [104.0, 140.0, 342.0, 54.0],
+            LayoutMode::Row,
+            8.0,
+        );
+        let location_copy = self.insert_demo_text(
+            location,
+            "Location",
+            "Location\nHouston, Texas ⌄",
+            [104.0, 140.0, 230.0, 54.0],
+            15.0,
+            650,
+            [0.10, 0.11, 0.09, 1.0],
+        );
+        self.active_node_mut(location_copy).unwrap().width_sizing = LayoutSizing::Fill;
+        let bell = self.insert_demo_group(
+            location,
+            "Notifications",
+            [342.0, 145.0, 44.0, 44.0],
+            LayoutMode::None,
+            0.0,
+        );
+        self.style_demo_shape(bell, 22.0, [1.0; 4], 0.0, false);
+        self.active_node_mut(bell).unwrap().fill = [1.0, 1.0, 0.98, 0.76];
+        self.insert_demo_text(
+            bell,
+            "Notification icon",
+            "♧",
+            [355.0, 156.0, 20.0, 22.0],
+            17.0,
+            600,
+            [0.10, 0.11, 0.09, 1.0],
+        );
+        let avatar = self.insert_demo_group(
+            location,
+            "Profile avatar",
+            [394.0, 145.0, 44.0, 44.0],
+            LayoutMode::None,
+            0.0,
+        );
+        self.style_demo_shape(avatar, 22.0, [0.13, 0.22, 0.22, 1.0], 0.0, false);
+        self.active_node_mut(avatar).unwrap().fill = [0.13, 0.22, 0.22, 1.0];
+        self.insert_demo_text(
+            avatar,
+            "Avatar initials",
+            "JM",
+            [404.0, 157.0, 26.0, 20.0],
+            12.0,
+            800,
+            [0.93, 0.95, 0.89, 1.0],
+        );
+        self.relayout_container(location);
+
+        let search = self.insert_demo_group(
+            content,
+            "Search · Group",
+            [104.0, 206.0, 342.0, 54.0],
+            LayoutMode::None,
+            0.0,
+        );
+        {
+            let background = self.active_node_mut(search_background).unwrap();
+            background.name = "Search background".into();
+            background.parent_id = Some(search);
+            background.x = 104.0;
+            background.y = 206.0;
+            background.width = 342.0;
+            background.height = 54.0;
+            background.fill = [1.0, 1.0, 0.98, 0.82];
+            background.corner_radii = [27.0; 4];
+            background.stroke_width = 0.0;
+        }
+        self.insert_demo_text(
+            search,
+            "Search icon",
+            "⌕",
+            [122.0, 220.0, 24.0, 26.0],
+            22.0,
+            500,
+            [0.18, 0.20, 0.17, 1.0],
+        );
+        self.insert_demo_text(
+            search,
+            "Search placeholder",
+            "Search homes...",
+            [154.0, 222.0, 220.0, 24.0],
+            14.0,
+            400,
+            [0.40, 0.42, 0.38, 1.0],
+        );
+        self.insert_demo_text(
+            search,
+            "Filter action",
+            "☷",
+            [407.0, 219.0, 24.0, 26.0],
+            20.0,
+            600,
+            [0.18, 0.20, 0.17, 1.0],
+        );
+
+        let welcome = self.insert_demo_group(
+            content,
+            "Welcome copy · Auto layout",
+            [104.0, 272.0, 342.0, 86.0],
+            LayoutMode::Column,
+            5.0,
+        );
+        for (name, copy, height, size, weight, color) in [
+            (
+                "Welcome title",
+                "Welcome Back, James!",
+                32.0,
+                23.0,
+                750,
+                [0.07, 0.08, 0.07, 1.0],
+            ),
+            (
+                "Welcome subtitle",
+                "Explore homes, apartments, and opportunities\ntailored for you.",
+                49.0,
+                13.0,
+                400,
+                [0.39, 0.41, 0.37, 1.0],
+            ),
+        ] {
+            let id = self.insert_demo_text(
+                welcome,
+                name,
+                copy,
+                [104.0, 272.0, 342.0, height],
+                size,
+                weight,
+                color,
+            );
+            self.active_node_mut(id).unwrap().width_sizing = LayoutSizing::Fill;
+        }
+        self.active_node_mut(welcome).unwrap().layout_align = LayoutAlign::Start;
+        self.active_node_mut(welcome).unwrap().layout_justify = LayoutAlign::Start;
+        self.relayout_container(welcome);
+
+        let categories = self.insert_demo_group(
+            content,
+            "Property categories · Auto layout",
+            [104.0, 370.0, 342.0, 50.0],
+            LayoutMode::Row,
+            8.0,
+        );
+        for (index, (name, label, shape, width, selected)) in [
+            ("All category", "All", category_all, 64.0, true),
+            ("House category", "◉  House", category_house, 131.0, false),
+            ("Villa category", "▣  Villa", category_villa, 131.0, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let x = 104.0 + [0.0, 72.0, 211.0][index];
+            let item = self.insert_demo_group(
+                categories,
+                name,
+                [x, 370.0, width, 50.0],
+                LayoutMode::None,
+                0.0,
+            );
+            let background = self.active_node_mut(shape).unwrap();
+            background.parent_id = Some(item);
+            background.x = x;
+            background.y = 370.0;
+            background.width = width;
+            background.height = 50.0;
+            background.fill = if selected {
+                [0.04, 0.64, 0.39, 1.0]
+            } else {
+                [1.0, 1.0, 0.98, 0.72]
+            };
+            background.corner_radii = [25.0; 4];
+            background.stroke_width = 0.0;
+            background.shadows.clear();
+            self.insert_demo_text(
+                item,
+                &format!("{name} label"),
+                label,
+                [x + 14.0, 385.0, width - 24.0, 22.0],
+                13.0,
+                550,
+                if selected {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.26, 0.28, 0.25, 1.0]
+                },
+            );
+        }
+        self.active_node_mut(categories).unwrap().layout_align = LayoutAlign::Center;
+        self.active_node_mut(categories).unwrap().layout_justify = LayoutAlign::Start;
+        self.relayout_container(categories);
+
+        let listing = self.insert_demo_group(
+            content,
+            "Featured property · Auto layout",
+            [104.0, 432.0, 342.0, 308.0],
+            LayoutMode::Column,
+            8.0,
+        );
+        self.style_demo_shape(listing, 20.0, [1.0, 1.0, 1.0, 0.45], 1.0, true);
+        {
+            let group = self.active_node_mut(listing).unwrap();
+            group.fill = [0.92, 0.96, 0.91, 1.0];
+            group.layout_padding = [8.0; 4];
+            group.layout_align = LayoutAlign::Start;
+            group.layout_justify = LayoutAlign::Start;
+        }
+        let image = self.insert_demo_group(
+            listing,
+            "Property image · Group",
+            [112.0, 440.0, 326.0, 160.0],
+            LayoutMode::None,
+            0.0,
+        );
+        {
+            let background = self.active_node_mut(property_image).unwrap();
+            background.name = "Property image background".into();
+            background.parent_id = Some(image);
+            background.x = 112.0;
+            background.y = 440.0;
+            background.width = 326.0;
+            background.height = 160.0;
+            background.fill = [0.54, 0.78, 0.84, 1.0];
+            background.corner_radii = [16.0; 4];
+            background.stroke_width = 0.0;
+        }
+        let lawn = self.insert_node(
+            "Lawn",
+            NodeKind::Rectangle,
+            Some(image),
+            [112.0, 548.0, 326.0, 52.0],
+            [0.24, 0.38, 0.25, 1.0],
+        );
+        let house = self.insert_node(
+            "House facade",
+            NodeKind::Rectangle,
+            Some(image),
+            [165.0, 493.0, 226.0, 82.0],
+            [0.95, 0.88, 0.74, 1.0],
+        );
+        self.style_demo_shape(house, 3.0, [0.35, 0.29, 0.23, 1.0], 1.0, false);
+        for (index, x) in [184.0, 242.0, 300.0, 358.0].into_iter().enumerate() {
+            let window = self.insert_node(
+                &format!("Window {}", index + 1),
+                NodeKind::Rectangle,
+                Some(image),
+                [x, 514.0, 34.0, 42.0],
+                [0.16, 0.31, 0.35, 1.0],
+            );
+            self.style_demo_shape(window, 2.0, [0.95, 0.88, 0.74, 1.0], 2.0, false);
+        }
+        let roof = self.insert_node(
+            "Roof",
+            NodeKind::Rectangle,
+            Some(image),
+            [153.0, 476.0, 250.0, 22.0],
+            [0.28, 0.20, 0.16, 1.0],
+        );
+        self.style_demo_shape(roof, 3.0, [0.28, 0.20, 0.16, 1.0], 0.0, false);
+        self.style_demo_shape(lawn, 0.0, [0.24, 0.38, 0.25, 1.0], 0.0, false);
+        self.insert_demo_text(
+            image,
+            "Featured badge",
+            "Featured",
+            [126.0, 453.0, 72.0, 24.0],
+            10.0,
+            600,
+            [0.17, 0.24, 0.22, 1.0],
+        );
+        self.insert_demo_text(
+            image,
+            "Favorite",
+            "♡",
+            [400.0, 451.0, 26.0, 28.0],
+            24.0,
+            500,
+            [0.16, 0.20, 0.18, 1.0],
+        );
+
+        let title_row = self.insert_demo_group(
+            listing,
+            "Property title · Auto layout",
+            [112.0, 608.0, 326.0, 30.0],
+            LayoutMode::Row,
+            8.0,
+        );
+        let title = self.insert_demo_text(
+            title_row,
+            "Property title",
+            "Cozy Family House",
+            [112.0, 608.0, 218.0, 30.0],
+            18.0,
+            700,
+            [0.07, 0.08, 0.07, 1.0],
+        );
+        self.active_node_mut(title).unwrap().width_sizing = LayoutSizing::Fill;
+        let contact = self.insert_demo_group(
+            title_row,
+            "Contact action",
+            [338.0, 608.0, 100.0, 30.0],
+            LayoutMode::None,
+            0.0,
+        );
+        self.style_demo_shape(contact, 15.0, [0.05, 0.06, 0.05, 1.0], 0.0, false);
+        self.active_node_mut(contact).unwrap().fill = [0.05, 0.06, 0.05, 1.0];
+        self.insert_demo_text(
+            contact,
+            "Contact label",
+            "▱  Contact",
+            [352.0, 616.0, 74.0, 16.0],
+            10.0,
+            600,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        self.relayout_container(title_row);
+        let features = self.insert_demo_text(
+            listing,
+            "Property features",
+            "▤ 3 Beds    ♨ 2 Baths    ⛶ 1500 Sqft    +03",
+            [112.0, 646.0, 326.0, 24.0],
+            10.0,
+            500,
+            [0.34, 0.37, 0.33, 1.0],
+        );
+        self.active_node_mut(features).unwrap().width_sizing = LayoutSizing::Fill;
+        let price = self.insert_demo_text(
+            listing,
+            "Property price",
+            "$425,000",
+            [112.0, 678.0, 326.0, 34.0],
+            24.0,
+            750,
+            [0.05, 0.06, 0.05, 1.0],
+        );
+        self.active_node_mut(price).unwrap().width_sizing = LayoutSizing::Fill;
+        self.relayout_container(listing);
+
+        let bottom_nav = self.insert_demo_group(
+            content,
+            "Bottom navigation · Auto layout",
+            [104.0, 752.0, 342.0, 64.0],
+            LayoutMode::Row,
+            4.0,
+        );
+        self.style_demo_shape(bottom_nav, 32.0, [0.04, 0.05, 0.04, 1.0], 0.0, true);
+        {
+            let group = self.active_node_mut(bottom_nav).unwrap();
+            group.fill = [0.04, 0.05, 0.04, 1.0];
+            group.layout_padding = [6.0; 4];
+            group.layout_justify = LayoutAlign::Start;
+        }
+        for (index, (name, icon)) in [
+            ("Home", "⌂"),
+            ("Discover", "✧"),
+            ("Search", "⌕"),
+            ("Messages", "▱"),
+            ("Settings", "⚙"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let item = self.insert_demo_group(
+                bottom_nav,
+                &format!("{name} tab"),
+                [110.0 + index as f32 * 66.0, 758.0, 62.0, 52.0],
+                LayoutMode::None,
+                0.0,
+            );
+            if index == 0 {
+                self.style_demo_shape(item, 26.0, [0.04, 0.64, 0.39, 1.0], 0.0, false);
+                self.active_node_mut(item).unwrap().fill = [0.04, 0.64, 0.39, 1.0];
+            }
+            self.insert_demo_text(
+                item,
+                &format!("{name} icon"),
+                icon,
+                [130.0 + index as f32 * 66.0, 772.0, 24.0, 26.0],
+                20.0,
+                500,
+                [0.95, 0.96, 0.92, 1.0],
+            );
+        }
+        self.relayout_container(bottom_nav);
+        self.relayout_container(content);
+        self.relayout_container(mobile);
+    }
+
+    fn build_demo_auto_layouts(&mut self, desktop: EntityId, desktop_metrics: [EntityId; 2]) {
         let metric_row = self.insert_demo_group(
             desktop,
             "Metrics · Auto layout",
@@ -553,74 +1412,6 @@ impl Document {
             self.active_node_mut(id).unwrap().width_sizing = LayoutSizing::Fill;
         }
         self.relayout_container(sidebar);
-
-        let activity = self.insert_demo_group(
-            mobile,
-            "Recent activity · Auto layout",
-            [104.0, 610.0, 342.0, 146.0],
-            LayoutMode::Column,
-            8.0,
-        );
-        let title = self.insert_demo_text(
-            activity,
-            "Activity title",
-            "Recent activity",
-            [104.0, 610.0, 342.0, 26.0],
-            18.0,
-            800,
-            [0.08, 0.10, 0.14, 1.0],
-        );
-        self.active_node_mut(title).unwrap().width_sizing = LayoutSizing::Fill;
-        for (index, (label, amount, tint)) in [
-            ("Coffee shop", "−$6.40", [0.95, 0.68, 0.40, 1.0]),
-            ("Salary", "+$4,200", [0.46, 0.91, 0.72, 1.0]),
-            ("Cloud storage", "−$12.00", [0.55, 0.64, 0.92, 1.0]),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let y = 644.0 + index as f32 * 36.0;
-            let row = self.insert_demo_group(
-                activity,
-                &format!("Activity row {} · Auto layout", index + 1),
-                [104.0, y, 342.0, 28.0],
-                LayoutMode::Row,
-                8.0,
-            );
-            let icon = self.insert_node(
-                "Category icon",
-                NodeKind::Rectangle,
-                Some(row),
-                [104.0, y, 28.0, 28.0],
-                tint,
-            );
-            self.style_demo_shape(icon, 8.0, tint, 0.0, false);
-            let label_id = self.insert_demo_text(
-                row,
-                "Activity name",
-                label,
-                [140.0, y + 6.0, 226.0, 18.0],
-                12.0,
-                600,
-                [0.30, 0.34, 0.41, 1.0],
-            );
-            self.active_node_mut(label_id).unwrap().width_sizing = LayoutSizing::Fill;
-            self.insert_demo_text(
-                row,
-                "Activity amount",
-                amount,
-                [374.0, y + 6.0, 72.0, 18.0],
-                12.0,
-                700,
-                if amount.starts_with('+') {
-                    [0.16, 0.55, 0.37, 1.0]
-                } else {
-                    [0.22, 0.25, 0.31, 1.0]
-                },
-            );
-            self.relayout_container(row);
-        }
-        self.relayout_container(activity);
     }
 
     fn add_benchmark_page(&mut self, name: &str, description: &str, node_count: usize) {
@@ -760,6 +1551,10 @@ impl Document {
             guide_opacity: default_guide_opacity(),
             locked: false,
             text: (kind == NodeKind::Text).then(TextStyle::default),
+            variable_bindings: VariableBindings::default(),
+            text_style_id: None,
+            asset_id: None,
+            image_fit: ImageFit::Cover,
         });
         id
     }
@@ -872,6 +1667,116 @@ impl Document {
             self.relayout_container(parent_id);
         }
         id
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add_media_asset_node(
+        &mut self,
+        kind: MediaAssetKind,
+        name: String,
+        mime_type: String,
+        source: String,
+        width: u32,
+        height: u32,
+        parent_id: Option<EntityId>,
+    ) -> Option<EntityId> {
+        if source.is_empty() || source.len() > 20_000_000 || width == 0 || height == 0 {
+            return None;
+        }
+        let asset_id = self.allocate_id();
+        let name: String = if name.trim().is_empty() {
+            match kind {
+                MediaAssetKind::Image => "Image".into(),
+                MediaAssetKind::Icon => "Icon".into(),
+            }
+        } else {
+            name.trim().chars().take(120).collect()
+        };
+        self.media_assets.push(MediaAsset {
+            id: asset_id,
+            name: name.clone(),
+            kind,
+            mime_type: mime_type.chars().take(100).collect(),
+            source,
+            width,
+            height,
+            tags: Vec::new(),
+        });
+        self.add_node_from_asset(asset_id, parent_id)
+    }
+
+    pub(crate) fn add_node_from_asset(
+        &mut self,
+        asset_id: EntityId,
+        parent_id: Option<EntityId>,
+    ) -> Option<EntityId> {
+        let asset = self
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)?
+            .clone();
+        let parent = parent_id.and_then(|id| {
+            self.active_page()
+                .nodes
+                .iter()
+                .find(|node| {
+                    node.id == id && matches!(node.kind, NodeKind::Frame | NodeKind::Group)
+                })
+                .cloned()
+        });
+        let max_width: f32 = if asset.kind == MediaAssetKind::Icon {
+            48.0
+        } else {
+            320.0
+        };
+        let ratio = asset.height as f32 / asset.width.max(1) as f32;
+        let width = max_width.min(asset.width as f32).max(24.0);
+        let height = if asset.kind == MediaAssetKind::Icon {
+            width
+        } else {
+            (width * ratio).clamp(24.0, 320.0)
+        };
+        let index = self.active_page().nodes.len() as f32;
+        let (x, y, actual_parent) = parent
+            .as_ref()
+            .map(|parent| {
+                (
+                    parent.x + parent.layout_padding[3] + 24.0,
+                    parent.y + parent.layout_padding[0] + 24.0,
+                    Some(parent.id),
+                )
+            })
+            .unwrap_or((
+                160.0 + (index % 12.0) * 18.0,
+                160.0 + (index % 12.0) * 18.0,
+                None,
+            ));
+        let node_kind = match asset.kind {
+            MediaAssetKind::Image => NodeKind::Image,
+            MediaAssetKind::Icon => NodeKind::Icon,
+        };
+        let id = self.insert_node(
+            &asset.name,
+            node_kind,
+            actual_parent,
+            [x, y, width, height],
+            if node_kind == NodeKind::Icon {
+                [0.08, 0.10, 0.12, 1.0]
+            } else {
+                [1.0; 4]
+            },
+        );
+        let node = self.active_node_mut(id).unwrap();
+        node.asset_id = Some(asset_id);
+        node.corner_radii = if node_kind == NodeKind::Image {
+            [12.0; 4]
+        } else {
+            [0.0; 4]
+        };
+        if let Some(parent_id) = actual_parent {
+            self.relayout_container(parent_id);
+        }
+        Some(id)
     }
 
     pub(crate) fn add_artboard(&mut self, name: String, width: f32, height: f32) -> EntityId {
@@ -1000,6 +1905,9 @@ impl Document {
                 .collect(),
             nodes: &self.active_page().nodes,
             document_colors: &self.color_library,
+            number_variables: &self.number_variables,
+            text_styles: &self.text_styles,
+            media_assets: &self.media_assets,
         }
     }
 
@@ -1017,6 +1925,9 @@ impl Document {
             return Err("Active page does not exist".into());
         }
         let mut owned_ids = HashSet::new();
+        let variable_ids: HashSet<_> = self.number_variables.iter().map(|item| item.id).collect();
+        let text_style_ids: HashSet<_> = self.text_styles.iter().map(|item| item.id).collect();
+        let media_asset_ids: HashSet<_> = self.media_assets.iter().map(|item| item.id).collect();
         for page in &self.pages {
             if !owned_ids.insert(page.id) {
                 return Err(format!("Duplicate page or object ID {}", page.id));
@@ -1053,11 +1964,61 @@ impl Document {
                     }
                     ancestor_id = nodes_by_id.get(&id).and_then(|ancestor| ancestor.parent_id);
                 }
+                for variable_id in [
+                    node.variable_bindings.width,
+                    node.variable_bindings.height,
+                    node.variable_bindings.gap,
+                    node.variable_bindings.padding[0],
+                    node.variable_bindings.padding[1],
+                    node.variable_bindings.padding[2],
+                    node.variable_bindings.padding[3],
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !variable_ids.contains(&variable_id) {
+                        return Err(format!(
+                            "Node {} references missing variable {}",
+                            node.id, variable_id
+                        ));
+                    }
+                }
+                if let Some(style_id) = node.text_style_id
+                    && !text_style_ids.contains(&style_id)
+                {
+                    return Err(format!(
+                        "Node {} references missing text style {}",
+                        node.id, style_id
+                    ));
+                }
+                if let Some(asset_id) = node.asset_id
+                    && !media_asset_ids.contains(&asset_id)
+                {
+                    return Err(format!(
+                        "Node {} references missing media asset {}",
+                        node.id, asset_id
+                    ));
+                }
             }
         }
         for color in &self.color_library {
             if !owned_ids.insert(color.id) {
                 return Err(format!("Duplicate page or object ID {}", color.id));
+            }
+        }
+        for variable in &self.number_variables {
+            if !owned_ids.insert(variable.id) {
+                return Err(format!("Duplicate page or object ID {}", variable.id));
+            }
+        }
+        for style in &self.text_styles {
+            if !owned_ids.insert(style.id) {
+                return Err(format!("Duplicate page or object ID {}", style.id));
+            }
+        }
+        for asset in &self.media_assets {
+            if !owned_ids.insert(asset.id) {
+                return Err(format!("Duplicate page or object ID {}", asset.id));
             }
         }
         Ok(())
@@ -1101,5 +2062,9 @@ fn benchmark_node(id: EntityId, index: usize, columns: usize) -> Node {
         guide_opacity: default_guide_opacity(),
         locked: false,
         text: None,
+        variable_bindings: VariableBindings::default(),
+        text_style_id: None,
+        asset_id: None,
+        image_fit: ImageFit::Cover,
     }
 }

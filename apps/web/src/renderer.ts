@@ -23,7 +23,7 @@ export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 type SelectionNodeBounds = {
   id: string;
-  kind: "frame" | "rectangle" | "group" | "text";
+  kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon";
   x: number;
   y: number;
   width: number;
@@ -153,6 +153,7 @@ export class OpenLibraRenderer {
   private lastSample = performance.now();
   private frameCount = 0;
   private frameTotal = 0;
+  private frameListeners = new Set<() => void>();
   private previousFrameTime = performance.now();
   private sceneBounds = { x: 0, y: 0, width: 1, height: 1 };
   private sceneData: Float32Array<ArrayBufferLike> = new Float32Array();
@@ -326,6 +327,13 @@ export class OpenLibraRenderer {
     this.animationFrame = requestAnimationFrame(this.render);
   }
 
+  onFrame(listener: () => void) {
+    this.frameListeners.add(listener);
+    return () => {
+      this.frameListeners.delete(listener);
+    };
+  }
+
   zoomBy(factor: number) {
     const center = {
       x: this.canvas.clientWidth / 2,
@@ -484,6 +492,7 @@ export class OpenLibraRenderer {
 
   dispose() {
     cancelAnimationFrame(this.animationFrame);
+    this.frameListeners.clear();
     this.vertexBuffer.destroy();
     this.instanceBuffer.destroy();
     this.uniformBuffer.destroy();
@@ -597,6 +606,7 @@ export class OpenLibraRenderer {
     pass.draw(6, this.objectCount);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
+    for (const listener of this.frameListeners) listener();
 
     const frameMs = performance.now() - frameStarted;
     this.frameCount += 1;

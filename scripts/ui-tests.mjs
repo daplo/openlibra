@@ -80,6 +80,12 @@ try {
     .first()
     .waitFor();
 
+  const leftPanel = page.locator(".left-panel");
+  const initialPanelWidth = (await leftPanel.boundingBox()).width;
+  await page.getByRole("button", { name: "Resize left sidebar" }).focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal((await leftPanel.boundingBox()).width, initialPanelWidth + 10);
+
   const rulerBounds = await page.locator(".horizontal-ruler").boundingBox();
   const toolDockBounds = await page.locator(".tool-rail").boundingBox();
   assert.ok(rulerBounds && toolDockBounds);
@@ -316,6 +322,20 @@ try {
     );
   assert.ok(propertyControlHeights.length > 0);
   assert.deepEqual([...new Set(propertyControlHeights)], ["30px"]);
+  const typographyGridMetrics = await page
+    .locator(".typography-number-grid")
+    .evaluate((grid) => ({
+      clientWidth: grid.clientWidth,
+      scrollWidth: grid.scrollWidth,
+      valueWidths: [...grid.querySelectorAll('input[type="number"], select')]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => element.getBoundingClientRect().width),
+    }));
+  assert.equal(
+    typographyGridMetrics.scrollWidth,
+    typographyGridMetrics.clientWidth,
+  );
+  assert.ok(typographyGridMetrics.valueWidths.every((width) => width >= 58));
   const horizontal = page.getByRole("group", { name: "Horizontal" });
   await horizontal.getByRole("button", { name: "Align center" }).click();
   assert.equal(
@@ -323,6 +343,114 @@ try {
       .getByRole("button", { name: "Align center" })
       .getAttribute("aria-pressed"),
     "true",
+  );
+
+  assert.equal(
+    await page
+      .getByRole("combobox", { name: "Width variable" })
+      .locator("option:checked")
+      .textContent(),
+    "px",
+  );
+  await page.getByRole("button", { name: "Create height variable" }).click();
+  assert.match(
+    await page
+      .getByRole("combobox", { name: "Height variable" })
+      .locator("option:checked")
+      .textContent(),
+    /Height \/ /,
+  );
+  await page
+    .getByRole("button", { name: "Create text style from selection" })
+    .click();
+  assert.match(
+    await page
+      .getByRole("combobox", { name: "Text style" })
+      .locator("option:checked")
+      .textContent(),
+    /style$/,
+  );
+
+  await page.getByRole("button", { name: "Assets" }).click();
+  await page.getByTestId("document-vault").waitFor();
+  await page
+    .getByText(/auto height/)
+    .first()
+    .waitFor();
+  await page
+    .getByText(/H center/)
+    .first()
+    .waitFor();
+  const vaultMetrics = await page
+    .getByTestId("document-vault")
+    .evaluate((vault) => ({
+      clientWidth: vault.clientWidth,
+      scrollWidth: vault.scrollWidth,
+      controlHeights: [
+        ...vault.querySelectorAll(
+          'button:not(.media-asset-card), input:not([type="file"])',
+        ),
+      ]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => getComputedStyle(element).height),
+    }));
+  assert.equal(vaultMetrics.scrollWidth, vaultMetrics.clientWidth);
+  assert.deepEqual([...new Set(vaultMetrics.controlHeights)], ["30px"]);
+  await page.getByLabel("New variable name").fill("Size / Text width");
+  await page.getByLabel("New variable value").fill("240");
+  await page.getByRole("button", { name: "Add variable" }).click();
+  await page.getByLabel("New text style name").fill("Body / Test");
+  await page.getByRole("button", { name: "Add from selection" }).click();
+  await page.getByTestId("image-upload").setInputFiles({
+    name: "pixel.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await page.getByTitle("Insert pixel.png").waitFor();
+  await page.getByTestId("icon-library-Home").click();
+  await page.getByRole("button", { name: "Layers" }).click();
+  const imageLayer = page.locator(
+    '[data-testid^="layer-node-"][data-node-kind="image"]',
+  );
+  const iconLayer = page
+    .locator('[data-testid^="layer-node-"][data-node-kind="icon"]')
+    .last();
+  await imageLayer.waitFor();
+  await iconLayer.waitFor();
+  await imageLayer.locator(".layer-main").click();
+  await page
+    .getByRole("combobox", { name: "Image fit" })
+    .selectOption("contain");
+  assert.equal(
+    await page
+      .getByRole("combobox", { name: "Image fit" })
+      .locator("option:checked")
+      .textContent(),
+    "Contain",
+  );
+  await textLayer.locator(".layer-main").click();
+  await page
+    .getByRole("combobox", { name: "Width variable" })
+    .selectOption({ label: "Size / Text width · 240" });
+  await page
+    .getByRole("combobox", { name: "Text style" })
+    .selectOption({ label: "Body / Test" });
+  assert.match(
+    await page
+      .getByRole("combobox", { name: "Width variable" })
+      .locator("option:checked")
+      .textContent(),
+    /Size \/ Text width/,
+  );
+  assert.equal(
+    await page
+      .getByRole("combobox", { name: "Text style" })
+      .locator("option:checked")
+      .textContent(),
+    "Body / Test",
   );
 
   const pages = page.getByTestId(/^page-node-/);
@@ -356,7 +484,7 @@ try {
   );
 
   console.log(
-    "UI smoke tests passed (typography, corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
+    "UI smoke tests passed (typography, variables, text styles, images, icons, corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
   );
 } finally {
   await browser?.close();

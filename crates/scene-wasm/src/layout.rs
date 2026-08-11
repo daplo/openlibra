@@ -87,10 +87,13 @@ impl Document {
             container.y + top + main_offset
         };
         let page = self.active_page_mut();
+        let mut moved_containers = Vec::new();
         for (child_id, _, _, sizing) in children {
             let Some(child) = page.nodes.iter_mut().find(|node| node.id == child_id) else {
                 continue;
             };
+            let previous_x = child.x;
+            let previous_y = child.y;
             if container.layout_mode == LayoutMode::Row {
                 if sizing == LayoutSizing::Fill {
                     child.width = fill_width.round().max(8.0);
@@ -117,6 +120,36 @@ impl Document {
                         LayoutAlign::End => cross_width - child.width,
                     };
                 cursor += child.height + container.layout_gap;
+            }
+            if child.kind == NodeKind::Group || child.kind == NodeKind::Frame {
+                moved_containers.push((child.id, child.x - previous_x, child.y - previous_y));
+            }
+        }
+        for (container_id, dx, dy) in moved_containers {
+            if dx == 0.0 && dy == 0.0 {
+                continue;
+            }
+            let mut descendants = std::collections::HashSet::from([container_id]);
+            loop {
+                let before = descendants.len();
+                for node in &page.nodes {
+                    if node
+                        .parent_id
+                        .is_some_and(|parent| descendants.contains(&parent))
+                    {
+                        descendants.insert(node.id);
+                    }
+                }
+                if descendants.len() == before {
+                    break;
+                }
+            }
+            descendants.remove(&container_id);
+            for node in &mut page.nodes {
+                if descendants.contains(&node.id) {
+                    node.x += dx;
+                    node.y += dy;
+                }
             }
         }
     }

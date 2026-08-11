@@ -36,7 +36,18 @@ impl Document {
 }
 
 fn append_node_scene(scene: &mut Vec<f32>, node: &Node) {
-    if node.kind == NodeKind::Group || node.kind == NodeKind::Text {
+    if matches!(node.kind, NodeKind::Text | NodeKind::Image | NodeKind::Icon) {
+        return;
+    }
+    let has_visible_shadow = node
+        .shadows
+        .iter()
+        .any(|shadow| shadow.enabled && shadow.color[3] > 0.0);
+    if node.kind == NodeKind::Group
+        && node.fill[3] <= 0.0
+        && (node.stroke_width <= 0.0 || node.stroke[3] <= 0.0)
+        && !has_visible_shadow
+    {
         return;
     }
     for shadow in node

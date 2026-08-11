@@ -4,9 +4,265 @@ use crate::geometry::rotate_around;
 #[test]
 fn demo_document_has_stable_renderable_nodes() {
     let engine = DocumentEngine::new();
-    assert_eq!(engine.rect_count(), 23);
-    assert_eq!(engine.scene_data().len(), 23 * FLOATS_PER_RECT);
+    assert_eq!(engine.rect_count(), 20);
+    assert_eq!(engine.scene_data().len(), 20 * FLOATS_PER_RECT);
     assert_eq!(engine.document.pages.len(), 5);
+    for name in [
+        "Finance · Welcome",
+        "Finance · Wallet",
+        "Finance · Analytics",
+    ] {
+        assert!(
+            engine
+                .document
+                .active_page()
+                .nodes
+                .iter()
+                .any(|node| node.name == name && node.kind == NodeKind::Frame)
+        );
+    }
+    assert_eq!(engine.document.text_styles.len(), 4);
+    assert_eq!(engine.document.media_assets.len(), 5);
+    assert!(engine.document.active_page().nodes.iter().any(|node| {
+        node.text_style_id.is_some()
+            && node.text.is_some()
+            && node.variable_bindings == VariableBindings::default()
+    }));
+    assert!(engine.document.active_page().nodes.iter().any(|node| {
+        node.variable_bindings.width.is_some() || node.variable_bindings.gap.is_some()
+    }));
+}
+
+#[test]
+fn media_assets_create_reusable_non_rectangle_nodes() {
+    let mut document = Document::demo();
+    let original_rectangles = document.scene_data().len();
+    let image_node_id = document
+        .add_media_asset_node(
+            MediaAssetKind::Image,
+            "House.jpg".into(),
+            "image/jpeg".into(),
+            "data:image/jpeg;base64,AA==".into(),
+            1200,
+            800,
+            None,
+        )
+        .unwrap();
+    let image = document.active_node(image_node_id).unwrap();
+    assert_eq!(image.kind, NodeKind::Image);
+    assert_eq!(image.image_fit, ImageFit::Cover);
+    let asset_id = image.asset_id.unwrap();
+    assert_eq!(
+        document
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .unwrap()
+            .kind,
+        MediaAssetKind::Image
+    );
+
+    let reused_node_id = document.add_node_from_asset(asset_id, None).unwrap();
+    assert_eq!(
+        document.active_node(reused_node_id).unwrap().asset_id,
+        Some(asset_id)
+    );
+    assert_eq!(document.scene_data().len(), original_rectangles);
+    document.validate().unwrap();
+    let restored: Document =
+        serde_json::from_str(&serde_json::to_string(&document).unwrap()).unwrap();
+    assert_eq!(restored.media_assets, document.media_assets);
+}
+
+#[test]
+fn demo_mobile_artboard_uses_nested_auto_layout_groups() {
+    let document = Document::demo();
+    let page = document.active_page();
+    let mobile = page
+        .nodes
+        .iter()
+        .find(|node| node.name == "Finance · Wallet")
+        .unwrap();
+    assert_eq!(mobile.kind, NodeKind::Frame);
+    let sections: Vec<_> = page
+        .nodes
+        .iter()
+        .filter(|node| node.parent_id == Some(mobile.id))
+        .collect();
+    assert!(sections.iter().any(|node| node.kind == NodeKind::Group));
+    for name in [
+        "Wallet content · Auto layout",
+        "Cards · Auto layout",
+        "Quick actions · Auto layout",
+        "Bottom navigation · Auto layout",
+    ] {
+        assert_ne!(
+            page.nodes
+                .iter()
+                .find(|node| node.name == name)
+                .unwrap()
+                .layout_mode,
+            LayoutMode::None
+        );
+    }
+}
+
+#[test]
+fn clicking_nested_demo_element_keeps_its_group_parent() {
+    let mut document = Document::demo();
+    let hero = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Action label")
+        .unwrap()
+        .clone();
+    assert!(!document.reparent_nodes_to_artboards(&[hero.id]));
+    assert_eq!(
+        document.active_node(hero.id).unwrap().parent_id,
+        hero.parent_id
+    );
+}
+
+#[test]
+fn groups_render_when_they_have_a_fill_or_border() {
+    let mut document = Document::demo();
+    let group_id = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Wallet content · Auto layout")
+        .unwrap()
+        .id;
+    let base_rects = document.scene_data().len() / FLOATS_PER_RECT;
+    assert!(document.set_node_style(
+        group_id,
+        [0.2, 0.3, 0.4, 0.8],
+        [0.8, 0.9, 1.0, 1.0],
+        2.0,
+        [12.0; 4],
+        StrokeAlign::Inside,
+        StrokeJoin::Round,
+    ));
+    assert_eq!(
+        document.scene_data().len() / FLOATS_PER_RECT,
+        base_rects + 1
+    );
+}
+
+#[test]
+fn number_variables_bind_and_propagate_layout_values() {
+    let mut document = Document::demo();
+    let card_content = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Wallet content · Auto layout")
+        .unwrap()
+        .id;
+    let variable_id = document
+        .add_number_variable("Spacing / Card".into(), 18.0)
+        .unwrap();
+    assert!(document.bind_node_variable(card_content, "gap", Some(variable_id)));
+    assert_eq!(document.active_node(card_content).unwrap().layout_gap, 18.0);
+    assert!(document.update_number_variable(variable_id, "Spacing / Card".into(), 24.0));
+    let node = document.active_node(card_content).unwrap();
+    assert_eq!(node.layout_gap, 24.0);
+    assert_eq!(node.variable_bindings.gap, Some(variable_id));
+    let restored: Document =
+        serde_json::from_str(&serde_json::to_string(&document).unwrap()).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(
+        restored
+            .number_variables
+            .iter()
+            .find(|variable| variable.id == variable_id)
+            .unwrap()
+            .value,
+        24.0
+    );
+}
+
+#[test]
+fn text_style_updates_every_linked_text_node() {
+    let mut document = Document::demo();
+    let text_ids: Vec<_> = ["Greeting", "Greeting subtitle"]
+        .map(|name| {
+            document
+                .active_page()
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .unwrap()
+                .id
+        })
+        .into();
+    let mut style = TypographyStyle::from(
+        document
+            .active_node(text_ids[0])
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap(),
+    );
+    style.font_size = 36.0;
+    let style_id = document.add_text_style("Hero / Display".into(), style.clone());
+    for id in &text_ids {
+        assert!(document.bind_node_text_style(*id, Some(style_id)));
+    }
+    let original_content = document
+        .active_node(text_ids[1])
+        .unwrap()
+        .text
+        .as_ref()
+        .unwrap()
+        .content
+        .clone();
+    style.font_family = "Georgia".into();
+    style.font_size = 42.0;
+    style.line_height = 1.6;
+    style.letter_spacing = 1.5;
+    style.horizontal_align = TextAlign::Center;
+    style.vertical_align = TextVerticalAlign::Middle;
+    style.font_style = FontStyle::Italic;
+    style.sizing = TextSizing::Fixed;
+    assert!(document.update_text_style(style_id, "Hero / Display".into(), style));
+    for id in text_ids {
+        let node = document.active_node(id).unwrap();
+        assert_eq!(node.text_style_id, Some(style_id));
+        assert_eq!(node.text.as_ref().unwrap().font_size, 42.0);
+        assert_eq!(node.text.as_ref().unwrap().font_family, "Georgia");
+        assert_eq!(node.text.as_ref().unwrap().line_height, 1.6);
+        assert_eq!(node.text.as_ref().unwrap().letter_spacing, 1.5);
+        assert_eq!(
+            node.text.as_ref().unwrap().horizontal_align,
+            TextAlign::Center
+        );
+        assert_eq!(
+            node.text.as_ref().unwrap().vertical_align,
+            TextVerticalAlign::Middle
+        );
+        assert_eq!(node.text.as_ref().unwrap().font_style, FontStyle::Italic);
+        assert_eq!(node.text.as_ref().unwrap().sizing, TextSizing::Fixed);
+    }
+    assert_eq!(
+        document
+            .active_node(
+                document
+                    .active_page()
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Greeting subtitle")
+                    .unwrap()
+                    .id,
+            )
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
+            .content,
+        original_content
+    );
 }
 
 #[test]
@@ -14,9 +270,14 @@ fn new_pages_nodes_and_colors_use_uuid_v7_ids() {
     let mut document = Document::demo();
     let node = document.add_node(NodeKind::Rectangle);
     let color = document.add_document_color("Blue".into(), "#3366CC".into());
+    let variable = document
+        .add_number_variable("Spacing".into(), 16.0)
+        .unwrap();
+    let style =
+        document.add_text_style("Body".into(), TypographyStyle::from(&TextStyle::default()));
     let page = document.add_page("UUID page".into());
     assert!(
-        [node, color, page]
+        [node, color, variable, style, page]
             .iter()
             .all(|id| id.get_version_num() == 7)
     );
@@ -70,6 +331,64 @@ fn schema_three_text_placeholders_gain_default_typography() {
     assert_eq!(
         document.pages[0].nodes[0].text.as_ref().unwrap(),
         &TextStyle::default()
+    );
+}
+
+#[test]
+fn schema_four_documents_gain_empty_token_collections_and_bindings() {
+    let mut value = serde_json::to_value(Document::demo()).unwrap();
+    value["schema_version"] = serde_json::json!(4);
+    value.as_object_mut().unwrap().remove("number_variables");
+    value.as_object_mut().unwrap().remove("text_styles");
+    for node in value["pages"][0]["nodes"].as_array_mut().unwrap() {
+        node.as_object_mut().unwrap().remove("variable_bindings");
+        node.as_object_mut().unwrap().remove("text_style_id");
+    }
+    migrate_legacy_document_ids(&mut value);
+    let document: Document = serde_json::from_value(value).unwrap();
+    document.validate().unwrap();
+    assert!(document.number_variables.is_empty());
+    assert!(document.text_styles.is_empty());
+    assert!(
+        document
+            .active_page()
+            .nodes
+            .iter()
+            .all(|node| node.variable_bindings == VariableBindings::default())
+    );
+}
+
+#[test]
+fn schema_five_documents_gain_empty_media_assets_and_node_defaults() {
+    let mut source = Document::demo();
+    source.add_text_style(
+        "Legacy style".into(),
+        TypographyStyle::from(&TextStyle::default()),
+    );
+    let mut value = serde_json::to_value(source).unwrap();
+    value["schema_version"] = serde_json::json!(5);
+    value.as_object_mut().unwrap().remove("media_assets");
+    value["text_styles"][0]["style"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sizing");
+    for page in value["pages"].as_array_mut().unwrap() {
+        for node in page["nodes"].as_array_mut().unwrap() {
+            node.as_object_mut().unwrap().remove("asset_id");
+            node.as_object_mut().unwrap().remove("image_fit");
+        }
+    }
+    migrate_legacy_document_ids(&mut value);
+    let document: Document = serde_json::from_value(value).unwrap();
+    document.validate().unwrap();
+    assert!(document.media_assets.is_empty());
+    assert_eq!(document.text_styles[0].style.sizing, TextSizing::AutoWidth);
+    assert!(
+        document
+            .pages
+            .iter()
+            .flat_map(|page| &page.nodes)
+            .all(|node| { node.asset_id.is_none() && node.image_fit == ImageFit::Cover })
     );
 }
 
@@ -230,15 +549,21 @@ fn deleting_a_frame_removes_its_direct_children() {
 fn deleting_a_container_removes_its_full_descendant_subtree() {
     let mut document = Document::demo();
     let frame = document.active_page().nodes[0].id;
+    let group = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.parent_id == Some(frame) && node.kind == NodeKind::Group)
+        .unwrap()
+        .id;
     let children: Vec<_> = document
         .active_page()
         .nodes
         .iter()
-        .filter(|node| node.parent_id == Some(frame))
+        .filter(|node| node.parent_id == Some(group))
         .take(2)
         .map(|node| node.id)
         .collect();
-    let group = document.group_nodes(&children).unwrap();
     assert!(document.delete_node(frame));
     assert!(document.active_node(group).is_none());
     assert!(
@@ -383,11 +708,8 @@ fn layers_can_be_reordered_above_and_below_siblings() {
 fn hit_testing_returns_the_topmost_node() {
     let engine = DocumentEngine::new();
     let hit = engine.hit_test(130.0, 210.0);
-    let expected = engine
-        .document
-        .active_page()
-        .nodes
-        .iter()
+    let expected = ordered_nodes(engine.document.active_page())
+        .into_iter()
         .rev()
         .find(|node| {
             130.0 >= node.x
@@ -424,7 +746,7 @@ fn artboards_use_requested_dimensions_and_do_not_overlap() {
 #[test]
 fn node_styles_are_clamped_and_serialized() {
     let mut document = Document::demo();
-    let id = document.active_page().nodes[1].id;
+    let id = document.active_page().nodes[0].id;
     assert!(document.set_node_style(
         id,
         [1.0, 0.0, 0.5, 1.0],
@@ -576,7 +898,7 @@ fn opacity_is_clamped_and_locked_nodes_reject_changes() {
 #[test]
 fn multiple_outer_and_inner_shadows_are_serialized_and_rendered() {
     let mut document = Document::demo();
-    let id = document.active_page().nodes[1].id;
+    let id = document.active_page().nodes[0].id;
     let base_rects = document.scene_data().len() / FLOATS_PER_RECT;
     let shadows = vec![
         Shadow {
@@ -599,14 +921,14 @@ fn multiple_outer_and_inner_shadows_are_serialized_and_rendered() {
         },
     ];
     assert!(document.set_node_shadows(id, shadows.clone()));
-    assert_eq!(document.active_page().nodes[1].shadows, shadows);
+    assert_eq!(document.active_page().nodes[0].shadows, shadows);
     assert_eq!(
         document.scene_data().len() / FLOATS_PER_RECT,
-        base_rects + 2
+        base_rects + 1
     );
     let json = serde_json::to_string(&document).unwrap();
     let restored: Document = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored.active_page().nodes[1].shadows.len(), 2);
+    assert_eq!(restored.active_page().nodes[0].shadows.len(), 2);
 }
 
 #[test]
@@ -816,7 +1138,8 @@ fn new_and_dragged_nodes_are_parented_to_their_artboard() {
             .parent_id,
         Some(first.id)
     );
-    assert!(document.set_node_bounds(id, -500.0, -500.0, 40.0, 40.0));
+    let node = document.active_node(id).unwrap().clone();
+    assert!(document.move_nodes(&[id], -500.0 - node.x, -500.0 - node.y));
     assert!(document.reparent_nodes_to_artboards(&[id]));
     assert_eq!(
         document
@@ -844,7 +1167,7 @@ fn reparented_children_render_above_the_destination_artboard() {
         .active_page()
         .nodes
         .iter()
-        .find(|node| node.parent_id == Some(artboards[0].id))
+        .find(|node| node.name == "Status bar")
         .unwrap()
         .id;
     assert!(document.set_node_bounds(
@@ -867,11 +1190,20 @@ fn reparented_children_render_above_the_destination_artboard() {
 #[test]
 fn document_color_library_deduplicates_normalized_colors() {
     let mut document = Document::demo();
+    let before = document.color_library.len();
     let first = document.add_document_color("Brand".into(), "#82E6B8".into());
     let second = document.add_document_color("Duplicate".into(), "#82E6B8".into());
     assert_eq!(first, second);
-    assert_eq!(document.color_library.len(), 1);
-    assert_eq!(document.color_library[0].name, "Brand");
+    assert_eq!(document.color_library.len(), before + 1);
+    assert_eq!(
+        document
+            .color_library
+            .iter()
+            .find(|color| color.id == first)
+            .unwrap()
+            .name,
+        "Brand"
+    );
 }
 
 #[test]
@@ -895,7 +1227,7 @@ fn undo_redo_and_transactions_restore_document_states() {
 #[test]
 fn compact_style_history_restores_node_without_document_snapshots() {
     let mut engine = DocumentEngine::new();
-    let node = engine.document.active_page().nodes[1].clone();
+    let node = engine.document.active_page().nodes[0].clone();
     assert!(
         engine
             .set_node_style(
@@ -918,20 +1250,20 @@ fn compact_style_history_restores_node_without_document_snapshots() {
     ));
     assert!(engine.undo());
     assert_eq!(
-        engine.document.active_page().nodes[1].corner_radii,
+        engine.document.active_page().nodes[0].corner_radii,
         node.corner_radii
     );
     assert!(engine.redo());
     assert_eq!(
-        engine.document.active_page().nodes[1].corner_radii,
+        engine.document.active_page().nodes[0].corner_radii,
         [4.0, 8.0, 12.0, 16.0]
     );
     assert_eq!(
-        engine.document.active_page().nodes[1].stroke_align,
+        engine.document.active_page().nodes[0].stroke_align,
         StrokeAlign::Outside
     );
     assert_eq!(
-        engine.document.active_page().nodes[1].stroke_join,
+        engine.document.active_page().nodes[0].stroke_join,
         StrokeJoin::Straight
     );
 }

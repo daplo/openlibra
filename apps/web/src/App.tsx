@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Frame,
   Hand,
@@ -14,6 +21,7 @@ import {
 import {
   ArtboardGuides,
   CanvasGrid,
+  MediaOverlay,
   Rulers,
   SelectionOverlay,
   TextOverlay,
@@ -39,7 +47,9 @@ import type {
   Mode,
   NodeSummary,
   ShadowSummary,
+  TextStyleAsset,
   TextStyleSummary,
+  TypographyStyle,
 } from "./editor/types";
 import init, { DocumentEngine } from "./wasm/open_libra_scene_wasm";
 import {
@@ -61,9 +71,12 @@ export function App() {
   const themeRef = useRef<ColorTheme>("dark");
   const pendingSceneFrameRef = useRef<number | undefined>(undefined);
   const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
+  const nodesByIdRef = useRef<Map<string, NodeSummary>>(new Map());
   const editMenuRef = useRef<HTMLDivElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("design");
+  const [leftPanelWidth, setLeftPanelWidth] = useState(240);
+  const [rightPanelWidth, setRightPanelWidth] = useState(250);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>("select");
   const [theme, setTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem("open-libra-theme");
@@ -82,6 +95,9 @@ export function App() {
     pages: [],
     nodes: [],
     document_colors: [],
+    number_variables: [],
+    text_styles: [],
+    media_assets: [],
   });
   const [, setModelPatchVersion] = useState(0);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -107,6 +123,7 @@ export function App() {
     () => new Map(documentModel.nodes.map((node) => [node.id, node])),
     [documentModel.nodes],
   );
+  nodesByIdRef.current = nodesById;
   const selectedNodes = useMemo(
     () =>
       selectedNodeIds
@@ -167,19 +184,23 @@ export function App() {
     if (pendingSceneFrameRef.current !== undefined) return;
     pendingSceneFrameRef.current = requestAnimationFrame(() => {
       pendingSceneFrameRef.current = undefined;
-      const engine = engineRef.current;
-      const renderer = rendererRef.current;
-      if (!engine || !renderer) return;
-      const bounds = renderer.getVisibleWorldBounds();
-      const sceneStarted = performance.now();
-      const scene = engine.scene_data_for_view(
-        bounds.left,
-        bounds.top,
-        bounds.right,
-        bounds.bottom,
-      );
-      renderer.setVisibleScene(scene, performance.now() - sceneStarted);
+      refreshVisibleScene();
     });
+  }
+
+  function refreshVisibleScene() {
+    const engine = engineRef.current;
+    const renderer = rendererRef.current;
+    if (!engine || !renderer) return;
+    const bounds = renderer.getVisibleWorldBounds();
+    const sceneStarted = performance.now();
+    const scene = engine.scene_data_for_view(
+      bounds.left,
+      bounds.top,
+      bounds.right,
+      bounds.bottom,
+    );
+    renderer.setVisibleScene(scene, performance.now() - sceneStarted);
   }
 
   function refreshLiveSelectionBounds() {
@@ -321,9 +342,49 @@ export function App() {
     const selection = selectedNodeIdsRef.current;
     if (!engineRef.current || selection.length === 0) return;
     if (engineRef.current.move_nodes(JSON.stringify(selection), dx, dy)) {
+      patchMovedNodesInModel(selection, dx, dy);
       refreshLiveSelectionBounds();
-      scheduleSceneRefresh();
+      refreshVisibleScene();
     }
+  }
+
+  function patchMovedNodesInModel(rootIds: string[], dx: number, dy: number) {
+    const model = documentModelRef.current;
+    if (!model) return;
+    const movingIds = new Set(rootIds);
+    const roots = rootIds.flatMap((id) => {
+      const node = nodesByIdRef.current.get(id);
+      return node ? [node] : [];
+    });
+    if (roots.every((node) => node.kind !== "frame" && node.kind !== "group")) {
+      for (const node of roots) {
+        node.x += dx;
+        node.y += dy;
+      }
+      setModelPatchVersion((version) => version + 1);
+      return;
+    }
+    let foundDescendant = true;
+    while (foundDescendant) {
+      foundDescendant = false;
+      for (const node of model.nodes) {
+        if (
+          node.parent_id &&
+          movingIds.has(node.parent_id) &&
+          !movingIds.has(node.id)
+        ) {
+          movingIds.add(node.id);
+          foundDescendant = true;
+        }
+      }
+    }
+    for (const node of model.nodes) {
+      if (movingIds.has(node.id)) {
+        node.x += dx;
+        node.y += dy;
+      }
+    }
+    setModelPatchVersion((version) => version + 1);
   }
 
   function resizeSelection(handle: ResizeHandle, dx: number, dy: number) {
@@ -337,7 +398,7 @@ export function App() {
     const localDy = dx * Math.sin(angle) + dy * Math.cos(angle);
     if (engineRef.current.resize_node(selection[0], handle, localDx, localDy)) {
       refreshLiveSelectionBounds();
-      scheduleSceneRefresh();
+      refreshVisibleScene();
     }
   }
 
@@ -561,6 +622,251 @@ export function App() {
       engine.add_document_color(color, color);
       refreshDocument();
     } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function addNumberVariable(name: string, value: number) {
+    if (engineRef.current?.add_number_variable(name, value)) refreshDocument();
+  }
+
+  async function importImage(file: File) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (!file.type.match(/^image\/(png|jpeg|webp)$/)) {
+      setError("Choose a PNG, JPEG, or WebP image.");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Images must be 10 MB or smaller.");
+      return;
+    }
+    try {
+      const source = await readFileAsDataUrl(file);
+      const dimensions = await readImageDimensions(source);
+      const parentId = preferredArtboardId(
+        documentModel.nodes,
+        selectedNodeIdsRef.current,
+      );
+      const id = engine.add_media_asset_node(
+        "image",
+        file.name,
+        file.type,
+        source,
+        dimensions.width,
+        dimensions.height,
+        parentId ?? "",
+      );
+      if (!id) throw new Error("The image could not be added.");
+      setError(undefined);
+      refreshDocument([id]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function addLibraryIcon(name: string, svg: string) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const parentId = preferredArtboardId(
+      documentModel.nodes,
+      selectedNodeIdsRef.current,
+    );
+    const id = engine.add_media_asset_node(
+      "icon",
+      name,
+      "image/svg+xml",
+      svg,
+      24,
+      24,
+      parentId ?? "",
+    );
+    if (id) refreshDocument([id]);
+  }
+
+  function addNodeFromAsset(assetId: string) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const parentId = preferredArtboardId(
+      documentModel.nodes,
+      selectedNodeIdsRef.current,
+    );
+    const id = engine.add_node_from_asset(assetId, parentId ?? "");
+    if (id) refreshDocument([id]);
+  }
+
+  function updateNodeImageFit(
+    node: NodeSummary,
+    fit: NodeSummary["image_fit"],
+  ) {
+    if (engineRef.current?.set_node_image_fit(node.id, fit))
+      refreshDocument([node.id]);
+  }
+
+  function updateNodeAsset(node: NodeSummary, assetId: string) {
+    if (engineRef.current?.set_node_asset(node.id, assetId))
+      refreshDocument([node.id]);
+  }
+
+  function updateNumberVariable(id: string, name: string, value: number) {
+    if (engineRef.current?.update_number_variable(id, name, value))
+      refreshDocument();
+  }
+
+  function deleteNumberVariable(id: string) {
+    if (engineRef.current?.delete_number_variable(id)) refreshDocument();
+  }
+
+  function selectedTypography(): TypographyStyle | undefined {
+    const text = selectedNodes.find((node) => node.text)?.text;
+    if (!text) return undefined;
+    return {
+      font_family: text.font_family,
+      font_weight: text.font_weight,
+      font_size: text.font_size,
+      line_height: text.line_height,
+      letter_spacing: text.letter_spacing,
+      horizontal_align: text.horizontal_align,
+      vertical_align: text.vertical_align,
+      font_style: text.font_style,
+      sizing: text.sizing,
+    };
+  }
+
+  function addTextStyle(name: string) {
+    const style = selectedTypography();
+    if (!style) return;
+    try {
+      if (engineRef.current?.add_text_style(name, JSON.stringify(style)))
+        refreshDocument();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function updateTextStyle(
+    asset: TextStyleAsset,
+    name: string,
+    styleOverride?: TypographyStyle,
+  ) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const style = styleOverride ?? selectedTypography() ?? asset.style;
+    try {
+      engine.begin_transaction();
+      const changed = engine.update_text_style(
+        asset.id,
+        name,
+        JSON.stringify(style),
+      );
+      if (changed) {
+        const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+        for (const node of model.nodes) {
+          if (node.text_style_id !== asset.id || !node.text) continue;
+          const bounds = measureTextBounds(node, node.text);
+          if (bounds)
+            engine.set_node_bounds(
+              node.id,
+              node.x,
+              node.y,
+              node.variable_bindings.width ? node.width : bounds.width,
+              node.variable_bindings.height ? node.height : bounds.height,
+            );
+        }
+      }
+      engine.end_transaction();
+      if (changed) refreshDocument();
+    } catch (cause) {
+      engine.end_transaction();
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function deleteTextStyle(id: string) {
+    if (engineRef.current?.delete_text_style(id)) refreshDocument();
+  }
+
+  function bindNodeVariable(
+    node: NodeSummary,
+    property: string,
+    variableId?: string,
+  ) {
+    if (
+      engineRef.current?.bind_node_variable(node.id, property, variableId ?? "")
+    )
+      refreshDocument([node.id]);
+  }
+
+  function createAndBindVariable(
+    node: NodeSummary,
+    property: string,
+    value: number,
+  ) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const label = property
+      .split("_")
+      .map((part) => part[0]?.toUpperCase() + part.slice(1))
+      .join(" ");
+    engine.begin_transaction();
+    const variableId = engine.add_number_variable(`${label} / ${value}`, value);
+    const changed =
+      Boolean(variableId) &&
+      engine.bind_node_variable(node.id, property, variableId);
+    engine.end_transaction();
+    if (changed) refreshDocument([node.id]);
+  }
+
+  function bindNodeTextStyle(node: NodeSummary, styleId?: string) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.begin_transaction();
+    const changed = engine.bind_node_text_style(node.id, styleId ?? "");
+    if (changed) {
+      const json = engine.node_json(node.id);
+      const updated = json ? (JSON.parse(json) as NodeSummary) : undefined;
+      if (updated?.text) {
+        const bounds = measureTextBounds(updated, updated.text);
+        if (bounds)
+          engine.set_node_bounds(
+            updated.id,
+            updated.x,
+            updated.y,
+            updated.variable_bindings.width ? updated.width : bounds.width,
+            updated.variable_bindings.height ? updated.height : bounds.height,
+          );
+      }
+    }
+    engine.end_transaction();
+    if (changed) refreshDocument([node.id]);
+  }
+
+  function createAndBindTextStyle(node: NodeSummary) {
+    const engine = engineRef.current;
+    if (!engine || !node.text) return;
+    const style: TypographyStyle = {
+      font_family: node.text.font_family,
+      font_weight: node.text.font_weight,
+      font_size: node.text.font_size,
+      line_height: node.text.line_height,
+      letter_spacing: node.text.letter_spacing,
+      horizontal_align: node.text.horizontal_align,
+      vertical_align: node.text.vertical_align,
+      font_style: node.text.font_style,
+      sizing: node.text.sizing,
+    };
+    try {
+      engine.begin_transaction();
+      const styleId = engine.add_text_style(
+        `${node.name} style`,
+        JSON.stringify(style),
+      );
+      const changed =
+        Boolean(styleId) && engine.bind_node_text_style(node.id, styleId);
+      engine.end_transaction();
+      if (changed) refreshDocument([node.id]);
+    } catch (cause) {
+      engine.end_transaction();
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
@@ -928,7 +1234,15 @@ export function App() {
         </div>
       </header>
 
-      <section className="workspace">
+      <section
+        className="workspace"
+        style={
+          {
+            "--left-panel-width": `${leftPanelWidth}px`,
+            "--right-panel-width": `${rightPanelWidth}px`,
+          } as CSSProperties
+        }
+      >
         <aside className="left-panel">
           <Panel
             mode={mode}
@@ -961,6 +1275,21 @@ export function App() {
               )
                 refreshDocument();
             }}
+            onAddNumberVariable={addNumberVariable}
+            onUpdateNumberVariable={updateNumberVariable}
+            onDeleteNumberVariable={deleteNumberVariable}
+            onAddTextStyle={addTextStyle}
+            onUpdateTextStyle={updateTextStyle}
+            onDeleteTextStyle={deleteTextStyle}
+            hasSelectedText={selectedNodes.some((node) => node.kind === "text")}
+            onImportImage={importImage}
+            onAddLibraryIcon={addLibraryIcon}
+            onAddNodeFromAsset={addNodeFromAsset}
+          />
+          <PanelResizeHandle
+            side="left"
+            width={leftPanelWidth}
+            onChange={setLeftPanelWidth}
           />
         </aside>
 
@@ -1026,6 +1355,11 @@ export function App() {
               rendererRef={rendererRef}
               nodes={documentModel.nodes}
               artboards={guidedArtboards}
+            />
+            <MediaOverlay
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
+              assets={documentModel.media_assets}
             />
             <TextOverlay
               rendererRef={rendererRef}
@@ -1094,11 +1428,19 @@ export function App() {
         </section>
 
         <aside className="right-panel">
+          <PanelResizeHandle
+            side="right"
+            width={rightPanelWidth}
+            onChange={setRightPanelWidth}
+          />
           <p className="eyebrow">{mode}</p>
           {mode === "design" && (
             <Properties
               selected={selectedNodes}
               documentColors={documentColors}
+              numberVariables={documentModel.number_variables}
+              textStyles={documentModel.text_styles}
+              mediaAssets={documentModel.media_assets}
               onAddDocumentColor={addDocumentColor}
               onAlign={alignSelected}
               onDelete={deleteSelected}
@@ -1108,6 +1450,12 @@ export function App() {
               onOpacityChange={updateNodeOpacity}
               onShadowsChange={updateNodeShadows}
               onTextChange={updateNodeText}
+              onVariableBind={bindNodeVariable}
+              onTextStyleBind={bindNodeTextStyle}
+              onCreateVariable={createAndBindVariable}
+              onCreateTextStyle={createAndBindTextStyle}
+              onImageFitChange={updateNodeImageFit}
+              onAssetChange={updateNodeAsset}
               onTransformChange={updateNodeTransform}
               onLayoutChange={updateNodeLayout}
               onWidthSizingChange={updateNodeWidthSizing}
@@ -1119,6 +1467,51 @@ export function App() {
         </aside>
       </section>
     </main>
+  );
+}
+
+function PanelResizeHandle({
+  side,
+  width,
+  onChange,
+}: {
+  side: "left" | "right";
+  width: number;
+  onChange: (width: number) => void;
+}) {
+  const clamp = (value: number) => Math.min(420, Math.max(190, value));
+  const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const originX = event.clientX;
+    const originWidth = width;
+    const move = (moveEvent: PointerEvent) =>
+      onChange(
+        clamp(
+          originWidth +
+            (side === "left"
+              ? moveEvent.clientX - originX
+              : originX - moveEvent.clientX),
+        ),
+      );
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  };
+  return (
+    <button
+      className={`panel-resize-handle ${side}`}
+      aria-label={`Resize ${side} sidebar`}
+      title={`Resize ${side} sidebar`}
+      onPointerDown={beginResize}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        const direction = event.key === "ArrowRight" ? 1 : -1;
+        onChange(clamp(width + direction * (side === "left" ? 10 : -10)));
+      }}
+    />
   );
 }
 
@@ -1177,4 +1570,23 @@ function measureTextBounds(node: NodeSummary, text: TextStyleSummary) {
         : node.width,
     height: Math.max(8, lines.length * text.font_size * text.line_height),
   };
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readImageDimensions(source: string) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () =>
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => reject(new Error("The selected image is invalid."));
+    image.src = source;
+  });
 }

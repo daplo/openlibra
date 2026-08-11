@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DocumentReadModel, Mode, NodeSummary } from "../editor/types";
+import {
+  Boxes,
+  ImagePlus,
+  Layers3,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react";
+import { ICON_LIBRARY, type IconDefinition } from "../editor/icon-catalog";
+import type {
+  DocumentReadModel,
+  Mode,
+  NodeSummary,
+  TextStyleAsset,
+  TypographyStyle,
+} from "../editor/types";
 import type { RenderStats } from "../renderer";
 
 const LAYER_DISPLAY_LIMIT = 100;
@@ -16,6 +32,16 @@ export function Panel({
   onReorderNode,
   onToggleLock,
   onRenameNode,
+  onAddNumberVariable,
+  onUpdateNumberVariable,
+  onDeleteNumberVariable,
+  onAddTextStyle,
+  onUpdateTextStyle,
+  onDeleteTextStyle,
+  hasSelectedText,
+  onImportImage,
+  onAddLibraryIcon,
+  onAddNodeFromAsset,
 }: {
   mode: Mode;
   stats: RenderStats;
@@ -28,7 +54,22 @@ export function Panel({
   onReorderNode: (draggedId: string, targetId: string, before: boolean) => void;
   onToggleLock: (id: string, locked: boolean) => void;
   onRenameNode: (id: string, name: string) => void;
+  onAddNumberVariable: (name: string, value: number) => void;
+  onUpdateNumberVariable: (id: string, name: string, value: number) => void;
+  onDeleteNumberVariable: (id: string) => void;
+  onAddTextStyle: (name: string) => void;
+  onUpdateTextStyle: (
+    asset: TextStyleAsset,
+    name: string,
+    style?: TypographyStyle,
+  ) => void;
+  onDeleteTextStyle: (id: string) => void;
+  hasSelectedText: boolean;
+  onImportImage: (file: File) => void;
+  onAddLibraryIcon: (name: string, svg: string) => void;
+  onAddNodeFromAsset: (assetId: string) => void;
 }) {
+  const [panelTab, setPanelTab] = useState<"layers" | "assets">("layers");
   const [editingNodeId, setEditingNodeId] = useState<string>();
   const [editingName, setEditingName] = useState("");
   const [draggedNodeId, setDraggedNodeId] = useState<string>();
@@ -285,12 +326,28 @@ export function Panel({
         <EmptyState text="Comments will appear here in Level 9." />
       </>
     );
+  if (panelTab === "assets")
+    return (
+      <>
+        <PanelTabs active={panelTab} onChange={setPanelTab} />
+        <VaultPanel
+          model={model}
+          hasSelectedText={hasSelectedText}
+          onAddNumberVariable={onAddNumberVariable}
+          onUpdateNumberVariable={onUpdateNumberVariable}
+          onDeleteNumberVariable={onDeleteNumberVariable}
+          onAddTextStyle={onAddTextStyle}
+          onUpdateTextStyle={onUpdateTextStyle}
+          onDeleteTextStyle={onDeleteTextStyle}
+          onImportImage={onImportImage}
+          onAddLibraryIcon={onAddLibraryIcon}
+          onAddNodeFromAsset={onAddNodeFromAsset}
+        />
+      </>
+    );
   return (
     <>
-      <div className="panel-tabs">
-        <button className="active">Layers</button>
-        <button>Assets</button>
-      </div>
+      <PanelTabs active={panelTab} onChange={setPanelTab} />
       <div className="page-list">
         {model.pages.map((page) => (
           <button
@@ -337,6 +394,400 @@ export function Panel({
         <Metric label="GPU upload" value={`${stats.uploadMs.toFixed(2)} ms`} />
       </dl>
     </>
+  );
+}
+
+function PanelTabs({
+  active,
+  onChange,
+}: {
+  active: "layers" | "assets";
+  onChange: (tab: "layers" | "assets") => void;
+}) {
+  return (
+    <div className="panel-tabs">
+      <button
+        className={active === "layers" ? "active" : ""}
+        onClick={() => onChange("layers")}
+      >
+        <Layers3 aria-hidden="true" />
+        Layers
+      </button>
+      <button
+        className={active === "assets" ? "active" : ""}
+        onClick={() => onChange("assets")}
+      >
+        <Boxes aria-hidden="true" />
+        Assets
+      </button>
+    </div>
+  );
+}
+
+function VaultPanel({
+  model,
+  hasSelectedText,
+  onAddNumberVariable,
+  onUpdateNumberVariable,
+  onDeleteNumberVariable,
+  onAddTextStyle,
+  onUpdateTextStyle,
+  onDeleteTextStyle,
+  onImportImage,
+  onAddLibraryIcon,
+  onAddNodeFromAsset,
+}: {
+  model: DocumentReadModel;
+  hasSelectedText: boolean;
+  onAddNumberVariable: (name: string, value: number) => void;
+  onUpdateNumberVariable: (id: string, name: string, value: number) => void;
+  onDeleteNumberVariable: (id: string) => void;
+  onAddTextStyle: (name: string) => void;
+  onUpdateTextStyle: (
+    asset: TextStyleAsset,
+    name: string,
+    style?: TypographyStyle,
+  ) => void;
+  onDeleteTextStyle: (id: string) => void;
+  onImportImage: (file: File) => void;
+  onAddLibraryIcon: (name: string, svg: string) => void;
+  onAddNodeFromAsset: (assetId: string) => void;
+}) {
+  const [variableName, setVariableName] = useState("Spacing / 16");
+  const [variableValue, setVariableValue] = useState("16");
+  const [styleName, setStyleName] = useState("Body / Regular");
+  const [iconQuery, setIconQuery] = useState("");
+  const visibleIcons = ICON_LIBRARY.filter((icon) =>
+    [icon.name, ...icon.tags].some((value) =>
+      value.toLowerCase().includes(iconQuery.trim().toLowerCase()),
+    ),
+  );
+  return (
+    <div className="vault-panel" data-testid="document-vault">
+      <div className="vault-heading">
+        <div>
+          <span className="eyebrow">Document vault</span>
+          <h2>Assets &amp; tokens</h2>
+        </div>
+        <small>Saved with this document</small>
+      </div>
+
+      <section className="vault-section">
+        <div className="vault-section-heading">
+          <h3>Images</h3>
+          <label
+            className="asset-upload-button"
+            aria-label="Import image"
+            title="Import image"
+          >
+            <ImagePlus aria-hidden="true" />
+            <input
+              data-testid="image-upload"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onImportImage(file);
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </div>
+        <div className="media-asset-grid">
+          {model.media_assets
+            .filter((asset) => asset.kind === "image")
+            .map((asset) => (
+              <button
+                key={asset.id}
+                className="media-asset-card"
+                title={`Insert ${asset.name}`}
+                onClick={() => onAddNodeFromAsset(asset.id)}
+              >
+                <img src={asset.source} alt="" />
+                <span>{asset.name}</span>
+              </button>
+            ))}
+        </div>
+        {!model.media_assets.some((asset) => asset.kind === "image") && (
+          <p className="empty-state">Import a PNG, JPEG, or WebP.</p>
+        )}
+      </section>
+
+      <section className="vault-section">
+        <h3>Icon library</h3>
+        <label className="icon-search">
+          <Search aria-hidden="true" />
+          <input
+            aria-label="Search icons"
+            placeholder="Search icons"
+            value={iconQuery}
+            onChange={(event) => setIconQuery(event.target.value)}
+          />
+        </label>
+        <div className="icon-library-grid">
+          {visibleIcons.map((icon) => (
+            <IconLibraryButton
+              key={icon.name}
+              icon={icon}
+              onClick={() => onAddLibraryIcon(icon.name, icon.svg)}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="vault-section">
+        <h3>Variables</h3>
+        <div className="vault-create-row">
+          <input
+            aria-label="New variable name"
+            value={variableName}
+            onChange={(event) => setVariableName(event.target.value)}
+          />
+          <input
+            aria-label="New variable value"
+            type="number"
+            min="0"
+            value={variableValue}
+            onChange={(event) => setVariableValue(event.target.value)}
+          />
+          <button
+            className="vault-icon-button"
+            aria-label="Add variable"
+            title="Add variable"
+            onClick={() => {
+              const value = Number(variableValue);
+              if (Number.isFinite(value))
+                onAddNumberVariable(variableName, value);
+            }}
+          >
+            <Plus aria-hidden="true" />
+          </button>
+        </div>
+        <div className="vault-list">
+          {model.number_variables.map((variable) => (
+            <div className="vault-token-row" key={variable.id}>
+              <input
+                aria-label={`${variable.name} name`}
+                defaultValue={variable.name}
+                onBlur={(event) =>
+                  onUpdateNumberVariable(
+                    variable.id,
+                    event.currentTarget.value,
+                    variable.value,
+                  )
+                }
+              />
+              <VaultNumberInput
+                aria-label={`${variable.name} value`}
+                value={variable.value}
+                min={0}
+                onCommit={(value) =>
+                  onUpdateNumberVariable(variable.id, variable.name, value)
+                }
+              />
+              <button
+                className="vault-delete"
+                aria-label={`Delete ${variable.name}`}
+                onClick={() => onDeleteNumberVariable(variable.id)}
+              >
+                <Trash2 aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+          {model.number_variables.length === 0 && (
+            <p className="empty-state">No numeric variables yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="vault-section">
+        <h3>Text styles</h3>
+        <div className="vault-create-row text-style-create">
+          <input
+            aria-label="New text style name"
+            value={styleName}
+            onChange={(event) => setStyleName(event.target.value)}
+          />
+          <button
+            className="vault-icon-button"
+            aria-label="Add from selection"
+            disabled={!hasSelectedText}
+            title={
+              hasSelectedText
+                ? "Create from selected text"
+                : "Select a text layer first"
+            }
+            onClick={() => onAddTextStyle(styleName)}
+          >
+            <Plus aria-hidden="true" />
+          </button>
+        </div>
+        <div className="vault-list">
+          {model.text_styles.map((asset) => (
+            <div className="vault-style-card" key={asset.id}>
+              <div
+                className="vault-style-preview"
+                style={{
+                  fontFamily: asset.style.font_family,
+                  fontSize: Math.min(24, asset.style.font_size),
+                  fontWeight: asset.style.font_weight,
+                }}
+              >
+                Aa
+              </div>
+              <div className="vault-style-copy">
+                <input
+                  aria-label={`${asset.name} name`}
+                  defaultValue={asset.name}
+                  onBlur={(event) =>
+                    onUpdateTextStyle(
+                      asset,
+                      event.currentTarget.value,
+                      asset.style,
+                    )
+                  }
+                />
+                <small>{textStyleDetails(asset.style)}</small>
+                <div className="vault-style-fields">
+                  <input
+                    aria-label={`${asset.name} font family`}
+                    value={asset.style.font_family}
+                    onChange={(event) =>
+                      onUpdateTextStyle(asset, asset.name, {
+                        ...asset.style,
+                        font_family: event.target.value,
+                      })
+                    }
+                  />
+                  <VaultNumberInput
+                    aria-label={`${asset.name} font size`}
+                    value={asset.style.font_size}
+                    min={1}
+                    onCommit={(font_size) =>
+                      onUpdateTextStyle(asset, asset.name, {
+                        ...asset.style,
+                        font_size,
+                      })
+                    }
+                  />
+                  <VaultNumberInput
+                    aria-label={`${asset.name} font weight`}
+                    value={asset.style.font_weight}
+                    min={100}
+                    max={900}
+                    step={100}
+                    onCommit={(font_weight) =>
+                      onUpdateTextStyle(asset, asset.name, {
+                        ...asset.style,
+                        font_weight,
+                      })
+                    }
+                  />
+                </div>
+                <button
+                  className="vault-icon-button"
+                  aria-label={`Update ${asset.name} from selection`}
+                  title="Update from selection"
+                  disabled={!hasSelectedText}
+                  onClick={() => onUpdateTextStyle(asset, asset.name)}
+                >
+                  <RefreshCw aria-hidden="true" />
+                </button>
+              </div>
+              <button
+                className="vault-delete"
+                aria-label={`Delete ${asset.name}`}
+                onClick={() => onDeleteTextStyle(asset.id)}
+              >
+                <Trash2 aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+          {model.text_styles.length === 0 && (
+            <p className="empty-state">No text styles yet.</p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function textStyleDetails(style: TypographyStyle) {
+  const values: string[] = [];
+  if (style.font_family !== "Arial") values.push(style.font_family);
+  if (style.font_size !== 24) values.push(`${style.font_size}px`);
+  if (style.font_weight !== 400) values.push(`Weight ${style.font_weight}`);
+  if (style.line_height !== 1.2) values.push(`Line ${style.line_height}`);
+  if (style.letter_spacing !== 0)
+    values.push(`Spacing ${style.letter_spacing}`);
+  if (style.font_style !== "normal") values.push(style.font_style);
+  if (style.horizontal_align !== "left")
+    values.push(`H ${style.horizontal_align}`);
+  if (style.vertical_align !== "top") values.push(`V ${style.vertical_align}`);
+  if (style.sizing !== "auto_width")
+    values.push(style.sizing.replace("_", " "));
+  return values.length > 0 ? values.join(" · ") : "Default typography";
+}
+
+function IconLibraryButton({
+  icon,
+  onClick,
+}: {
+  icon: IconDefinition;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="icon-library-button"
+      data-testid={`icon-library-${icon.name}`}
+      aria-label={`Insert ${icon.name}`}
+      title={`Insert ${icon.name}`}
+      onClick={onClick}
+    >
+      <span dangerouslySetInnerHTML={{ __html: icon.svg }} />
+    </button>
+  );
+}
+
+function VaultNumberInput({
+  value,
+  min,
+  max,
+  step = 1,
+  onCommit,
+  ...props
+}: {
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  onCommit: (value: number) => void;
+  "aria-label": string;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    onCommit(Math.min(max ?? Infinity, Math.max(min ?? -Infinity, parsed)));
+  };
+  return (
+    <input
+      {...props}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+    />
   );
 }
 

@@ -13,7 +13,7 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 6;
 const FLOATS_PER_RECT: usize = 24;
 
 fn parse_entity_id(value: &str) -> EntityId {
@@ -324,6 +324,46 @@ impl DocumentEngine {
             .to_string()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_media_asset_node(
+        &mut self,
+        kind: String,
+        name: String,
+        mime_type: String,
+        source: String,
+        width: u32,
+        height: u32,
+        parent_id: String,
+    ) -> String {
+        let parent_id = parse_entity_id(&parent_id);
+        let kind = if kind == "icon" {
+            MediaAssetKind::Icon
+        } else {
+            MediaAssetKind::Image
+        };
+        self.mutate(|document| {
+            document.add_media_asset_node(
+                kind,
+                name,
+                mime_type,
+                source,
+                width,
+                height,
+                (!parent_id.is_nil()).then_some(parent_id),
+            )
+        })
+        .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn add_node_from_asset(&mut self, asset_id: String, parent_id: String) -> String {
+        let asset_id = parse_entity_id(&asset_id);
+        let parent_id = parse_entity_id(&parent_id);
+        self.mutate(|document| {
+            document.add_node_from_asset(asset_id, (!parent_id.is_nil()).then_some(parent_id))
+        })
+        .map_or_else(String::new, |id| id.to_string())
+    }
+
     pub fn add_artboard(
         &mut self,
         name: String,
@@ -486,6 +526,22 @@ impl DocumentEngine {
         Ok(self.mutate(|document| document.set_node_text(node_id, text)))
     }
 
+    pub fn set_node_image_fit(&mut self, node_id: String, fit: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        let fit = match fit.as_str() {
+            "contain" => ImageFit::Contain,
+            "fill" => ImageFit::Fill,
+            _ => ImageFit::Cover,
+        };
+        self.mutate(|document| document.set_node_image_fit(node_id, fit))
+    }
+
+    pub fn set_node_asset(&mut self, node_id: String, asset_id: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        let asset_id = parse_entity_id(&asset_id);
+        self.mutate(|document| document.set_node_asset(node_id, asset_id))
+    }
+
     pub fn set_node_opacity(&mut self, node_id: String, opacity: f32) -> bool {
         let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_opacity(node_id, opacity))
@@ -603,6 +659,76 @@ impl DocumentEngine {
         Ok(self
             .mutate(|document| document.add_document_color(name, color))
             .to_string())
+    }
+
+    pub fn add_number_variable(&mut self, name: String, value: f32) -> String {
+        self.mutate(|document| document.add_number_variable(name, value))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn update_number_variable(
+        &mut self,
+        variable_id: String,
+        name: String,
+        value: f32,
+    ) -> bool {
+        let variable_id = parse_entity_id(&variable_id);
+        self.mutate(|document| document.update_number_variable(variable_id, name, value))
+    }
+
+    pub fn delete_number_variable(&mut self, variable_id: String) -> bool {
+        let variable_id = parse_entity_id(&variable_id);
+        self.mutate(|document| document.delete_number_variable(variable_id))
+    }
+
+    pub fn bind_node_variable(
+        &mut self,
+        node_id: String,
+        property: String,
+        variable_id: String,
+    ) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        let variable_id = parse_entity_id(&variable_id);
+        self.mutate(|document| {
+            document.bind_node_variable(
+                node_id,
+                &property,
+                (!variable_id.is_nil()).then_some(variable_id),
+            )
+        })
+    }
+
+    pub fn add_text_style(&mut self, name: String, style_json: &str) -> Result<String, JsValue> {
+        let style: TypographyStyle = serde_json::from_str(style_json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid text style: {error}")))?;
+        Ok(self
+            .mutate(|document| document.add_text_style(name, style))
+            .to_string())
+    }
+
+    pub fn update_text_style(
+        &mut self,
+        style_id: String,
+        name: String,
+        style_json: &str,
+    ) -> Result<bool, JsValue> {
+        let style_id = parse_entity_id(&style_id);
+        let style: TypographyStyle = serde_json::from_str(style_json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid text style: {error}")))?;
+        Ok(self.mutate(|document| document.update_text_style(style_id, name, style)))
+    }
+
+    pub fn delete_text_style(&mut self, style_id: String) -> bool {
+        let style_id = parse_entity_id(&style_id);
+        self.mutate(|document| document.delete_text_style(style_id))
+    }
+
+    pub fn bind_node_text_style(&mut self, node_id: String, style_id: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        let style_id = parse_entity_id(&style_id);
+        self.mutate(|document| {
+            document.bind_node_text_style(node_id, (!style_id.is_nil()).then_some(style_id))
+        })
     }
 
     pub fn align_nodes(&mut self, node_ids_json: &str, alignment: String) -> Result<bool, JsValue> {
