@@ -53,11 +53,38 @@ export function Panel({
     : undefined;
   const nodesByParent = useMemo(() => {
     const index = new Map<number | null, NodeSummary[]>();
-    for (const node of model.nodes) {
+    const modelOrder = new Map<number, number>();
+    for (const [nodeIndex, node] of model.nodes.entries()) {
+      modelOrder.set(node.id, nodeIndex);
       const parentId = node.parent_id ?? null;
       const siblings = index.get(parentId) ?? [];
       siblings.push(node);
       index.set(parentId, siblings);
+    }
+    const roots = index.get(null) ?? [];
+    const relocatedGroups = new Set<number>();
+    const groupsAtIndex = new Map<number, NodeSummary[]>();
+    for (const group of roots) {
+      if (group.kind !== "group") continue;
+      const children = index.get(group.id) ?? [];
+      const firstChildIndex = children.reduce(
+        (first, child) => Math.min(first, modelOrder.get(child.id) ?? first),
+        Number.POSITIVE_INFINITY,
+      );
+      if (!Number.isFinite(firstChildIndex)) continue;
+      const groups = groupsAtIndex.get(firstChildIndex) ?? [];
+      groups.push(group);
+      groupsAtIndex.set(firstChildIndex, groups);
+      relocatedGroups.add(group.id);
+    }
+    if (relocatedGroups.size > 0) {
+      const orderedRoots: NodeSummary[] = [];
+      for (const [nodeIndex, node] of model.nodes.entries()) {
+        orderedRoots.push(...(groupsAtIndex.get(nodeIndex) ?? []));
+        if (node.parent_id == null && !relocatedGroups.has(node.id))
+          orderedRoots.push(node);
+      }
+      index.set(null, orderedRoots);
     }
     return index;
   }, [model.nodes]);

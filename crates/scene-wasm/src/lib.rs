@@ -41,12 +41,59 @@ impl NodeStyleState {
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct NodeGeometryState {
+    id: u64,
+    parent_id: Option<u64>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    corner_radius: f32,
+    rotation: f32,
+    flip_x: bool,
+    flip_y: bool,
+}
+
+impl NodeGeometryState {
+    fn capture(node: &Node) -> Self {
+        Self {
+            id: node.id,
+            parent_id: node.parent_id,
+            x: node.x,
+            y: node.y,
+            width: node.width,
+            height: node.height,
+            corner_radius: node.corner_radius,
+            rotation: node.rotation,
+            flip_x: node.flip_x,
+            flip_y: node.flip_y,
+        }
+    }
+
+    fn apply(self, node: &mut Node) {
+        node.parent_id = self.parent_id;
+        node.x = self.x;
+        node.y = self.y;
+        node.width = self.width;
+        node.height = self.height;
+        node.corner_radius = self.corner_radius;
+        node.rotation = self.rotation;
+        node.flip_x = self.flip_x;
+        node.flip_y = self.flip_y;
+    }
+}
+
 enum HistoryEntry {
     Document(Document),
     NodeStyle {
         page_id: u64,
         node_id: u64,
         style: NodeStyleState,
+    },
+    Geometry {
+        page_id: u64,
+        nodes: Vec<NodeGeometryState>,
     },
 }
 
@@ -73,6 +120,27 @@ impl HistoryEntry {
                     style: inverse,
                 }
             }
+            Self::Geometry { page_id, nodes } => {
+                let page = document
+                    .pages
+                    .iter_mut()
+                    .find(|page| page.id == page_id)
+                    .expect("history page exists");
+                let mut inverse = Vec::with_capacity(nodes.len());
+                for state in nodes {
+                    let node = page
+                        .nodes
+                        .iter_mut()
+                        .find(|node| node.id == state.id)
+                        .expect("history node exists");
+                    inverse.push(NodeGeometryState::capture(node));
+                    state.apply(node);
+                }
+                Self::Geometry {
+                    page_id,
+                    nodes: inverse,
+                }
+            }
         }
     }
 }
@@ -83,6 +151,7 @@ pub struct DocumentEngine {
     undo_stack: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
     transaction_start: Option<Document>,
+    geometry_transaction_start: Option<HistoryEntry>,
 }
 
 #[wasm_bindgen]
@@ -94,6 +163,7 @@ impl DocumentEngine {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             transaction_start: None,
+            geometry_transaction_start: None,
         }
     }
 
@@ -119,10 +189,7 @@ impl DocumentEngine {
 
     pub fn node_json(&self, node_id: u64) -> String {
         self.document
-            .active_page()
-            .nodes
-            .iter()
-            .find(|node| node.id == node_id)
+            .active_node(node_id)
             .and_then(|node| serde_json::to_string(node).ok())
             .unwrap_or_default()
     }
@@ -370,13 +437,86 @@ impl DocumentEngine {
         }
     }
 
-    pub fn end_transaction(&mut self) {
-        let Some(before) = self.transaction_start.take() else {
-            return;
+    pub fn begin_geometry_transaction(&mut self, node_ids_json: &str) -> Result<(), JsValue> {
+        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
+            return Ok(());
+        }
+        let node_ids: Vec<u64> = serde_json::from_str(node_ids_json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
+        if self.document.active_page().benchmark_node_count.is_none() {
+            self.begin_transaction();
+            return Ok(());
+        }
+        let page_id = self.document.active_page_id;
+        let selected: std::collections::HashSet<u64> = node_ids.iter().copied().collect();
+        let includes_group = node_ids.iter().any(|id| {
+            self.document
+                .active_node(*id)
+                .is_some_and(|node| node.kind == NodeKind::Group)
+        });
+        let nodes = if includes_group {
+            self.document
+                .active_page()
+                .nodes
+                .iter()
+                .filter(|node| {
+                    if selected.contains(&node.id) {
+                        return true;
+                    }
+                    let mut parent_id = node.parent_id;
+                    while let Some(parent) = parent_id {
+                        if selected.contains(&parent) {
+                            return true;
+                        }
+                        parent_id = self
+                            .document
+                            .active_node(parent)
+                            .and_then(|ancestor| ancestor.parent_id);
+                    }
+                    false
+                })
+                .map(NodeGeometryState::capture)
+                .collect()
+        } else {
+            node_ids
+                .iter()
+                .filter_map(|id| self.document.active_node(*id))
+                .map(NodeGeometryState::capture)
+                .collect()
         };
-        if before != self.document {
-            self.push_undo(HistoryEntry::Document(before));
-            self.redo_stack.clear();
+        self.geometry_transaction_start = Some(HistoryEntry::Geometry { page_id, nodes });
+        Ok(())
+    }
+
+    pub fn end_transaction(&mut self) {
+        if let Some(before) = self.transaction_start.take() {
+            if before != self.document {
+                self.push_undo(HistoryEntry::Document(before));
+                self.redo_stack.clear();
+            }
+        }
+        if let Some(entry @ HistoryEntry::Geometry { .. }) = self.geometry_transaction_start.take()
+        {
+            let changed = match &entry {
+                HistoryEntry::Geometry { page_id, nodes } => self
+                    .document
+                    .pages
+                    .iter()
+                    .find(|page| page.id == *page_id)
+                    .is_some_and(|page| {
+                        nodes.iter().any(|before| {
+                            page.nodes
+                                .iter()
+                                .find(|node| node.id == before.id)
+                                .is_some_and(|node| NodeGeometryState::capture(node) != *before)
+                        })
+                    }),
+                _ => false,
+            };
+            if changed {
+                self.push_undo(entry);
+                self.redo_stack.clear();
+            }
         }
     }
 
@@ -436,13 +576,14 @@ impl DocumentEngine {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             transaction_start: None,
+            geometry_transaction_start: None,
         })
     }
 }
 
 impl DocumentEngine {
     fn mutate<R>(&mut self, operation: impl FnOnce(&mut Document) -> R) -> R {
-        if self.transaction_start.is_some() {
+        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             return operation(&mut self.document);
         }
         let before = self.document.clone();

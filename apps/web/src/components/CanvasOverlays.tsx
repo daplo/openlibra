@@ -48,10 +48,16 @@ export function SelectionOverlay({
       const canvas = canvasRef.current;
       const renderer = rendererRef.current;
       if (canvas && renderer) {
+        const liveNodes = renderer.getSelectionNodes();
         const liveBounds =
           selected.length === 1 ? renderer.getSelectionBounds() : undefined;
-        const visibleSelection =
-          liveBounds && selected[0]
+        const liveById = new Map(liveNodes.map((node) => [node.id, node]));
+        const hasCompleteLiveSelection =
+          liveNodes.length === selected.length &&
+          selected.every((node) => liveById.has(node.id));
+        const visibleSelection = hasCompleteLiveSelection
+          ? selected.map((node) => ({ ...node, ...liveById.get(node.id) }))
+          : liveBounds && selected[0]
             ? [{ ...selected[0], ...liveBounds }]
             : selected;
         drawSelectionOverlay(canvas, renderer.getViewState(), visibleSelection);
@@ -320,8 +326,45 @@ function drawRulers(
   const v = setup(vertical, 24, height - 24);
   const steps = [10, 20, 50, 100, 200, 500, 1000];
   const step = steps.find((candidate) => candidate * view.zoom >= 55) ?? 1000;
+  const minorStep = step / 5;
   const firstX = Math.floor(-view.pan.x / view.zoom / step) * step;
   const firstY = Math.floor(-view.pan.y / view.zoom / step) * step;
+  const firstMinorX =
+    Math.floor(-view.pan.x / view.zoom / minorStep) * minorStep;
+  const firstMinorY =
+    Math.floor(-view.pan.y / view.zoom / minorStep) * minorStep;
+  h.globalAlpha = 0.55;
+  for (
+    let world = firstMinorX;
+    world * view.zoom + view.pan.x < width;
+    world += minorStep
+  ) {
+    const subdivision = Math.round(world / minorStep);
+    if (subdivision % 5 === 0) continue;
+    const x = world * view.zoom + view.pan.x - 24;
+    const tickHeight = subdivision % 5 === 2 || subdivision % 5 === 3 ? 6 : 4;
+    h.beginPath();
+    h.moveTo(x, 24 - tickHeight);
+    h.lineTo(x, 24);
+    h.stroke();
+  }
+  v.globalAlpha = 0.55;
+  for (
+    let world = firstMinorY;
+    world * view.zoom + view.pan.y < height;
+    world += minorStep
+  ) {
+    const subdivision = Math.round(world / minorStep);
+    if (subdivision % 5 === 0) continue;
+    const y = world * view.zoom + view.pan.y - 24;
+    const tickWidth = subdivision % 5 === 2 || subdivision % 5 === 3 ? 6 : 4;
+    v.beginPath();
+    v.moveTo(24 - tickWidth, y);
+    v.lineTo(24, y);
+    v.stroke();
+  }
+  h.globalAlpha = 1;
+  v.globalAlpha = 1;
   for (
     let world = firstX;
     world * view.zoom + view.pan.x < width;

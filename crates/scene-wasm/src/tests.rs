@@ -60,6 +60,12 @@ fn benchmark_hit_testing_uses_grid_coordinates() {
     let enlarged_id = document.active_page().nodes[0].id;
     assert!(document.set_node_bounds(enlarged_id, 0.0, 0.0, 100.0, 100.0));
     assert_eq!(document.benchmark_hit_test(50.0, 50.0), Some(enlarged_id));
+    assert!(document.move_nodes(&[enlarged_id], 1_000.0, 1_000.0));
+    assert_eq!(document.benchmark_hit_test(5.0, 5.0), Some(0));
+    assert_eq!(
+        document.benchmark_hit_test(1_050.0, 1_050.0),
+        Some(enlarged_id)
+    );
 }
 
 #[test]
@@ -635,6 +641,80 @@ fn compact_style_history_restores_node_without_document_snapshots() {
     );
     assert!(engine.redo());
     assert_eq!(engine.document.active_page().nodes[1].corner_radius, 12.0);
+}
+
+#[test]
+fn benchmark_geometry_transaction_uses_compact_history() {
+    let mut engine = DocumentEngine::new();
+    let benchmark_page_id = engine.document.pages[1].id;
+    assert!(engine.document.set_active_page(benchmark_page_id));
+    let node = engine.document.active_page().nodes[0].clone();
+    engine
+        .begin_geometry_transaction(&format!("[{}]", node.id))
+        .unwrap();
+    assert!(
+        engine
+            .move_nodes(&format!("[{}]", node.id), 31.0, 7.0)
+            .unwrap()
+    );
+    engine.end_transaction();
+    assert!(matches!(
+        engine.undo_stack.last(),
+        Some(HistoryEntry::Geometry { nodes, .. }) if nodes.len() == 1
+    ));
+    assert!(engine.undo());
+    let restored = &engine.document.active_page().nodes[0];
+    assert_eq!((restored.x, restored.y), (node.x, node.y));
+    assert!(engine.redo());
+    let redone = &engine.document.active_page().nodes[0];
+    assert_eq!((redone.x, redone.y), (node.x + 31.0, node.y + 7.0));
+}
+
+#[test]
+fn benchmark_group_move_and_undo_include_children() {
+    let mut engine = DocumentEngine::new();
+    let benchmark_page_id = engine.document.pages[1].id;
+    assert!(engine.document.set_active_page(benchmark_page_id));
+    let child_ids = [
+        engine.document.active_page().nodes[0].id,
+        engine.document.active_page().nodes[1].id,
+    ];
+    let original_positions: Vec<_> = child_ids
+        .iter()
+        .map(|id| {
+            let node = engine.document.active_node(*id).unwrap();
+            (node.x, node.y)
+        })
+        .collect();
+    let group_id = engine.document.group_nodes(&child_ids).unwrap();
+    engine
+        .begin_geometry_transaction(&format!("[{group_id}]"))
+        .unwrap();
+    assert!(
+        engine
+            .move_nodes(&format!("[{group_id}]"), 20.0, 15.0)
+            .unwrap()
+    );
+    engine.end_transaction();
+    assert!(matches!(
+        engine.undo_stack.last(),
+        Some(HistoryEntry::Geometry { nodes, .. }) if nodes.len() == 3
+    ));
+    for (index, id) in child_ids.iter().enumerate() {
+        let node = engine.document.active_node(*id).unwrap();
+        assert_eq!(
+            (node.x, node.y),
+            (
+                original_positions[index].0 + 20.0,
+                original_positions[index].1 + 15.0
+            )
+        );
+    }
+    assert!(engine.undo());
+    for (index, id) in child_ids.iter().enumerate() {
+        let node = engine.document.active_node(*id).unwrap();
+        assert_eq!((node.x, node.y), original_positions[index]);
+    }
 }
 
 #[test]

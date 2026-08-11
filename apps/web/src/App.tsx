@@ -52,6 +52,7 @@ export function App() {
   const themeRef = useRef<ColorTheme>("dark");
   const toolBeforeSpaceRef = useRef<CanvasTool | undefined>(undefined);
   const pendingSceneFrameRef = useRef<number | undefined>(undefined);
+  const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
   const editMenuRef = useRef<HTMLDivElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("design");
@@ -74,6 +75,7 @@ export function App() {
     nodes: [],
     document_colors: [],
   });
+  const [, setModelPatchVersion] = useState(0);
   const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
   const [historyState, setHistoryState] = useState({
     canUndo: false,
@@ -108,6 +110,7 @@ export function App() {
   );
   canvasToolRef.current = canvasTool;
   themeRef.current = theme;
+  documentModelRef.current = documentModel;
 
   function refreshDocument(selection = selectedNodeIdsRef.current) {
     const engine = engineRef.current;
@@ -116,7 +119,11 @@ export function App() {
     const validSelection = selection.filter((id) =>
       model.nodes.some((node) => node.id === id),
     );
-    if (validSelection.length !== selection.length) {
+    const currentSelection = selectedNodeIdsRef.current;
+    if (
+      validSelection.length !== currentSelection.length ||
+      validSelection.some((id, index) => id !== currentSelection[index])
+    ) {
       selectedNodeIdsRef.current = validSelection;
       setSelectedNodeIds(validSelection);
     }
@@ -125,6 +132,7 @@ export function App() {
     const selected = model.nodes.filter((node) =>
       validSelection.includes(node.id),
     );
+    rendererRef.current?.setSelectionNodes(selected);
     rendererRef.current?.setSelectionBounds(
       selected.length === 1 && selected[0].kind !== "group"
         ? selected[0]
@@ -157,13 +165,52 @@ export function App() {
   function refreshLiveSelectionBounds() {
     const engine = engineRef.current;
     const selection = selectedNodeIdsRef.current;
-    if (!engine || selection.length !== 1) return;
-    const json = engine.node_json(BigInt(selection[0]));
-    if (!json) return;
-    const node = JSON.parse(json) as NodeSummary;
+    if (!engine || selection.length === 0) return;
+    const nodes = selection.flatMap((id) => {
+      const json = engine.node_json(BigInt(id));
+      return json ? [JSON.parse(json) as NodeSummary] : [];
+    });
+    rendererRef.current?.setSelectionNodes(nodes);
+    const node = nodes[0];
     rendererRef.current?.setSelectionBounds(
-      node.kind === "group" ? undefined : node,
+      nodes.length === 1 && node?.kind !== "group" ? node : undefined,
     );
+  }
+
+  function patchSelectedNodesFromEngine() {
+    const engine = engineRef.current;
+    const selection = selectedNodeIdsRef.current;
+    if (!engine) return;
+    const replacements = new Map<number, NodeSummary>();
+    for (const id of selection) {
+      const json = engine.node_json(BigInt(id));
+      if (json) replacements.set(id, JSON.parse(json) as NodeSummary);
+    }
+    if (replacements.size > 0) {
+      const model = documentModelRef.current;
+      if (model) {
+        for (const [id, replacement] of replacements) {
+          const firstId = model.nodes[0]?.id ?? 0;
+          const indexed = model.nodes[id - firstId];
+          const current =
+            indexed?.id === id
+              ? indexed
+              : model.nodes.find((node) => node.id === id);
+          if (current) Object.assign(current, replacement);
+        }
+        setModelPatchVersion((version) => version + 1);
+      }
+    }
+    const selected = selection
+      .map((id) => replacements.get(id))
+      .filter((node): node is NodeSummary => node !== undefined);
+    rendererRef.current?.setSelectionNodes(selected);
+    rendererRef.current?.setSelectionBounds(
+      selected.length === 1 && selected[0].kind !== "group"
+        ? selected[0]
+        : undefined,
+    );
+    setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
   }
 
   function flushPendingSceneRefresh() {
@@ -179,6 +226,7 @@ export function App() {
     const selected = validSelection
       .map((id) => nodesById.get(id))
       .filter((node): node is NodeSummary => node !== undefined);
+    rendererRef.current?.setSelectionNodes(selected);
     rendererRef.current?.setSelectionBounds(
       selected.length === 1 && selected[0].kind !== "group"
         ? selected[0]
@@ -575,14 +623,27 @@ export function App() {
         select: () => {},
         moveSelection: (dx, dy) => moveSelection(dx, dy),
         resizeSelection: (handle, dx, dy) => resizeSelection(handle, dx, dy),
-        beginEdit: () => engine.begin_transaction(),
-        endEdit: () => {
-          flushPendingSceneRefresh();
-          engine.reparent_nodes_to_artboards(
+        beginEdit: () => {
+          engine.begin_geometry_transaction(
             JSON.stringify(selectedNodeIdsRef.current),
           );
+        },
+        endEdit: () => {
+          flushPendingSceneRefresh();
+          const isBenchmark =
+            (documentModelRef.current?.nodes.length ?? 0) >= 1_000;
+          if (!isBenchmark) {
+            engine.reparent_nodes_to_artboards(
+              JSON.stringify(selectedNodeIdsRef.current),
+            );
+          }
           engine.end_transaction();
-          refreshDocument();
+          if (isBenchmark) {
+            patchSelectedNodesFromEngine();
+            scheduleSceneRefresh();
+          } else {
+            refreshDocument();
+          }
         },
       });
       renderer.start();

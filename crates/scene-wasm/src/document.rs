@@ -13,6 +13,7 @@ impl Document {
                 description: "Sample mobile and desktop interface composition.".into(),
                 nodes: Vec::new(),
                 benchmark_node_count: None,
+                benchmark_modified_node_ids: Vec::new(),
             }],
             color_library: Vec::new(),
         };
@@ -137,6 +138,7 @@ impl Document {
             description: description.into(),
             nodes: Vec::new(),
             benchmark_node_count: Some(node_count),
+            benchmark_modified_node_ids: Vec::new(),
         });
     }
 
@@ -178,24 +180,14 @@ impl Document {
             return Some(0);
         }
         let columns = (node_count as f32).sqrt().ceil() as usize;
+        let first_id = page.nodes[0].id;
         if let Some(node) = page
-            .nodes
+            .benchmark_modified_node_ids
             .iter()
-            .enumerate()
             .rev()
-            .find_map(|(index, node)| {
-                let expected_x = (index % columns) as f32 * 16.0;
-                let expected_y = (index / columns) as f32 * 16.0;
-                let geometry_changed = node.x != expected_x
-                    || node.y != expected_y
-                    || node.width != 12.0
-                    || node.height != 12.0
-                    || node.rotation != 0.0
-                    || node.flip_x
-                    || node.flip_y;
-                (geometry_changed && !node.locked && point_in_rotated_node(node, x, y))
-                    .then_some(node)
-            })
+            .filter_map(|id| id.checked_sub(first_id))
+            .filter_map(|index| page.nodes.get(index as usize))
+            .find(|node| !node.locked && point_in_rotated_node(node, x, y))
         {
             return Some(node.id);
         }
@@ -206,10 +198,43 @@ impl Document {
             return Some(0);
         };
         Some(
-            (!node.locked && x <= node.x + node.width && y <= node.y + node.height)
+            (!node.locked && point_in_rotated_node(node, x, y))
                 .then_some(node.id)
                 .unwrap_or(0),
         )
+    }
+
+    pub(crate) fn mark_benchmark_node_modified(&mut self, node_id: u64) {
+        let page = self.active_page_mut();
+        if page.benchmark_node_count.is_some()
+            && !page.benchmark_modified_node_ids.contains(&node_id)
+        {
+            page.benchmark_modified_node_ids.push(node_id);
+        }
+    }
+
+    pub(crate) fn active_node(&self, node_id: u64) -> Option<&Node> {
+        let page = self.active_page();
+        if page.benchmark_node_count.is_some() {
+            let first_id = page.nodes.first()?.id;
+            let index = node_id.checked_sub(first_id)? as usize;
+            if let Some(node) = page.nodes.get(index).filter(|node| node.id == node_id) {
+                return Some(node);
+            }
+        }
+        page.nodes.iter().find(|node| node.id == node_id)
+    }
+
+    pub(crate) fn active_node_mut(&mut self, node_id: u64) -> Option<&mut Node> {
+        let page = self.active_page_mut();
+        if page.benchmark_node_count.is_some() {
+            let first_id = page.nodes.first()?.id;
+            let index = node_id.checked_sub(first_id)? as usize;
+            if page.nodes.get(index).is_some_and(|node| node.id == node_id) {
+                return page.nodes.get_mut(index);
+            }
+        }
+        page.nodes.iter_mut().find(|node| node.id == node_id)
     }
 
     pub(crate) fn allocate_id(&mut self) -> u64 {
@@ -354,6 +379,7 @@ impl Document {
             description: String::new(),
             nodes: Vec::new(),
             benchmark_node_count: None,
+            benchmark_modified_node_ids: Vec::new(),
         });
         self.active_page_id = id;
         id

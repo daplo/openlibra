@@ -58,7 +58,12 @@ impl Document {
     }
 
     pub(crate) fn move_nodes(&mut self, node_ids: &[u64], dx: f32, dy: f32) -> bool {
-        if self.active_page().benchmark_node_count.is_some() {
+        let can_use_benchmark_fast_path = self.active_page().benchmark_node_count.is_some()
+            && node_ids.iter().all(|id| {
+                self.active_node(*id)
+                    .is_some_and(|node| node.kind != NodeKind::Group)
+            });
+        if can_use_benchmark_fast_path {
             let page = self.active_page_mut();
             let Some(first_id) = page.nodes.first().map(|node| node.id) else {
                 return false;
@@ -77,6 +82,11 @@ impl Document {
             for index in indices {
                 page.nodes[index].x += dx;
                 page.nodes[index].y += dy;
+            }
+            for &node_id in node_ids {
+                if !page.benchmark_modified_node_ids.contains(&node_id) {
+                    page.benchmark_modified_node_ids.push(node_id);
+                }
             }
             return !node_ids.is_empty();
         }
@@ -114,6 +124,11 @@ impl Document {
                 changed = true;
             }
         }
+        if self.active_page().benchmark_node_count.is_some() {
+            for node_id in moving {
+                self.mark_benchmark_node_modified(node_id);
+            }
+        }
         changed
     }
 
@@ -125,12 +140,7 @@ impl Document {
         stroke_width: f32,
         corner_radius: f32,
     ) -> bool {
-        let Some(node) = self
-            .active_page_mut()
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == node_id)
-        else {
+        let Some(node) = self.active_node_mut(node_id) else {
             return false;
         };
         if node.locked {
@@ -144,12 +154,8 @@ impl Document {
     }
 
     pub(crate) fn resize_node(&mut self, node_id: u64, handle: &str, dx: f32, dy: f32) -> bool {
-        let Some(node) = self
-            .active_page_mut()
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == node_id)
-        else {
+        self.mark_benchmark_node_modified(node_id);
+        let Some(node) = self.active_node_mut(node_id) else {
             return false;
         };
         if node.locked {
@@ -224,12 +230,7 @@ impl Document {
     }
 
     pub(crate) fn set_node_locked(&mut self, node_id: u64, locked: bool) -> bool {
-        let Some(node) = self
-            .active_page_mut()
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == node_id)
-        else {
+        let Some(node) = self.active_node_mut(node_id) else {
             return false;
         };
         node.locked = locked;
@@ -298,12 +299,8 @@ impl Document {
         if !rotation.is_finite() {
             return false;
         }
-        let Some(node) = self
-            .active_page_mut()
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == node_id)
-        else {
+        self.mark_benchmark_node_modified(node_id);
+        let Some(node) = self.active_node_mut(node_id) else {
             return false;
         };
         if node.locked {
@@ -476,12 +473,8 @@ impl Document {
         if ![x, y, width, height].iter().all(|value| value.is_finite()) {
             return false;
         }
-        let Some(node) = self
-            .active_page_mut()
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == node_id)
-        else {
+        self.mark_benchmark_node_modified(node_id);
+        let Some(node) = self.active_node_mut(node_id) else {
             return false;
         };
         if node.locked {

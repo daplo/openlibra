@@ -26,6 +26,8 @@ pub struct Page {
     pub(crate) nodes: Vec<Node>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) benchmark_node_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) benchmark_modified_node_ids: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

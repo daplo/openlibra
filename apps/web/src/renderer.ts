@@ -21,6 +21,16 @@ export type CanvasTool = "select" | "hand";
 export type ColorTheme = "dark" | "light";
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
+type SelectionNodeBounds = {
+  id: number;
+  kind: "frame" | "rectangle" | "group" | "text";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
 const FLOATS_PER_RECT = 20;
 const SHADER = /* wgsl */ `
 struct View {
@@ -131,6 +141,7 @@ export class OpenLibraRenderer {
     height: number;
     rotation?: number;
   };
+  private selectionNodes: SelectionNodeBounds[] = [];
   private resizingHandle?: ResizeHandle;
   private clearColor = { r: 0.075, g: 0.08, b: 0.095, a: 1 };
   private lastPointer = { x: 0, y: 0 };
@@ -402,6 +413,14 @@ export class OpenLibraRenderer {
 
   getSelectionBounds() {
     return this.selectionBounds ? { ...this.selectionBounds } : undefined;
+  }
+
+  setSelectionNodes(nodes: SelectionNodeBounds[]) {
+    this.selectionNodes = nodes.map((node) => ({ ...node }));
+  }
+
+  getSelectionNodes() {
+    return this.selectionNodes.map((node) => ({ ...node }));
   }
 
   resizeHandleFromClient(clientX: number, clientY: number) {
