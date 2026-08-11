@@ -1,6 +1,7 @@
 export type Mode = "design" | "developer" | "review";
-export type PageSummary = { id: number; name: string; description: string };
-export type ColorAsset = { id: number; name: string; value: string };
+export type EntityId = string;
+export type PageSummary = { id: EntityId; name: string; description: string };
+export type ColorAsset = { id: EntityId; name: string; value: string };
 export type ShadowSummary = {
   kind: "outer" | "inner";
   color: number[];
@@ -11,10 +12,10 @@ export type ShadowSummary = {
   enabled: boolean;
 };
 export type NodeSummary = {
-  id: number;
+  id: EntityId;
   name: string;
   kind: "frame" | "rectangle" | "group" | "text";
-  parent_id?: number;
+  parent_id?: EntityId;
   x: number;
   y: number;
   width: number;
@@ -44,7 +45,7 @@ export type NodeSummary = {
 };
 export type DocumentReadModel = {
   schema_version: number;
-  active_page_id: number;
+  active_page_id: EntityId;
   pages: PageSummary[];
   nodes: NodeSummary[];
   document_colors: ColorAsset[];

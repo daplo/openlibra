@@ -10,10 +10,78 @@ use color::{normalize_hex_color, parse_hex_color};
 use geometry::point_in_rotated_node;
 use model::*;
 use scene::ordered_nodes;
+use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const FLOATS_PER_RECT: usize = 20;
+
+fn parse_entity_id(value: &str) -> EntityId {
+    Uuid::parse_str(value).unwrap_or_else(|_| Uuid::nil())
+}
+
+fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
+    if value
+        .get("schema_version")
+        .and_then(|version| version.as_u64())
+        != Some(1)
+    {
+        return;
+    }
+    let migrate_id = |id: &mut serde_json::Value| {
+        if let Some(number) = id.as_u64() {
+            *id = serde_json::Value::String(
+                Uuid::new_v5(
+                    &Uuid::NAMESPACE_OID,
+                    format!("open-libra-v1:{number}").as_bytes(),
+                )
+                .to_string(),
+            );
+        }
+    };
+    if let Some(id) = value.get_mut("active_page_id") {
+        migrate_id(id);
+    }
+    if let Some(pages) = value
+        .get_mut("pages")
+        .and_then(|pages| pages.as_array_mut())
+    {
+        for page in pages {
+            if let Some(id) = page.get_mut("id") {
+                migrate_id(id);
+            }
+            if let Some(nodes) = page.get_mut("nodes").and_then(|nodes| nodes.as_array_mut()) {
+                for node in nodes {
+                    if let Some(id) = node.get_mut("id") {
+                        migrate_id(id);
+                    }
+                    if let Some(parent) = node.get_mut("parent_id") {
+                        migrate_id(parent);
+                    }
+                }
+            }
+            if let Some(ids) = page
+                .get_mut("benchmark_modified_node_ids")
+                .and_then(|ids| ids.as_array_mut())
+            {
+                for id in ids {
+                    migrate_id(id);
+                }
+            }
+        }
+    }
+    if let Some(colors) = value
+        .get_mut("color_library")
+        .and_then(|colors| colors.as_array_mut())
+    {
+        for color in colors {
+            if let Some(id) = color.get_mut("id") {
+                migrate_id(id);
+            }
+        }
+    }
+    value["schema_version"] = serde_json::Value::from(SCHEMA_VERSION);
+}
 
 #[derive(Clone, PartialEq)]
 struct NodeStyleState {
@@ -187,26 +255,38 @@ impl DocumentEngine {
         serde_json::to_string_pretty(&self.document).expect("document is serializable")
     }
 
-    pub fn node_json(&self, node_id: EntityId) -> String {
+    pub fn node_json(&self, node_id: String) -> String {
+        let node_id = parse_entity_id(&node_id);
         self.document
             .active_node(node_id)
             .and_then(|node| serde_json::to_string(node).ok())
             .unwrap_or_default()
     }
 
-    pub fn add_rectangle(&mut self) -> EntityId {
+    pub fn add_rectangle(&mut self) -> String {
         self.mutate(|document| document.add_node(NodeKind::Rectangle))
+            .to_string()
     }
 
-    pub fn add_rectangle_to(&mut self, parent_id: EntityId) -> EntityId {
-        self.mutate(|document| document.add_rectangle_to((parent_id != 0).then_some(parent_id)))
+    pub fn add_rectangle_to(&mut self, parent_id: String) -> String {
+        let parent_id = parse_entity_id(&parent_id);
+        self.mutate(|document| {
+            document.add_rectangle_to((!parent_id.is_nil()).then_some(parent_id))
+        })
+        .to_string()
     }
 
-    pub fn add_frame(&mut self) -> EntityId {
+    pub fn add_frame(&mut self) -> String {
         self.mutate(|document| document.add_node(NodeKind::Frame))
+            .to_string()
     }
 
-    pub fn add_artboard(&mut self, name: String, width: f32, height: f32) -> Result<EntityId, JsValue> {
+    pub fn add_artboard(
+        &mut self,
+        name: String,
+        width: f32,
+        height: f32,
+    ) -> Result<String, JsValue> {
         if !width.is_finite()
             || !height.is_finite()
             || width < 1.0
@@ -218,29 +298,34 @@ impl DocumentEngine {
                 "Artboard dimensions must be between 1 and 16,384 pixels",
             ));
         }
-        Ok(self.mutate(|document| document.add_artboard(name, width, height)))
+        Ok(self
+            .mutate(|document| document.add_artboard(name, width, height))
+            .to_string())
     }
 
-    pub fn add_page(&mut self, name: String) -> EntityId {
-        self.mutate(|document| document.add_page(name))
+    pub fn add_page(&mut self, name: String) -> String {
+        self.mutate(|document| document.add_page(name)).to_string()
     }
 
-    pub fn set_active_page(&mut self, page_id: EntityId) -> bool {
-        self.document.set_active_page(page_id)
+    pub fn set_active_page(&mut self, page_id: String) -> bool {
+        self.document.set_active_page(parse_entity_id(&page_id))
     }
 
-    pub fn delete_node(&mut self, node_id: EntityId) -> bool {
+    pub fn delete_node(&mut self, node_id: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.delete_node(node_id))
     }
 
-    pub fn rename_node(&mut self, node_id: EntityId, name: String) -> bool {
+    pub fn rename_node(&mut self, node_id: String, name: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.rename_node(node_id, name))
     }
 
-    pub fn group_nodes(&mut self, node_ids_json: &str) -> Result<EntityId, JsValue> {
+    pub fn group_nodes(&mut self, node_ids_json: &str) -> Result<String, JsValue> {
         let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
         self.mutate(|document| document.group_nodes(&node_ids))
+            .map(|id| id.to_string())
             .ok_or_else(|| {
                 JsValue::from_str("At least two existing nodes are required to create a group")
             })
@@ -252,7 +337,9 @@ impl DocumentEngine {
         Ok(self.mutate(|document| document.move_nodes(&node_ids, dx, dy)))
     }
 
-    pub fn reorder_node(&mut self, dragged_id: EntityId, target_id: EntityId, before: bool) -> bool {
+    pub fn reorder_node(&mut self, dragged_id: String, target_id: String, before: bool) -> bool {
+        let dragged_id = parse_entity_id(&dragged_id);
+        let target_id = parse_entity_id(&target_id);
         self.mutate(|document| document.reorder_node(dragged_id, target_id, before))
     }
 
@@ -264,12 +351,13 @@ impl DocumentEngine {
 
     pub fn set_node_style(
         &mut self,
-        node_id: EntityId,
+        node_id: String,
         fill_hex: String,
         stroke_hex: String,
         stroke_width: f32,
         corner_radius: f32,
     ) -> Result<bool, JsValue> {
+        let node_id = parse_entity_id(&node_id);
         let fill = parse_hex_color(&fill_hex)
             .ok_or_else(|| JsValue::from_str("Fill must be a six-digit hex color"))?;
         let stroke = parse_hex_color(&stroke_hex)
@@ -307,19 +395,27 @@ impl DocumentEngine {
         Ok(changed)
     }
 
-    pub fn resize_node(&mut self, node_id: EntityId, handle: String, dx: f32, dy: f32) -> bool {
+    pub fn resize_node(&mut self, node_id: String, handle: String, dx: f32, dy: f32) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.resize_node(node_id, &handle, dx, dy))
     }
 
-    pub fn set_node_locked(&mut self, node_id: EntityId, locked: bool) -> bool {
+    pub fn set_node_locked(&mut self, node_id: String, locked: bool) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_locked(node_id, locked))
     }
 
-    pub fn set_node_opacity(&mut self, node_id: EntityId, opacity: f32) -> bool {
+    pub fn set_node_opacity(&mut self, node_id: String, opacity: f32) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_opacity(node_id, opacity))
     }
 
-    pub fn set_node_shadows(&mut self, node_id: EntityId, shadows_json: &str) -> Result<bool, JsValue> {
+    pub fn set_node_shadows(
+        &mut self,
+        node_id: String,
+        shadows_json: &str,
+    ) -> Result<bool, JsValue> {
+        let node_id = parse_entity_id(&node_id);
         let shadows: Vec<Shadow> = serde_json::from_str(shadows_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid shadows: {error}")))?;
         Ok(self.mutate(|document| document.set_node_shadows(node_id, shadows)))
@@ -327,11 +423,12 @@ impl DocumentEngine {
 
     pub fn set_node_transform(
         &mut self,
-        node_id: EntityId,
+        node_id: String,
         rotation: f32,
         flip_x: bool,
         flip_y: bool,
     ) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_transform(node_id, rotation, flip_x, flip_y))
     }
 
@@ -340,7 +437,7 @@ impl DocumentEngine {
     #[allow(clippy::too_many_arguments)]
     pub fn set_node_layout(
         &mut self,
-        node_id: EntityId,
+        node_id: String,
         mode: String,
         align: String,
         justify: String,
@@ -350,6 +447,7 @@ impl DocumentEngine {
         bottom: f32,
         left: f32,
     ) -> bool {
+        let node_id = parse_entity_id(&node_id);
         let mode = match mode.as_str() {
             "row" => LayoutMode::Row,
             "column" => LayoutMode::Column,
@@ -377,7 +475,8 @@ impl DocumentEngine {
         })
     }
 
-    pub fn set_node_width_sizing(&mut self, node_id: EntityId, sizing: String) -> bool {
+    pub fn set_node_width_sizing(&mut self, node_id: String, sizing: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
         let sizing = if sizing == "fill" {
             LayoutSizing::Fill
         } else {
@@ -386,19 +485,21 @@ impl DocumentEngine {
         self.mutate(|document| document.set_node_width_sizing(node_id, sizing))
     }
 
-    pub fn set_node_auto_height(&mut self, node_id: EntityId, auto_height: bool) -> bool {
+    pub fn set_node_auto_height(&mut self, node_id: String, auto_height: bool) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_auto_height(node_id, auto_height))
     }
 
     pub fn set_artboard_guide(
         &mut self,
-        node_id: EntityId,
+        node_id: String,
         mode: String,
         count: u32,
         gap: f32,
         color_hex: String,
         opacity: f32,
     ) -> Result<bool, JsValue> {
+        let node_id = parse_entity_id(&node_id);
         let color = parse_hex_color(&color_hex)
             .ok_or_else(|| JsValue::from_str("Guide color must be a six-digit hex color"))?;
         let mode = match mode.as_str() {
@@ -411,10 +512,16 @@ impl DocumentEngine {
         }))
     }
 
-    pub fn add_document_color(&mut self, name: String, color_hex: String) -> Result<EntityId, JsValue> {
+    pub fn add_document_color(
+        &mut self,
+        name: String,
+        color_hex: String,
+    ) -> Result<String, JsValue> {
         let color = normalize_hex_color(&color_hex)
             .ok_or_else(|| JsValue::from_str("Document color must be a six-digit hex color"))?;
-        Ok(self.mutate(|document| document.add_document_color(name, color)))
+        Ok(self
+            .mutate(|document| document.add_document_color(name, color))
+            .to_string())
     }
 
     pub fn align_nodes(&mut self, node_ids_json: &str, alignment: String) -> Result<bool, JsValue> {
@@ -425,12 +532,13 @@ impl DocumentEngine {
 
     pub fn set_node_bounds(
         &mut self,
-        node_id: EntityId,
+        node_id: String,
         x: f32,
         y: f32,
         width: f32,
         height: f32,
     ) -> bool {
+        let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_bounds(node_id, x, y, width, height))
     }
 
@@ -551,9 +659,13 @@ impl DocumentEngine {
     }
 
     /// Returns the topmost renderable node under a world-space point, or zero.
-    pub fn hit_test(&self, x: f32, y: f32) -> EntityId {
+    pub fn hit_test(&self, x: f32, y: f32) -> String {
         if let Some(hit) = self.document.benchmark_hit_test(x, y) {
-            return hit;
+            return if hit.is_nil() {
+                String::new()
+            } else {
+                hit.to_string()
+            };
         }
         ordered_nodes(self.document.active_page())
             .into_iter()
@@ -564,11 +676,14 @@ impl DocumentEngine {
                     && !node.locked
                     && point_in_rotated_node(node, x, y)
             })
-            .map_or(0, |node| node.id)
+            .map_or_else(String::new, |node| node.id.to_string())
     }
 
     pub fn load_json(json: &str) -> Result<DocumentEngine, JsValue> {
-        let mut document: Document = serde_json::from_str(json)
+        let mut value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
+        migrate_legacy_document_ids(&mut value);
+        let mut document: Document = serde_json::from_value(value)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
         document
             .validate()

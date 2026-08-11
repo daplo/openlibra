@@ -209,8 +209,8 @@ function drawArtboardGuides(
 
 function isDescendantOf(
   node: NodeSummary,
-  ancestorId: number,
-  byId: Map<number, NodeSummary>,
+  ancestorId: string,
+  byId: Map<string, NodeSummary>,
 ) {
   let parentId = node.parent_id;
   while (parentId != null) {

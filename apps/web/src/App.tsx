@@ -50,7 +50,7 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<OpenLibraRenderer | undefined>(undefined);
   const engineRef = useRef<DocumentEngine | undefined>(undefined);
-  const selectedNodeIdsRef = useRef<number[]>([]);
+  const selectedNodeIdsRef = useRef<string[]>([]);
   const inputControllerRef = useRef<EditorInputController | undefined>(
     undefined,
   );
@@ -75,13 +75,13 @@ export function App() {
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
   const [documentModel, setDocumentModel] = useState<DocumentReadModel>({
     schema_version: 1,
-    active_page_id: 0,
+    active_page_id: "",
     pages: [],
     nodes: [],
     document_colors: [],
   });
   const [, setModelPatchVersion] = useState(0);
-  const [selectedNodeIds, setSelectedNodeIds] = useState<number[]>([]);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [historyState, setHistoryState] = useState({
     canUndo: false,
     canRedo: false,
@@ -172,7 +172,7 @@ export function App() {
     const selection = selectedNodeIdsRef.current;
     if (!engine || selection.length === 0) return;
     const nodes = selection.flatMap((id) => {
-      const json = engine.node_json(BigInt(id));
+      const json = engine.node_json(id);
       return json ? [JSON.parse(json) as NodeSummary] : [];
     });
     rendererRef.current?.setSelectionNodes(nodes);
@@ -186,21 +186,16 @@ export function App() {
     const engine = engineRef.current;
     const selection = selectedNodeIdsRef.current;
     if (!engine) return;
-    const replacements = new Map<number, NodeSummary>();
+    const replacements = new Map<string, NodeSummary>();
     for (const id of selection) {
-      const json = engine.node_json(BigInt(id));
+      const json = engine.node_json(id);
       if (json) replacements.set(id, JSON.parse(json) as NodeSummary);
     }
     if (replacements.size > 0) {
       const model = documentModelRef.current;
       if (model) {
         for (const [id, replacement] of replacements) {
-          const firstId = model.nodes[0]?.id ?? 0;
-          const indexed = model.nodes[id - firstId];
-          const current =
-            indexed?.id === id
-              ? indexed
-              : model.nodes.find((node) => node.id === id);
+          const current = model.nodes.find((node) => node.id === id);
           if (current) Object.assign(current, replacement);
         }
         setModelPatchVersion((version) => version + 1);
@@ -224,7 +219,7 @@ export function App() {
     pendingSceneFrameRef.current = undefined;
   }
 
-  function applySelection(ids: number[]) {
+  function applySelection(ids: string[]) {
     const validSelection = ids.filter((id) => nodesById.has(id));
     selectedNodeIdsRef.current = validSelection;
     setSelectedNodeIds(validSelection);
@@ -249,17 +244,15 @@ export function App() {
     const id =
       kind === "frame"
         ? engine.add_frame()
-        : engine.add_rectangle_to(BigInt(parentId ?? 0));
-    refreshDocument([Number(id)]);
+        : engine.add_rectangle_to(parentId ?? "");
+    refreshDocument([id]);
   }
 
   function addArtboard(preset: (typeof ARTBOARD_PRESETS)[number]) {
     const engine = engineRef.current;
     if (!engine) return;
     try {
-      const id = Number(
-        engine.add_artboard(preset.name, preset.width, preset.height),
-      );
+      const id = engine.add_artboard(preset.name, preset.width, preset.height);
       refreshDocument([id]);
       const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
       const node = model.nodes.find((candidate) => candidate.id === id);
@@ -278,8 +271,8 @@ export function App() {
     rendererRef.current?.resetView();
   }
 
-  function selectPage(id: number) {
-    if (!engineRef.current?.set_active_page(BigInt(id))) return;
+  function selectPage(id: string) {
+    if (!engineRef.current?.set_active_page(id)) return;
     refreshDocument([]);
     rendererRef.current?.resetView();
   }
@@ -289,7 +282,7 @@ export function App() {
     if (!engine || selectedNodeIds.length === 0) return;
     let changed = false;
     for (const id of selectedNodeIds)
-      changed = engine.delete_node(BigInt(id)) || changed;
+      changed = engine.delete_node(id) || changed;
     if (!changed) return;
     refreshDocument([]);
   }
@@ -300,7 +293,7 @@ export function App() {
       const groupId = engineRef.current.group_nodes(
         JSON.stringify(selectedNodeIds),
       );
-      refreshDocument([Number(groupId)]);
+      refreshDocument([groupId]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -324,20 +317,13 @@ export function App() {
     const angle = (-(node?.rotation ?? 0) * Math.PI) / 180;
     const localDx = dx * Math.cos(angle) - dy * Math.sin(angle);
     const localDy = dx * Math.sin(angle) + dy * Math.cos(angle);
-    if (
-      engineRef.current.resize_node(
-        BigInt(selection[0]),
-        handle,
-        localDx,
-        localDy,
-      )
-    ) {
+    if (engineRef.current.resize_node(selection[0], handle, localDx, localDy)) {
       refreshLiveSelectionBounds();
       scheduleSceneRefresh();
     }
   }
 
-  function selectNode(id: number, additive: boolean) {
+  function selectNode(id: string, additive: boolean) {
     const current = selectedNodeIdsRef.current;
     if (!additive) applySelection([id]);
     else
@@ -361,7 +347,7 @@ export function App() {
     if (!engine) return;
     try {
       const changed = engine.set_node_style(
-        BigInt(node.id),
+        node.id,
         change.fill ?? rgbaToHex(node.fill),
         change.stroke ?? rgbaToHex(node.stroke),
         change.strokeWidth ?? node.stroke_width,
@@ -412,7 +398,7 @@ export function App() {
     if (!engine) return;
     if (
       engine.set_node_bounds(
-        BigInt(node.id),
+        node.id,
         change.x ?? node.x,
         change.y ?? node.y,
         change.width ?? node.width,
@@ -423,18 +409,13 @@ export function App() {
   }
 
   function updateNodeOpacity(node: NodeSummary, opacity: number) {
-    if (engineRef.current?.set_node_opacity(BigInt(node.id), opacity))
+    if (engineRef.current?.set_node_opacity(node.id, opacity))
       refreshDocument();
   }
 
   function updateNodeShadows(node: NodeSummary, shadows: ShadowSummary[]) {
     try {
-      if (
-        engineRef.current?.set_node_shadows(
-          BigInt(node.id),
-          JSON.stringify(shadows),
-        )
-      )
+      if (engineRef.current?.set_node_shadows(node.id, JSON.stringify(shadows)))
         refreshDocument();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -447,7 +428,7 @@ export function App() {
   ) {
     if (
       engineRef.current?.set_node_transform(
-        BigInt(node.id),
+        node.id,
         change.rotation ?? node.rotation,
         change.flip_x ?? node.flip_x,
         change.flip_y ?? node.flip_y,
@@ -474,7 +455,7 @@ export function App() {
     const engine = engineRef.current;
     if (!engine) return;
     let changed = engine.set_node_layout(
-      BigInt(node.id),
+      node.id,
       change.layout_mode ?? node.layout_mode,
       change.layout_align ?? node.layout_align,
       change.layout_justify ?? node.layout_justify,
@@ -486,8 +467,7 @@ export function App() {
     );
     if (change.auto_height !== undefined)
       changed =
-        engine.set_node_auto_height(BigInt(node.id), change.auto_height) ||
-        changed;
+        engine.set_node_auto_height(node.id, change.auto_height) || changed;
     if (changed) refreshDocument();
   }
 
@@ -495,7 +475,7 @@ export function App() {
     node: NodeSummary,
     widthSizing: NodeSummary["width_sizing"],
   ) {
-    if (engineRef.current?.set_node_width_sizing(BigInt(node.id), widthSizing))
+    if (engineRef.current?.set_node_width_sizing(node.id, widthSizing))
       refreshDocument();
   }
 
@@ -515,7 +495,7 @@ export function App() {
     try {
       if (
         engineRef.current?.set_artboard_guide(
-          BigInt(node.id),
+          node.id,
           change.guide_mode ?? node.guide_mode,
           change.guide_count ?? node.guide_count,
           change.guide_gap ?? node.guide_gap,
@@ -565,8 +545,8 @@ export function App() {
     const engine = engineRef.current;
     if (!renderer || !engine) return;
     const world = renderer.worldPointFromClient(clientX, clientY);
-    const hitId = Number(engine.hit_test(world.x, world.y));
-    if (hitId === 0) {
+    const hitId = engine.hit_test(world.x, world.y);
+    if (!hitId) {
       if (!additive) applySelection([]);
       return;
     }
@@ -641,8 +621,8 @@ export function App() {
       renderer.setTheme(themeRef.current);
       renderer.setInteractionHandlers({
         hitTest: (x, y) => {
-          const id = Number(engine.hit_test(x, y));
-          return id === 0 ? undefined : id;
+          const id = engine.hit_test(x, y);
+          return id || undefined;
         },
         select: () => {},
         moveSelection: (dx, dy) => moveSelection(dx, dy),
@@ -862,17 +842,11 @@ export function App() {
             onSelectPage={selectPage}
             onNavigateNode={(node) => rendererRef.current?.centerOnBounds(node)}
             onReorderNode={(draggedId, targetId, before) => {
-              if (
-                engineRef.current?.reorder_node(
-                  BigInt(draggedId),
-                  BigInt(targetId),
-                  before,
-                )
-              )
+              if (engineRef.current?.reorder_node(draggedId, targetId, before))
                 refreshDocument();
             }}
             onToggleLock={(id, locked) => {
-              if (engineRef.current?.set_node_locked(BigInt(id), locked)) {
+              if (engineRef.current?.set_node_locked(id, locked)) {
                 if (locked && selectedNodeIdsRef.current.includes(id))
                   refreshDocument(
                     selectedNodeIdsRef.current.filter(
@@ -885,7 +859,7 @@ export function App() {
             onRenameNode={(id, name) => {
               if (
                 name.trim() &&
-                engineRef.current?.rename_node(BigInt(id), name.trim())
+                engineRef.current?.rename_node(id, name.trim())
               )
                 refreshDocument();
             }}

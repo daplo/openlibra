@@ -39,7 +39,7 @@ export function collectDocumentColors(model: DocumentReadModel) {
 
 export function preferredArtboardId(
   nodes: NodeSummary[],
-  selectedIds: number[],
+  selectedIds: string[],
 ) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   let current = selectedIds.length === 1 ? byId.get(selectedIds[0]) : undefined;
@@ -55,8 +55,8 @@ export function preferredArtboardId(
 }
 
 export function findSelectedAncestor(
-  id: number,
-  selectedIds: number[],
+  id: string,
+  selectedIds: string[],
   nodes: NodeSummary[],
 ) {
   let current = nodes.find((node) => node.id === id);

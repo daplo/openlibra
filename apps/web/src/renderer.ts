@@ -9,8 +9,8 @@ export type RenderStats = {
 };
 
 export type InteractionHandlers = {
-  hitTest: (x: number, y: number) => number | undefined;
-  select: (id: number | undefined, additive: boolean) => void;
+  hitTest: (x: number, y: number) => string | undefined;
+  select: (id: string | undefined, additive: boolean) => void;
   moveSelection: (dx: number, dy: number) => void;
   resizeSelection: (handle: ResizeHandle, dx: number, dy: number) => void;
   beginEdit: () => void;
@@ -22,7 +22,7 @@ export type ColorTheme = "dark" | "light";
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 type SelectionNodeBounds = {
-  id: number;
+  id: string;
   kind: "frame" | "rectangle" | "group" | "text";
   x: number;
   y: number;

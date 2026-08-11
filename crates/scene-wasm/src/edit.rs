@@ -150,7 +150,13 @@ impl Document {
         true
     }
 
-    pub(crate) fn resize_node(&mut self, node_id: EntityId, handle: &str, dx: f32, dy: f32) -> bool {
+    pub(crate) fn resize_node(
+        &mut self,
+        node_id: EntityId,
+        handle: &str,
+        dx: f32,
+        dy: f32,
+    ) -> bool {
         self.mark_benchmark_node_modified(node_id);
         let Some(node) = self.active_node_mut(node_id) else {
             return false;
@@ -341,7 +347,11 @@ impl Document {
         true
     }
 
-    pub(crate) fn set_node_width_sizing(&mut self, node_id: EntityId, sizing: LayoutSizing) -> bool {
+    pub(crate) fn set_node_width_sizing(
+        &mut self,
+        node_id: EntityId,
+        sizing: LayoutSizing,
+    ) -> bool {
         let parent_id = {
             let Some(node) = self
                 .active_page_mut()
@@ -493,7 +503,12 @@ impl Document {
         true
     }
 
-    pub(crate) fn reorder_node(&mut self, dragged_id: EntityId, target_id: EntityId, before: bool) -> bool {
+    pub(crate) fn reorder_node(
+        &mut self,
+        dragged_id: EntityId,
+        target_id: EntityId,
+        before: bool,
+    ) -> bool {
         if dragged_id == target_id {
             return false;
         }

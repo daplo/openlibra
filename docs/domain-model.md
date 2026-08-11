@@ -35,7 +35,10 @@ A named canvas and root node list. Only active-page geometry needs to be materia
 
 All visible and structural objects derive from a common node identity. Initial node kinds are frame, group, rectangle, and text placeholder; additional kinds can be introduced through a versioned schema.
 
-A node has a stable ID, parent/order information, transform, visibility, lock state, style references, and kind-specific properties.
+A node has a client-generated UUIDv7 ID, parent/order information, transform,
+visibility, lock state, style references, and kind-specific properties. Pages and
+document-owned resources use the same ID format, allowing concurrent clients to
+create entities without coordinating an integer sequence.
 
 ### Frame
 
@@ -80,6 +83,7 @@ Initial payload families include creating/deleting nodes, setting node propertie
 ## Invariants
 
 - IDs are globally unique and never reused.
+- IDs serialize as lowercase UUID strings; new IDs use UUIDv7.
 - The page/node ownership graph is acyclic.
 - A node belongs to exactly one page and at most one parent.
 - A parent belongs to the same page and must be a frame or group.
@@ -89,4 +93,6 @@ Initial payload families include creating/deleting nodes, setting node propertie
 - Missing external resources degrade predictably instead of corrupting a document.
 - Unknown schema fields survive a read/write cycle when feasible.
 - Serialized documents carry an explicit schema version.
+- Loading schema 1 deterministically migrates numeric IDs and their references
+  to UUIDs; schema 2 writes UUID strings.
 - Invalid ownership graphs are rejected when a document is loaded.

@@ -21,6 +21,14 @@ renderer diagnostics from the active interaction interval.
 The result meets the MVP target of 60 FPS with roughly 1,000 visible objects
 during pan and zoom.
 
+### UUIDv7 model recheck
+
+After migrating page and node IDs from integers to UUIDv7 on 2026-08-11, the
+same headful benchmark rendered 1,000/1,000 visible objects at 60 FPS with a
+0.14 ms CPU frame, 0.10 ms Rust scene creation time, and GPU upload below the
+diagnostics' 0.01 ms display precision. The model change therefore remains at
+the 60 FPS interaction target.
+
 ## Reproduce
 
 Build and serve the production application:

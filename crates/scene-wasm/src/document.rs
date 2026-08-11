@@ -181,7 +181,6 @@ impl Document {
             return Some(Uuid::nil());
         }
         let columns = (node_count as f32).sqrt().ceil() as usize;
-        let first_id = page.nodes[0].id;
         if let Some(node) = page
             .benchmark_modified_node_ids
             .iter()

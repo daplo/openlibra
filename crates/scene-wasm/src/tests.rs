@@ -10,6 +10,37 @@ fn demo_document_has_stable_renderable_nodes() {
 }
 
 #[test]
+fn new_pages_nodes_and_colors_use_uuid_v7_ids() {
+    let mut document = Document::demo();
+    let node = document.add_node(NodeKind::Rectangle);
+    let color = document.add_document_color("Blue".into(), "#3366CC".into());
+    let page = document.add_page("UUID page".into());
+    assert!(
+        [node, color, page]
+            .iter()
+            .all(|id| id.get_version_num() == 7)
+    );
+    let json = serde_json::to_value(&document).unwrap();
+    assert!(json["active_page_id"].is_string());
+}
+
+#[test]
+fn schema_one_numeric_ids_migrate_deterministically() {
+    let mut value = serde_json::json!({
+        "schema_version": 1,
+        "next_id": 2,
+        "active_page_id": 1,
+        "pages": [{ "id": 1, "name": "Legacy", "nodes": [] }],
+        "color_library": []
+    });
+    migrate_legacy_document_ids(&mut value);
+    let document: Document = serde_json::from_value(value).unwrap();
+    assert_eq!(document.schema_version, SCHEMA_VERSION);
+    assert_eq!(document.active_page_id, document.pages[0].id);
+    document.validate().unwrap();
+}
+
+#[test]
 fn benchmark_pages_are_lazy_and_generate_exact_scene_sizes() {
     let mut document = Document::demo();
     let benchmarks = [
@@ -54,14 +85,14 @@ fn benchmark_hit_testing_uses_grid_coordinates() {
         document.benchmark_hit_test(5.0, 5.0),
         Some(document.active_page().nodes[0].id)
     );
-    assert_eq!(document.benchmark_hit_test(14.0, 14.0), Some(0));
-    assert_eq!(document.benchmark_hit_test(-1.0, 5.0), Some(0));
+    assert_eq!(document.benchmark_hit_test(14.0, 14.0), Some(Uuid::nil()));
+    assert_eq!(document.benchmark_hit_test(-1.0, 5.0), Some(Uuid::nil()));
 
     let enlarged_id = document.active_page().nodes[0].id;
     assert!(document.set_node_bounds(enlarged_id, 0.0, 0.0, 100.0, 100.0));
     assert_eq!(document.benchmark_hit_test(50.0, 50.0), Some(enlarged_id));
     assert!(document.move_nodes(&[enlarged_id], 1_000.0, 1_000.0));
-    assert_eq!(document.benchmark_hit_test(5.0, 5.0), Some(0));
+    assert_eq!(document.benchmark_hit_test(5.0, 5.0), Some(Uuid::nil()));
     assert_eq!(
         document.benchmark_hit_test(1_050.0, 1_050.0),
         Some(enlarged_id)
@@ -207,7 +238,7 @@ fn invalid_reparenting_does_not_change_document_or_history() {
     let descendant = engine.document.active_page().nodes[1].id;
     let before = engine.document.clone();
 
-    assert!(!engine.reorder_node(frame, descendant, true));
+    assert!(!engine.reorder_node(frame.to_string(), descendant.to_string(), true));
     assert_eq!(engine.document, before);
     assert!(!engine.can_undo());
     engine.document.validate().unwrap();
@@ -216,11 +247,12 @@ fn invalid_reparenting_does_not_change_document_or_history() {
 #[test]
 fn page_switching_changes_the_render_scene() {
     let mut document = Document::demo();
+    let home = document.active_page_id;
     let page = document.add_page("Empty".into());
     assert!(document.scene_data().is_empty());
     document.add_node(NodeKind::Rectangle);
     assert_eq!(document.scene_data().len(), FLOATS_PER_RECT);
-    assert!(document.set_active_page(1));
+    assert!(document.set_active_page(home));
     assert_ne!(document.active_page_id, page);
 }
 
@@ -282,8 +314,8 @@ fn hit_testing_returns_the_topmost_node() {
                 && 210.0 <= node.y + node.height
         })
         .unwrap();
-    assert_eq!(hit, expected.id);
-    assert_eq!(engine.hit_test(-100.0, -100.0), 0);
+    assert_eq!(hit, expected.id.to_string());
+    assert_eq!(engine.hit_test(-100.0, -100.0), "");
 }
 
 #[test]
@@ -383,11 +415,11 @@ fn locked_nodes_reject_edits_and_canvas_hit_testing() {
             .unwrap();
         (node.x + 2.0, node.y + 2.0)
     };
-    assert!(engine.set_node_locked(id, true));
+    assert!(engine.set_node_locked(id.to_string(), true));
     assert!(!engine.document.move_nodes(&[id], 10.0, 10.0));
     assert!(!engine.document.resize_node(id, "se", 10.0, 10.0));
-    assert_ne!(engine.hit_test(point.0, point.1), id);
-    assert!(engine.set_node_locked(id, false));
+    assert_ne!(engine.hit_test(point.0, point.1), id.to_string());
+    assert!(engine.set_node_locked(id.to_string(), false));
     assert!(engine.document.move_nodes(&[id], 10.0, 10.0));
 }
 
@@ -710,8 +742,9 @@ fn undo_redo_and_transactions_restore_document_states() {
     let id = engine.document.active_page().nodes[1].id;
     let original_x = engine.document.active_page().nodes[1].x;
     engine.begin_transaction();
-    engine.move_nodes(&format!("[{id}]"), 5.0, 0.0).unwrap();
-    engine.move_nodes(&format!("[{id}]"), 7.0, 0.0).unwrap();
+    let selection = serde_json::to_string(&[id]).unwrap();
+    engine.move_nodes(&selection, 5.0, 0.0).unwrap();
+    engine.move_nodes(&selection, 7.0, 0.0).unwrap();
     engine.end_transaction();
     assert_eq!(engine.document.active_page().nodes[1].x, original_x + 12.0);
     assert!(engine.undo());
@@ -727,7 +760,13 @@ fn compact_style_history_restores_node_without_document_snapshots() {
     let node = engine.document.active_page().nodes[1].clone();
     assert!(
         engine
-            .set_node_style(node.id, "#3366CC".into(), "#000000".into(), 3.0, 12.0,)
+            .set_node_style(
+                node.id.to_string(),
+                "#3366CC".into(),
+                "#000000".into(),
+                3.0,
+                12.0,
+            )
             .unwrap()
     );
     assert!(matches!(
@@ -750,11 +789,11 @@ fn benchmark_geometry_transaction_uses_compact_history() {
     assert!(engine.document.set_active_page(benchmark_page_id));
     let node = engine.document.active_page().nodes[0].clone();
     engine
-        .begin_geometry_transaction(&format!("[{}]", node.id))
+        .begin_geometry_transaction(&serde_json::to_string(&[node.id]).unwrap())
         .unwrap();
     assert!(
         engine
-            .move_nodes(&format!("[{}]", node.id), 31.0, 7.0)
+            .move_nodes(&serde_json::to_string(&[node.id]).unwrap(), 31.0, 7.0)
             .unwrap()
     );
     engine.end_transaction();
@@ -788,11 +827,11 @@ fn benchmark_group_move_and_undo_include_children() {
         .collect();
     let group_id = engine.document.group_nodes(&child_ids).unwrap();
     engine
-        .begin_geometry_transaction(&format!("[{group_id}]"))
+        .begin_geometry_transaction(&serde_json::to_string(&[group_id]).unwrap())
         .unwrap();
     assert!(
         engine
-            .move_nodes(&format!("[{group_id}]"), 20.0, 15.0)
+            .move_nodes(&serde_json::to_string(&[group_id]).unwrap(), 20.0, 15.0)
             .unwrap()
     );
     engine.end_transaction();

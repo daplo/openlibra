@@ -20,27 +20,27 @@ export function Panel({
   mode: Mode;
   stats: RenderStats;
   model: DocumentReadModel;
-  selectedNodeIds: number[];
-  onSelectNode: (id: number, additive: boolean) => void;
+  selectedNodeIds: string[];
+  onSelectNode: (id: string, additive: boolean) => void;
   onAddPage: () => void;
-  onSelectPage: (id: number) => void;
+  onSelectPage: (id: string) => void;
   onNavigateNode: (node: NodeSummary) => void;
-  onReorderNode: (draggedId: number, targetId: number, before: boolean) => void;
-  onToggleLock: (id: number, locked: boolean) => void;
-  onRenameNode: (id: number, name: string) => void;
+  onReorderNode: (draggedId: string, targetId: string, before: boolean) => void;
+  onToggleLock: (id: string, locked: boolean) => void;
+  onRenameNode: (id: string, name: string) => void;
 }) {
-  const [editingNodeId, setEditingNodeId] = useState<number>();
+  const [editingNodeId, setEditingNodeId] = useState<string>();
   const [editingName, setEditingName] = useState("");
-  const [draggedNodeId, setDraggedNodeId] = useState<number>();
+  const [draggedNodeId, setDraggedNodeId] = useState<string>();
   const [dropTarget, setDropTarget] = useState<{
-    id: number;
+    id: string;
     before: boolean;
   }>();
-  const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<number>>(
+  const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(
     () => new Set(),
   );
   const renameStateRef = useRef<
-    { id: number; name: string; originalName: string } | undefined
+    { id: string; name: string; originalName: string } | undefined
   >(undefined);
   const renameCallbackRef = useRef(onRenameNode);
   renameCallbackRef.current = onRenameNode;
@@ -52,8 +52,8 @@ export function Panel({
     ? { id: editingNode.id, name: editingName, originalName: editingNode.name }
     : undefined;
   const nodesByParent = useMemo(() => {
-    const index = new Map<number | null, NodeSummary[]>();
-    const modelOrder = new Map<number, number>();
+    const index = new Map<string | null, NodeSummary[]>();
+    const modelOrder = new Map<string, number>();
     for (const [nodeIndex, node] of model.nodes.entries()) {
       modelOrder.set(node.id, nodeIndex);
       const parentId = node.parent_id ?? null;
@@ -62,7 +62,7 @@ export function Panel({
       index.set(parentId, siblings);
     }
     const roots = index.get(null) ?? [];
-    const relocatedGroups = new Set<number>();
+    const relocatedGroups = new Set<string>();
     const groupsAtIndex = new Map<number, NodeSummary[]>();
     for (const group of roots) {
       if (group.kind !== "group") continue;
@@ -126,7 +126,7 @@ export function Panel({
       document.removeEventListener("pointerdown", saveOnOutsidePointer, true);
   }, []);
 
-  function toggleCollapsed(id: number) {
+  function toggleCollapsed(id: string) {
     setCollapsedNodeIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
