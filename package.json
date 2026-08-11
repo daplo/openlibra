@@ -1,0 +1,21 @@
+{
+  "name": "open-libra",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "npm run build:wasm && npm run build --workspace @open-libra/web",
+    "build:wasm": "wasm-pack build crates/scene-wasm --target web --out-dir ../../apps/web/src/wasm",
+    "dev": "npm run build:wasm && npm run dev --workspace @open-libra/web",
+    "test": "cargo test --workspace && npm run typecheck --workspace @open-libra/web",
+    "format": "cargo fmt --all --check",
+    "typecheck": "npm run typecheck --workspace @open-libra/web"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
+  },
+  "dependencies": {
+    "lucide-react": "^1.31.0"
+  }
+}
