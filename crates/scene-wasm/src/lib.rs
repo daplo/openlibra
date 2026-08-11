@@ -13,7 +13,7 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const FLOATS_PER_RECT: usize = 24;
 
 fn parse_entity_id(value: &str) -> EntityId {
@@ -75,6 +75,11 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
                     }
                     if node.get("stroke_join").is_none() {
                         node["stroke_join"] = serde_json::Value::String("round".into());
+                    }
+                    if node.get("kind").and_then(|kind| kind.as_str()) == Some("text")
+                        && node.get("text").is_none()
+                    {
+                        node["text"] = serde_json::to_value(TextStyle::default()).unwrap();
                     }
                 }
             }
@@ -308,6 +313,17 @@ impl DocumentEngine {
             .to_string()
     }
 
+    pub fn add_text(&mut self) -> String {
+        self.mutate(|document| document.add_node(NodeKind::Text))
+            .to_string()
+    }
+
+    pub fn add_text_to(&mut self, parent_id: String) -> String {
+        let parent_id = parse_entity_id(&parent_id);
+        self.mutate(|document| document.add_text_to((!parent_id.is_nil()).then_some(parent_id)))
+            .to_string()
+    }
+
     pub fn add_artboard(
         &mut self,
         name: String,
@@ -461,6 +477,13 @@ impl DocumentEngine {
     pub fn set_node_locked(&mut self, node_id: String, locked: bool) -> bool {
         let node_id = parse_entity_id(&node_id);
         self.mutate(|document| document.set_node_locked(node_id, locked))
+    }
+
+    pub fn set_node_text(&mut self, node_id: String, text_json: &str) -> Result<bool, JsValue> {
+        let text: TextStyle = serde_json::from_str(text_json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid text style: {error}")))?;
+        let node_id = parse_entity_id(&node_id);
+        Ok(self.mutate(|document| document.set_node_text(node_id, text)))
     }
 
     pub fn set_node_opacity(&mut self, node_id: String, opacity: f32) -> bool {
@@ -729,10 +752,7 @@ impl DocumentEngine {
             .into_iter()
             .rev()
             .find(|node| {
-                node.kind != NodeKind::Group
-                    && node.kind != NodeKind::Text
-                    && !node.locked
-                    && point_in_rotated_node(node, x, y)
+                node.kind != NodeKind::Group && !node.locked && point_in_rotated_node(node, x, y)
             })
             .map_or_else(String::new, |node| node.id.to_string())
     }

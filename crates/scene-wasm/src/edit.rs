@@ -156,6 +156,28 @@ impl Document {
         true
     }
 
+    pub(crate) fn set_node_text(&mut self, node_id: EntityId, mut text: TextStyle) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Text {
+            return false;
+        }
+        text.font_family = text.font_family.trim().chars().take(120).collect();
+        if text.font_family.is_empty() {
+            text.font_family = "Inter".into();
+        }
+        text.font_weight = text.font_weight.clamp(100, 900);
+        text.font_size = text.font_size.clamp(1.0, 512.0);
+        text.line_height = text.line_height.clamp(0.5, 5.0);
+        text.letter_spacing = text.letter_spacing.clamp(-20.0, 100.0);
+        if node.text.as_ref() == Some(&text) {
+            return false;
+        }
+        node.text = Some(text);
+        true
+    }
+
     pub(crate) fn resize_node(
         &mut self,
         node_id: EntityId,
@@ -205,6 +227,18 @@ impl Document {
         }
         if handle.contains('s') {
             node.height = (node.height + dy).max(min_size);
+        }
+        if handle.contains('w') || handle.contains('e') {
+            node.width = node.width.round().max(min_size);
+            if handle.contains('w') {
+                node.x = old_right - node.width;
+            }
+        }
+        if handle.contains('n') || handle.contains('s') {
+            node.height = node.height.round().max(min_size);
+            if handle.contains('n') {
+                node.y = old_bottom - node.height;
+            }
         }
         let new_center = (node.x + node.width / 2.0, node.y + node.height / 2.0);
         let fixed_after_local = (
@@ -496,8 +530,8 @@ impl Document {
         }
         node.x = x;
         node.y = y;
-        node.width = width.max(8.0);
-        node.height = height.max(8.0);
+        node.width = width.round().max(8.0);
+        node.height = height.round().max(8.0);
         let max_radius = node.width.min(node.height) / 2.0;
         node.corner_radii = node.corner_radii.map(|radius| radius.min(max_radius));
         let parent_id = node.parent_id;

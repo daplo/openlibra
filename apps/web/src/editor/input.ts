@@ -22,10 +22,12 @@ export type EditorInputHandlers = {
   resetView: () => void;
   zoomToFit: () => void;
   toggleRulers: () => void;
+  toggleGrid: () => void;
   deleteSelection: () => void;
   undo: () => void;
   redo: () => void;
   nudgeSelection: (dx: number, dy: number) => void;
+  beginTextEdit: (clientX: number, clientY: number) => void;
 };
 
 type PointerInput = {
@@ -68,6 +70,7 @@ export class EditorInputController {
     this.canvas.addEventListener("pointercancel", this.onPointerEnd, {
       signal,
     });
+    this.canvas.addEventListener("dblclick", this.onDoubleClick, { signal });
     this.canvas.addEventListener("wheel", this.onWheel, {
       passive: false,
       signal,
@@ -92,6 +95,10 @@ export class EditorInputController {
 
   private onPointerMove = (event: PointerEvent) => {
     this.canvasTarget.pointerMove(event);
+  };
+
+  private onDoubleClick = (event: MouseEvent) => {
+    this.handlers.beginTextEdit(event.clientX, event.clientY);
   };
 
   private onPointerEnd = () => {
@@ -124,6 +131,10 @@ export class EditorInputController {
     if (event.shiftKey && key === "r") {
       event.preventDefault();
       this.handlers.toggleRulers();
+    }
+    if (event.shiftKey && key === "g") {
+      event.preventDefault();
+      this.handlers.toggleGrid();
     }
     if (event.key === "Delete" || event.key === "Backspace")
       this.handlers.deleteSelection();

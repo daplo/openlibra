@@ -81,11 +81,10 @@ fn append_node_scene(scene: &mut Vec<f32>, node: &Node) {
         (node.stroke_join == StrokeJoin::Round) as u8 as f32,
     ]);
     scene.extend_from_slice(&node.corner_radii.map(|radius| {
-        let outer = radius + expansion;
         if node.stroke_join == StrokeJoin::Round {
-            outer.max(expansion)
+            (radius + expansion).max(expansion)
         } else {
-            outer
+            radius
         }
     }));
     scene.extend_from_slice(&node_transform(node));

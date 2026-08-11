@@ -80,6 +80,14 @@ try {
     .first()
     .waitFor();
 
+  const rulerBounds = await page.locator(".horizontal-ruler").boundingBox();
+  const toolDockBounds = await page.locator(".tool-rail").boundingBox();
+  assert.ok(rulerBounds && toolDockBounds);
+  assert.ok(
+    toolDockBounds.y >= rulerBounds.y + rulerBounds.height,
+    "the tool dock sits below the horizontal ruler",
+  );
+
   const canvas = page.getByLabel("Open Libra WebGPU editor canvas");
   const waitForTool = (tool) =>
     page.waitForFunction(
@@ -105,6 +113,37 @@ try {
     /active/,
   );
   await page.keyboard.press("1");
+
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  const gridMenuItem = page.getByRole("menuitemcheckbox", {
+    name: /Show grid/,
+  });
+  assert.equal(await gridMenuItem.getAttribute("aria-checked"), "false");
+  await gridMenuItem.click();
+  assert.equal(await gridMenuItem.getAttribute("aria-checked"), "true");
+  await page.getByTestId("canvas-grid").waitFor();
+  const toolbarBottom = page.getByRole("menuitemradio", { name: "Bottom" });
+  await toolbarBottom.click();
+  assert.equal(await toolbarBottom.getAttribute("aria-checked"), "true");
+  const stageBounds = await page.locator(".stage").boundingBox();
+  const bottomDockBounds = await page.locator(".tool-rail").boundingBox();
+  assert.ok(stageBounds && bottomDockBounds);
+  assert.ok(
+    Math.abs(
+      stageBounds.y +
+        stageBounds.height -
+        bottomDockBounds.y -
+        bottomDockBounds.height -
+        12,
+    ) < 1,
+    "the bottom toolbar respects its 12px inset",
+  );
+  await page.getByRole("menuitemradio", { name: "Top" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.keyboard.press("Shift+g");
+  assert.equal(await page.getByTestId("canvas-grid").count(), 0);
+  await page.keyboard.press("Shift+g");
+  await page.getByTestId("canvas-grid").waitFor();
 
   const canvasBounds = await canvas.boundingBox();
   assert.ok(canvasBounds, "the editor canvas has measurable bounds");
@@ -152,18 +191,18 @@ try {
   assert.equal(await cornerInputs.first().inputValue(), "20");
 
   const alignment = page.getByRole("group", { name: "Alignment" });
-  await alignment.getByRole("button", { name: "outside" }).click();
+  await alignment.getByRole("button", { name: "Outside border" }).click();
   assert.equal(
     await alignment
-      .getByRole("button", { name: "outside" })
+      .getByRole("button", { name: "Outside border" })
       .getAttribute("aria-pressed"),
     "true",
   );
   const join = page.getByRole("group", { name: "Join" });
-  await join.getByRole("button", { name: "straight" }).click();
+  await join.getByRole("button", { name: "Straight join" }).click();
   assert.equal(
     await join
-      .getByRole("button", { name: "straight" })
+      .getByRole("button", { name: "Straight join" })
       .getAttribute("aria-pressed"),
     "true",
   );
@@ -212,6 +251,80 @@ try {
   await page.getByRole("button", { name: "Delete layer" }).click();
   assert.equal(await rectangles.count(), rectangleCount);
 
+  const textLayers = page.locator(
+    '[data-testid^="layer-node-"][data-node-kind="text"]',
+  );
+  const textCount = await textLayers.count();
+  await page.getByRole("button", { name: "Text" }).click();
+  const textLayer = textLayers.nth(textCount);
+  await textLayer.waitFor();
+  const textEditor = page.getByRole("textbox", { name: "Edit text content" });
+  await textEditor.fill("Typography works");
+  await textEditor.press("Tab");
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Text content"]')?.value ===
+      "Typography works",
+  );
+  assert.equal(
+    await page.getByRole("textbox", { name: "Text content" }).inputValue(),
+    "Typography works",
+  );
+  const fontFamily = page.getByRole("combobox", { name: "Font family" });
+  await fontFamily.selectOption("Roboto");
+  assert.equal(await fontFamily.inputValue(), "Roboto");
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll("link[data-open-libra-font]")].some(
+      (link) => link.dataset.openLibraFont === "Roboto",
+    ),
+  );
+  const fontSize = page.getByRole("spinbutton", { name: "Size" });
+  await fontSize.fill("32");
+  await fontSize.press("Enter");
+  assert.equal(await fontSize.inputValue(), "32");
+  const textBox = page.getByRole("group", { name: "Text box" });
+  const inactiveTextBoxStyle = await textBox
+    .getByRole("button", { name: "Fixed" })
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [style.color, style.backgroundColor, style.borderColor];
+    });
+  assert.notEqual(inactiveTextBoxStyle[1], "rgba(0, 0, 0, 0)");
+  assert.notEqual(inactiveTextBoxStyle[0], inactiveTextBoxStyle[1]);
+  await textBox.getByRole("button", { name: "Auto height" }).click();
+  assert.equal(
+    await textBox
+      .getByRole("button", { name: "Auto height" })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+  const activeTextBoxStyle = await textBox
+    .getByRole("button", { name: "Auto height" })
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [style.color, style.backgroundColor, style.borderColor];
+    });
+  assert.notDeepEqual(activeTextBoxStyle, inactiveTextBoxStyle);
+  const propertyControlHeights = await page
+    .locator(
+      '.right-panel .property-section-body button, .right-panel .property-section-body input:not([type="range"]):not([type="color"]):not(.transform-controls input), .right-panel .property-section-body select, .right-panel .transform-controls label',
+    )
+    .evaluateAll((elements) =>
+      elements
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => getComputedStyle(element).height),
+    );
+  assert.ok(propertyControlHeights.length > 0);
+  assert.deepEqual([...new Set(propertyControlHeights)], ["30px"]);
+  const horizontal = page.getByRole("group", { name: "Horizontal" });
+  await horizontal.getByRole("button", { name: "Align center" }).click();
+  assert.equal(
+    await horizontal
+      .getByRole("button", { name: "Align center" })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+
   const pages = page.getByTestId(/^page-node-/);
   const pageCount = await pages.count();
   await page.getByRole("button", { name: "+ Add page" }).click();
@@ -243,7 +356,7 @@ try {
   );
 
   console.log(
-    "UI smoke tests passed (corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
+    "UI smoke tests passed (typography, corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
   );
 } finally {
   await browser?.close();

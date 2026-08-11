@@ -4,8 +4,8 @@ use crate::geometry::rotate_around;
 #[test]
 fn demo_document_has_stable_renderable_nodes() {
     let engine = DocumentEngine::new();
-    assert_eq!(engine.rect_count(), 12);
-    assert_eq!(engine.scene_data().len(), 12 * FLOATS_PER_RECT);
+    assert_eq!(engine.rect_count(), 23);
+    assert_eq!(engine.scene_data().len(), 23 * FLOATS_PER_RECT);
     assert_eq!(engine.document.pages.len(), 5);
 }
 
@@ -56,6 +56,70 @@ fn legacy_radius_migrates_to_four_corners_and_border_defaults() {
     assert_eq!(node.corner_radii, [7.0; 4]);
     assert_eq!(node.stroke_align, StrokeAlign::Inside);
     assert_eq!(node.stroke_join, StrokeJoin::Round);
+}
+
+#[test]
+fn schema_three_text_placeholders_gain_default_typography() {
+    let mut value = serde_json::to_value(Document::demo()).unwrap();
+    value["schema_version"] = serde_json::json!(3);
+    let node = value["pages"][0]["nodes"][0].as_object_mut().unwrap();
+    node.insert("kind".into(), serde_json::json!("text"));
+    node.remove("text");
+    migrate_legacy_document_ids(&mut value);
+    let document: Document = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        document.pages[0].nodes[0].text.as_ref().unwrap(),
+        &TextStyle::default()
+    );
+}
+
+#[test]
+fn text_nodes_are_created_editable_serialized_and_undoable() {
+    let mut engine = DocumentEngine::new();
+    let id = engine.add_text();
+    let node_id = parse_entity_id(&id);
+    let text = TextStyle {
+        content: "Hello, Libra".into(),
+        font_family: " Georgia ".into(),
+        font_weight: 1200,
+        font_size: 42.0,
+        horizontal_align: TextAlign::Center,
+        ..TextStyle::default()
+    };
+    assert!(
+        engine
+            .set_node_text(id.clone(), &serde_json::to_string(&text).unwrap())
+            .unwrap()
+    );
+    let node = engine.document.active_node(node_id).unwrap();
+    let saved = node.text.as_ref().unwrap();
+    assert_eq!(saved.content, "Hello, Libra");
+    assert_eq!(saved.font_family, "Georgia");
+    assert_eq!(saved.font_weight, 900);
+    assert!(engine.document_json().contains("Hello, Libra"));
+    assert!(engine.undo());
+    assert_eq!(
+        engine
+            .document
+            .active_node(node_id)
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap(),
+        &TextStyle::default()
+    );
+    assert!(engine.redo());
+    assert_eq!(
+        engine
+            .document
+            .active_node(node_id)
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
+            .font_size,
+        42.0
+    );
 }
 
 #[test]
@@ -388,6 +452,37 @@ fn node_styles_are_clamped_and_serialized() {
 }
 
 #[test]
+fn outside_border_join_changes_outer_corner_geometry() {
+    let mut document = Document::demo();
+    document.add_page("Border joins".into());
+    let id = document.add_node(NodeKind::Rectangle);
+    assert!(document.set_node_style(
+        id,
+        [1.0; 4],
+        [0.0, 0.0, 0.0, 1.0],
+        8.0,
+        [0.0; 4],
+        StrokeAlign::Outside,
+        StrokeJoin::Round,
+    ));
+    let round_scene = document.scene_data();
+    assert_eq!(&round_scene[16..20], &[8.0; 4]);
+
+    assert!(document.set_node_style(
+        id,
+        [1.0; 4],
+        [0.0, 0.0, 0.0, 1.0],
+        8.0,
+        [0.0; 4],
+        StrokeAlign::Outside,
+        StrokeJoin::Straight,
+    ));
+    let straight_scene = document.scene_data();
+    assert_eq!(&straight_scene[16..20], &[0.0; 4]);
+    assert_ne!(&round_scene[16..20], &straight_scene[16..20]);
+}
+
+#[test]
 fn corner_resize_updates_bounds_and_enforces_minimum_size() {
     let mut document = Document::demo();
     let id = document.active_page().nodes[1].id;
@@ -427,6 +522,21 @@ fn numeric_bounds_are_editable_and_validated() {
         (-24.0, 42.0, 200.0, 8.0)
     );
     assert!(!document.set_node_bounds(id, f32::NAN, 0.0, 10.0, 10.0));
+}
+
+#[test]
+fn node_dimensions_are_rounded_to_whole_pixels() {
+    let mut document = Document::demo();
+    let id = document.active_page().nodes[1].id;
+    assert!(document.set_node_bounds(id, 10.25, 20.75, 391.2, 207.8));
+    let node = document.active_node(id).unwrap();
+    assert_eq!((node.width, node.height), (391.0, 208.0));
+
+    let old_right = node.x + node.width;
+    assert!(document.resize_node(id, "w", 10.4, 0.0));
+    let node = document.active_node(id).unwrap();
+    assert_eq!(node.width.fract(), 0.0);
+    assert!((node.x + node.width - old_right).abs() < 0.001);
 }
 
 #[test]

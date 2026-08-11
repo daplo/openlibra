@@ -1,7 +1,97 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { OpenLibraRenderer, ColorTheme } from "../renderer";
 import { hexWithAlpha, rgbaToHex } from "../editor/model-utils";
+import { ensureGoogleFont } from "../editor/font-catalog";
 import type { NodeSummary } from "../editor/types";
+
+export function CanvasGrid({
+  rendererRef,
+  theme,
+}: {
+  rendererRef: RefObject<OpenLibraRenderer | undefined>;
+  theme: ColorTheme;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    const draw = () => {
+      const canvas = canvasRef.current;
+      const renderer = rendererRef.current;
+      if (canvas && renderer)
+        drawCanvasGrid(canvas, renderer.getViewState(), theme);
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [rendererRef, theme]);
+  return (
+    <canvas
+      ref={canvasRef}
+      className="canvas-grid"
+      data-testid="canvas-grid"
+      aria-hidden="true"
+    />
+  );
+}
+
+function drawCanvasGrid(
+  canvas: HTMLCanvasElement,
+  view: { pan: { x: number; y: number }; zoom: number },
+  theme: ColorTheme,
+) {
+  const width = canvas.clientWidth,
+    height = canvas.clientHeight,
+    ratio = devicePixelRatio;
+  if (
+    canvas.width !== Math.floor(width * ratio) ||
+    canvas.height !== Math.floor(height * ratio)
+  ) {
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+  }
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  let worldStep = 16;
+  while (worldStep * view.zoom < 12) worldStep *= 2;
+  const spacing = worldStep * view.zoom;
+  const startX = ((view.pan.x % spacing) + spacing) % spacing;
+  const startY = ((view.pan.y % spacing) + spacing) % spacing;
+  const drawLines = (major: boolean) => {
+    context.beginPath();
+    for (
+      let x = startX, index = Math.round((x - view.pan.x) / spacing);
+      x <= width;
+      x += spacing, index += 1
+    ) {
+      if ((index % 4 === 0) !== major) continue;
+      context.moveTo(Math.round(x) + 0.5, 0);
+      context.lineTo(Math.round(x) + 0.5, height);
+    }
+    for (
+      let y = startY, index = Math.round((y - view.pan.y) / spacing);
+      y <= height;
+      y += spacing, index += 1
+    ) {
+      if ((index % 4 === 0) !== major) continue;
+      context.moveTo(0, Math.round(y) + 0.5);
+      context.lineTo(width, Math.round(y) + 0.5);
+    }
+    context.strokeStyle =
+      theme === "light"
+        ? major
+          ? "#87909f35"
+          : "#87909f1c"
+        : major
+          ? "#d8dde52c"
+          : "#d8dde516";
+    context.lineWidth = 1;
+    context.stroke();
+  };
+  drawLines(false);
+  drawLines(true);
+}
 
 export function Rulers({
   rendererRef,
@@ -60,7 +150,18 @@ export function SelectionOverlay({
           : liveBounds && selected[0]
             ? [{ ...selected[0], ...liveBounds }]
             : selected;
-        drawSelectionOverlay(canvas, renderer.getViewState(), visibleSelection);
+        const resizing = renderer.isResizingSelection();
+        canvas.dataset.resizing = String(resizing);
+        canvas.dataset.dimensions =
+          resizing && visibleSelection[0]
+            ? `${visibleSelection[0].width}x${visibleSelection[0].height}`
+            : "";
+        drawSelectionOverlay(
+          canvas,
+          renderer.getViewState(),
+          visibleSelection,
+          resizing,
+        );
       }
       frame = requestAnimationFrame(draw);
     };
@@ -70,6 +171,130 @@ export function SelectionOverlay({
   return (
     <canvas ref={canvasRef} className="selection-overlay" aria-hidden="true" />
   );
+}
+
+export function TextOverlay({
+  rendererRef,
+  nodes,
+  editingTextId,
+}: {
+  rendererRef: RefObject<OpenLibraRenderer | undefined>;
+  nodes: NodeSummary[];
+  editingTextId?: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    for (const node of nodes) {
+      if (node.text) ensureGoogleFont(node.text.font_family);
+    }
+  }, [nodes]);
+  useEffect(() => {
+    let frame = 0;
+    const draw = () => {
+      const canvas = canvasRef.current;
+      const renderer = rendererRef.current;
+      if (canvas && renderer)
+        drawTextOverlay(canvas, renderer.getViewState(), nodes, editingTextId);
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [rendererRef, nodes, editingTextId]);
+  return <canvas ref={canvasRef} className="text-overlay" aria-hidden="true" />;
+}
+
+function drawTextOverlay(
+  canvas: HTMLCanvasElement,
+  view: { pan: { x: number; y: number }; zoom: number },
+  nodes: NodeSummary[],
+  editingTextId?: string,
+) {
+  const width = canvas.clientWidth,
+    height = canvas.clientHeight,
+    ratio = devicePixelRatio;
+  if (
+    canvas.width !== Math.floor(width * ratio) ||
+    canvas.height !== Math.floor(height * ratio)
+  ) {
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+  }
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  for (const node of nodes) {
+    if (node.kind !== "text" || !node.text || node.id === editingTextId)
+      continue;
+    const text = node.text;
+    const nodeWidth = node.width * view.zoom;
+    const nodeHeight = node.height * view.zoom;
+    const centerX = (node.x + node.width / 2) * view.zoom + view.pan.x;
+    const centerY = (node.y + node.height / 2) * view.zoom + view.pan.y;
+    context.save();
+    context.translate(centerX, centerY);
+    context.rotate((node.rotation * Math.PI) / 180);
+    context.beginPath();
+    context.rect(-nodeWidth / 2, -nodeHeight / 2, nodeWidth, nodeHeight);
+    context.clip();
+    const fontSize = text.font_size * view.zoom;
+    const lineHeight = fontSize * text.line_height;
+    context.font = `${text.font_style} ${text.font_weight} ${fontSize}px ${JSON.stringify(text.font_family)}, sans-serif`;
+    context.fillStyle = rgbaToHex(node.fill);
+    context.globalAlpha = Math.min(1, node.opacity * (node.fill[3] ?? 1));
+    context.textBaseline = "top";
+    context.textAlign =
+      text.horizontal_align === "justify" ? "left" : text.horizontal_align;
+    const lines =
+      text.sizing === "auto_width"
+        ? text.content.split("\n")
+        : wrapText(
+            context,
+            text.content,
+            nodeWidth,
+            text.letter_spacing * view.zoom,
+          );
+    const blockHeight = lines.length * lineHeight;
+    let y = -nodeHeight / 2;
+    if (text.vertical_align === "middle") y -= blockHeight / 2 - nodeHeight / 2;
+    if (text.vertical_align === "bottom") y += nodeHeight - blockHeight;
+    const x =
+      text.horizontal_align === "center"
+        ? 0
+        : text.horizontal_align === "right"
+          ? nodeWidth / 2
+          : -nodeWidth / 2;
+    for (const line of lines) {
+      context.fillText(line, x, y);
+      y += lineHeight;
+    }
+    context.restore();
+  }
+}
+
+function wrapText(
+  context: CanvasRenderingContext2D,
+  content: string,
+  maxWidth: number,
+  letterSpacing: number,
+) {
+  const lines: string[] = [];
+  for (const paragraph of content.split("\n")) {
+    const words = paragraph.split(/\s+/);
+    let line = "";
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      const width =
+        context.measureText(candidate).width +
+        Math.max(0, candidate.length - 1) * letterSpacing;
+      if (line && width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else line = candidate;
+    }
+    lines.push(line);
+  }
+  return lines;
 }
 
 export function ArtboardGuides({
@@ -222,6 +447,7 @@ function drawSelectionOverlay(
   canvas: HTMLCanvasElement,
   view: { pan: { x: number; y: number }; zoom: number },
   selected: NodeSummary[],
+  showDimensions: boolean,
 ) {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
@@ -268,6 +494,17 @@ function drawSelectionOverlay(
   for (const point of corners.slice(1)) context.lineTo(point[0], point[1]);
   context.closePath();
   context.stroke();
+  if (showDimensions && selected.length === 1) {
+    drawDimensionBadge(
+      context,
+      corners[2][0],
+      corners[2][1],
+      selected[0].width,
+      selected[0].height,
+      width,
+      height,
+    );
+  }
   if (selected.length !== 1 || selected[0].kind === "group") return;
   const size = 8;
   const points = [
@@ -285,6 +522,40 @@ function drawSelectionOverlay(
     context.fillRect(x - size / 2, y - size / 2, size, size);
     context.strokeRect(x - size / 2, y - size / 2, size, size);
   }
+}
+
+function drawDimensionBadge(
+  context: CanvasRenderingContext2D,
+  anchorX: number,
+  anchorY: number,
+  width: number,
+  height: number,
+  viewportWidth: number,
+  viewportHeight: number,
+) {
+  const format = (value: number) =>
+    Number.isInteger(value) ? String(value) : value.toFixed(1);
+  const label = `${format(width)} × ${format(height)}`;
+  context.save();
+  context.font = "600 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  context.textBaseline = "middle";
+  const badgeWidth = Math.ceil(context.measureText(label).width) + 14;
+  const badgeHeight = 24;
+  const x = Math.max(4, Math.min(viewportWidth - badgeWidth - 4, anchorX + 10));
+  const y = Math.max(
+    4,
+    Math.min(viewportHeight - badgeHeight - 4, anchorY + 10),
+  );
+  context.fillStyle = "#171b1f";
+  context.strokeStyle = "#82e6b8";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.roundRect(x, y, badgeWidth, badgeHeight, 5);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#e8fff4";
+  context.fillText(label, x + 7, y + badgeHeight / 2);
+  context.restore();
 }
 
 function drawRulers(

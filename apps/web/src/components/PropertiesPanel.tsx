@@ -1,19 +1,37 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  AlignCenter,
   AlignHorizontalJustifyCenter,
   AlignHorizontalJustifyEnd,
   AlignHorizontalJustifyStart,
   AlignVerticalJustifyCenter,
   AlignVerticalJustifyEnd,
   AlignVerticalJustifyStart,
+  AlignJustify,
+  AlignLeft,
+  AlignRight,
+  Baseline,
   Columns3,
   FlipHorizontal2,
   FlipVertical2,
+  Italic,
+  MoveHorizontal,
+  MoveVertical,
   RotateCw,
   Rows3,
+  Square,
 } from "lucide-react";
 import { hexToRgb, rgbaToHex } from "../editor/model-utils";
-import type { NodeSummary, ShadowSummary } from "../editor/types";
+import {
+  GOOGLE_FONTS,
+  SYSTEM_FONTS,
+  ensureGoogleFont,
+} from "../editor/font-catalog";
+import type {
+  NodeSummary,
+  ShadowSummary,
+  TextStyleSummary,
+} from "../editor/types";
 
 export function Properties(props: {
   selected: NodeSummary[];
@@ -39,6 +57,7 @@ export function Properties(props: {
   ) => void;
   onOpacityChange: (node: NodeSummary, opacity: number) => void;
   onShadowsChange: (node: NodeSummary, shadows: ShadowSummary[]) => void;
+  onTextChange: (node: NodeSummary, text: TextStyleSummary) => void;
   onTransformChange: (
     node: NodeSummary,
     change: Partial<Pick<NodeSummary, "rotation" | "flip_x" | "flip_y">>,
@@ -144,6 +163,14 @@ export function Properties(props: {
                 />
               </PropertySection>
             )}
+            {node.kind === "text" && node.text && (
+              <TypographyControls
+                text={node.text}
+                onChange={(change) =>
+                  props.onTextChange(node, { ...node.text!, ...change })
+                }
+              />
+            )}
             {node.kind !== "group" && (
               <StyleControls
                 node={node}
@@ -207,6 +234,174 @@ function EmptyState({ text }: { text: string }) {
   return <p className="empty-state">{text}</p>;
 }
 
+function TypographyControls({
+  text,
+  onChange,
+}: {
+  text: TextStyleSummary;
+  onChange: (change: Partial<TextStyleSummary>) => void;
+}) {
+  return (
+    <>
+      <PropertySection title="Content">
+        <TextContentControl
+          value={text.content}
+          onChange={(content) => onChange({ content })}
+        />
+      </PropertySection>
+      <PropertySection title="Typography">
+        <label className="select-control">
+          <span>Family</span>
+          <select
+            value={text.font_family}
+            aria-label="Font family"
+            onChange={(event) => {
+              ensureGoogleFont(event.target.value);
+              onChange({ font_family: event.target.value });
+            }}
+          >
+            <optgroup label="System fonts">
+              {SYSTEM_FONTS.map((family) => (
+                <option key={family}>{family}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Google Fonts">
+              {GOOGLE_FONTS.map((family) => (
+                <option key={family}>{family}</option>
+              ))}
+            </optgroup>
+          </select>
+        </label>
+        <div className="typography-number-grid">
+          <NumberControl
+            label="Size"
+            value={text.font_size}
+            min={1}
+            max={512}
+            onChange={(font_size) => onChange({ font_size })}
+          />
+          <label className="select-control compact">
+            <span>Weight</span>
+            <select
+              value={text.font_weight}
+              aria-label="Font weight"
+              onChange={(event) =>
+                onChange({ font_weight: Number(event.target.value) })
+              }
+            >
+              {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((weight) => (
+                <option key={weight} value={weight}>
+                  {weight}
+                </option>
+              ))}
+            </select>
+          </label>
+          <NumberControl
+            label="Line"
+            value={text.line_height}
+            min={0.5}
+            max={5}
+            step={0.1}
+            onChange={(line_height) => onChange({ line_height })}
+          />
+          <NumberControl
+            label="Spacing"
+            value={text.letter_spacing}
+            min={-20}
+            max={100}
+            step={0.1}
+            onChange={(letter_spacing) => onChange({ letter_spacing })}
+          />
+        </div>
+        <SegmentedControl
+          label="Style"
+          value={text.font_style}
+          options={["normal", "italic"]}
+          optionLabels={{ normal: "Normal", italic: "Italic" }}
+          optionIcons={{ normal: <Baseline />, italic: <Italic /> }}
+          onChange={(font_style) => onChange({ font_style })}
+        />
+        <SegmentedControl
+          label="Text box"
+          value={text.sizing}
+          options={["auto_width", "auto_height", "fixed"]}
+          optionLabels={{
+            auto_width: "Auto width",
+            auto_height: "Auto height",
+            fixed: "Fixed",
+          }}
+          optionIcons={{
+            auto_width: <MoveHorizontal />,
+            auto_height: <MoveVertical />,
+            fixed: <Square />,
+          }}
+          onChange={(sizing) => onChange({ sizing })}
+        />
+        <SegmentedControl
+          label="Horizontal"
+          value={text.horizontal_align}
+          options={["left", "center", "right", "justify"]}
+          optionLabels={{
+            left: "Align left",
+            center: "Align center",
+            right: "Align right",
+            justify: "Justify",
+          }}
+          optionIcons={{
+            left: <AlignLeft />,
+            center: <AlignCenter />,
+            right: <AlignRight />,
+            justify: <AlignJustify />,
+          }}
+          onChange={(horizontal_align) => onChange({ horizontal_align })}
+        />
+        <SegmentedControl
+          label="Vertical"
+          value={text.vertical_align}
+          options={["top", "middle", "bottom"]}
+          optionLabels={{
+            top: "Align top",
+            middle: "Align middle",
+            bottom: "Align bottom",
+          }}
+          optionIcons={{
+            top: <AlignVerticalJustifyStart />,
+            middle: <AlignVerticalJustifyCenter />,
+            bottom: <AlignVerticalJustifyEnd />,
+          }}
+          onChange={(vertical_align) => onChange({ vertical_align })}
+        />
+      </PropertySection>
+    </>
+  );
+}
+
+function TextContentControl({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft !== value) onChange(draft);
+  };
+  return (
+    <textarea
+      className="text-content-input"
+      value={draft}
+      aria-label="Text content"
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") commit();
+      }}
+    />
+  );
+}
+
 function StyleControls({
   node,
   documentColors,
@@ -243,51 +438,74 @@ function StyleControls({
         />
       </PropertySection>
       <PropertySection title="Border">
-        <ColorControl
-          label="Color"
-          value={rgbaToHex(node.stroke)}
-          documentColors={documentColors}
-          onAddDocumentColor={onAddDocumentColor}
-          onChange={(stroke) => onChange({ stroke })}
-        />
-        <NumberControl
-          label="Width"
-          value={node.stroke_width}
-          max={20}
-          onChange={(strokeWidth) => onChange({ strokeWidth })}
-        />
-        <SegmentedControl
-          label="Alignment"
-          value={node.stroke_align}
-          options={["inside", "center", "outside"]}
-          onChange={(strokeAlign) => onChange({ strokeAlign })}
-        />
-        <SegmentedControl
-          label="Join"
-          value={node.stroke_join}
-          options={["round", "straight"]}
-          onChange={(strokeJoin) => onChange({ strokeJoin })}
-        />
-      </PropertySection>
-      <PropertySection title="Corners">
-        <div className="geometry-grid corner-grid">
-          {["TL", "TR", "BR", "BL"].map((label, index) => (
-            <GeometryInput
-              key={label}
-              label={label}
-              value={node.corner_radii[index] ?? 0}
-              min={0}
-              onChange={(radius) =>
-                onChange({
-                  cornerRadii: node.corner_radii.map((value, position) =>
-                    position === index ? radius : value,
-                  ),
-                })
-              }
+        {node.kind === "text" ? (
+          <EmptyState text="Text borders will be added with outlined text support." />
+        ) : (
+          <>
+            <ColorControl
+              label="Color"
+              value={rgbaToHex(node.stroke)}
+              documentColors={documentColors}
+              onAddDocumentColor={onAddDocumentColor}
+              onChange={(stroke) => onChange({ stroke })}
             />
-          ))}
-        </div>
+            <NumberControl
+              label="Width"
+              value={node.stroke_width}
+              max={20}
+              onChange={(strokeWidth) => onChange({ strokeWidth })}
+            />
+            <SegmentedControl
+              label="Alignment"
+              value={node.stroke_align}
+              options={["inside", "center", "outside"]}
+              optionLabels={{
+                inside: "Inside border",
+                center: "Centered border",
+                outside: "Outside border",
+              }}
+              optionIcons={{
+                inside: <BorderAlignmentIcon alignment="inside" />,
+                center: <BorderAlignmentIcon alignment="center" />,
+                outside: <BorderAlignmentIcon alignment="outside" />,
+              }}
+              onChange={(strokeAlign) => onChange({ strokeAlign })}
+            />
+            <SegmentedControl
+              label="Join"
+              value={node.stroke_join}
+              options={["round", "straight"]}
+              optionLabels={{ round: "Round join", straight: "Straight join" }}
+              optionIcons={{
+                round: <BorderJoinIcon rounded />,
+                straight: <BorderJoinIcon rounded={false} />,
+              }}
+              onChange={(strokeJoin) => onChange({ strokeJoin })}
+            />
+          </>
+        )}
       </PropertySection>
+      {node.kind !== "text" && (
+        <PropertySection title="Corners">
+          <div className="geometry-grid corner-grid">
+            {["TL", "TR", "BR", "BL"].map((label, index) => (
+              <GeometryInput
+                key={label}
+                label={label}
+                value={node.corner_radii[index] ?? 0}
+                min={0}
+                onChange={(radius) =>
+                  onChange({
+                    cornerRadii: node.corner_radii.map((value, position) =>
+                      position === index ? radius : value,
+                    ),
+                  })
+                }
+              />
+            ))}
+          </div>
+        </PropertySection>
+      )}
       <PropertySection title="Shadows">
         <ShadowControls
           shadows={node.shadows}
@@ -1056,19 +1274,23 @@ function ColorPalette({
 function NumberControl({
   label,
   value,
+  min = 0,
   max,
+  step = 1,
   onChange,
 }: {
   label: string;
   value: number;
+  min?: number;
   max: number;
+  step?: number;
   onChange: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(() => String(value));
   useEffect(() => setDraft(String(value)), [value]);
 
   function clamp(next: number) {
-    return Math.min(max, Math.max(0, next));
+    return Math.min(max, Math.max(min, next));
   }
 
   function commit(next: string | number = draft) {
@@ -1092,9 +1314,9 @@ function NumberControl({
       <span>{label}</span>
       <input
         type="range"
-        min="0"
+        min={min}
         max={max}
-        step="1"
+        step={step}
         value={sliderValue}
         aria-label={`${label} slider`}
         onChange={(event) => setDraft(event.target.value)}
@@ -1107,8 +1329,9 @@ function NumberControl({
       />
       <input
         type="number"
-        min="0"
+        min={min}
         max={max}
+        step={step}
         value={draft}
         aria-label={label}
         onChange={(event) => setDraft(event.target.value)}
@@ -1126,11 +1349,15 @@ function SegmentedControl<T extends string>({
   label,
   value,
   options,
+  optionLabels,
+  optionIcons,
   onChange,
 }: {
   label: string;
   value: T;
   options: readonly T[];
+  optionLabels?: Partial<Record<T, string>>;
+  optionIcons?: Partial<Record<T, ReactNode>>;
   onChange: (value: T) => void;
 }) {
   return (
@@ -1143,12 +1370,56 @@ function SegmentedControl<T extends string>({
             key={option}
             className={value === option ? "active" : ""}
             aria-pressed={value === option}
+            aria-label={optionLabels?.[option] ?? option}
+            title={optionLabels?.[option] ?? option}
             onClick={() => onChange(option)}
           >
-            {option}
+            {optionIcons?.[option] ?? optionLabels?.[option] ?? option}
           </button>
         ))}
       </div>
     </div>
+  );
+}
+
+function BorderAlignmentIcon({
+  alignment,
+}: {
+  alignment: "inside" | "center" | "outside";
+}) {
+  const inset = alignment === "inside" ? 5.5 : alignment === "center" ? 4 : 2.5;
+  const size = 16 - inset * 2;
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      aria-hidden="true"
+    >
+      <rect x="4" y="4" width="8" height="8" rx="1" opacity="0.35" />
+      <rect
+        x={inset}
+        y={inset}
+        width={size}
+        height={size}
+        rx="1"
+        strokeWidth="2"
+      />
+    </svg>
+  );
+}
+
+function BorderJoinIcon({ rounded }: { rounded: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={rounded ? "M3 13V8a5 5 0 0 1 5-5h5" : "M3 13V3h10"} />
+    </svg>
   );
 }

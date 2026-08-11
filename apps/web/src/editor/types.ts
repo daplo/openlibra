@@ -11,6 +11,18 @@ export type ShadowSummary = {
   spread: number;
   enabled: boolean;
 };
+export type TextStyleSummary = {
+  content: string;
+  font_family: string;
+  font_weight: number;
+  font_size: number;
+  line_height: number;
+  letter_spacing: number;
+  horizontal_align: "left" | "center" | "right" | "justify";
+  vertical_align: "top" | "middle" | "bottom";
+  font_style: "normal" | "italic";
+  sizing: "auto_width" | "auto_height" | "fixed";
+};
 export type NodeSummary = {
   id: EntityId;
   name: string;
@@ -44,6 +56,7 @@ export type NodeSummary = {
   guide_color: number[];
   guide_opacity: number;
   locked: boolean;
+  text?: TextStyleSummary;
 };
 export type DocumentReadModel = {
   schema_version: number;

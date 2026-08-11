@@ -433,6 +433,10 @@ export class OpenLibraRenderer {
     return this.hitResizeHandle(world.x, world.y);
   }
 
+  isResizingSelection() {
+    return this.resizingHandle !== undefined;
+  }
+
   resetView() {
     this.targetPan = { x: 20, y: 20 };
     this.targetZoom = 1;

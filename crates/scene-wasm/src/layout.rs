@@ -36,7 +36,7 @@ impl Document {
                     .sum::<f32>()
                     + gaps
             };
-            container.height = (top + content_height + bottom).max(8.0);
+            container.height = (top + content_height + bottom).round().max(8.0);
             if let Some(stored) = self
                 .active_page_mut()
                 .nodes
@@ -93,7 +93,7 @@ impl Document {
             };
             if container.layout_mode == LayoutMode::Row {
                 if sizing == LayoutSizing::Fill {
-                    child.width = fill_width;
+                    child.width = fill_width.round().max(8.0);
                 }
                 child.x = cursor;
                 child.y = container.y
@@ -106,7 +106,7 @@ impl Document {
                 cursor += child.width + container.layout_gap;
             } else {
                 if sizing == LayoutSizing::Fill {
-                    child.width = fill_width;
+                    child.width = fill_width.round().max(8.0);
                 }
                 child.y = cursor;
                 child.x = container.x

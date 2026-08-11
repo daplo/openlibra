@@ -1,4 +1,4 @@
-# MVP roadmap: 10 levels
+# MVP roadmap
 
 This roadmap is designed for one developer. Each level produces a demonstrable increment and depends on the levels before it. A level is complete only when its exit criterion can be demonstrated, not merely when its code exists.
 
@@ -102,6 +102,12 @@ Goal: make reusable design-system values part of the document model.
 ### Todos
 
 - [ ] Define typed color, spacing, size, radius, and typography tokens
+- [x] Add a curated system-font catalog and lazily loaded Google Fonts catalog
+- [ ] Add searchable font discovery and recent/favorite font sections
+- [ ] Add permission-based local font discovery as progressive enhancement
+- [ ] Persist font source, fallback stack, requested faces, and availability status
+- [ ] Cache or bundle permitted web fonts for offline documents and deterministic export
+- [ ] Show loading, missing-font, substituted-font, and unsupported-weight states
 - [ ] Give tokens stable IDs independent of their names
 - [ ] Add create, edit, rename, group, and delete workflows
 - [ ] Allow node properties and layout values to reference tokens
@@ -163,8 +169,14 @@ Goal: close the feedback loop around the shared design artifact.
 ### Todos
 
 - [ ] Add comment pins anchored to a page position or stable node ID
+- [ ] Preserve a page-position fallback when an anchored node is moved or deleted
 - [ ] Add threads, replies, resolution, and reopening
+- [ ] Add mentions, assignment, unread state, and participant notifications
+- [ ] Allow reviewers to attach a viewport or selected-node snapshot
+- [ ] Record author, timestamps, document revision, and edit history for each message
+- [ ] Define offline creation, retry, conflict, and deleted-anchor behavior
 - [ ] Show comment activity in real time
+- [ ] Add a conversation panel with filters for open, resolved, mine, and current page
 - [ ] Make Review mode navigation-focused and editing-safe
 - [ ] Add share permissions for owner/editor/viewer-commenter
 - [ ] Define a forge-integration boundary for GitHub, GitLab, and compatible issue trackers
@@ -179,20 +191,60 @@ Goal: close the feedback loop around the shared design artifact.
 
 Exit criterion: a reviewer can leave anchored feedback while another user edits, an authorized user can promote that feedback into a traceable repository issue, and a developer can inspect a selected screen without entering Design mode.
 
-## Level 10: add reusable assets and harden the MVP
+## Level 10: add images, asset management, and export
 
-Goal: demonstrate the component-library direction and make the complete vertical slice testable by other people.
+Goal: make imported visual assets durable, editable, and exportable without compromising local ownership.
 
 ### Todos
 
-- [ ] Add local component definitions and instances with stable IDs
-- [ ] Add a minimal variant-property model and instance overrides
-- [ ] Add a workspace vault for image and reusable asset metadata
-- [ ] Store uploaded binaries by content hash in object storage
-- [ ] Place and render images referenced from the vault
+- [ ] Add image nodes with stable asset references, intrinsic dimensions, alt text, and crop state
+- [ ] Import PNG, JPEG, WebP, GIF, and SVG with explicit size and safety limits
+- [ ] Store local assets by content hash and deduplicate identical files
+- [ ] Generate thumbnails without replacing original assets
+- [ ] Add fill, fit, crop, tile, focal-point, opacity, and corner controls
+- [ ] Preserve original files and show recoverable missing-asset states
+- [ ] Make image decode, upload, cancellation, and failure states visible
+- [ ] Define portable asset entries for the `.libra` project container
 - [ ] Define export recipes by format, scale, density, theme, platform, and state
-- [ ] Implement one end-to-end export path, such as PNG at 1x and 2x
-- [ ] Prototype publishing a component/token set as a versioned library
+- [ ] Export a selected node, frame, page, or explicit slice
+- [ ] Implement PNG and JPEG export at 1x, 2x, and custom scale
+- [ ] Add SVG export for supported vector/text content with documented raster fallbacks
+- [ ] Add PDF export for frames/pages after font and image embedding is deterministic
+- [ ] Preserve transparency, color profile decisions, filenames, and overwrite behavior
+- [ ] Bundle or outline fonts according to the export recipe and font license
+- [ ] Run deterministic pixel fixtures for crop, opacity, shadows, text, and scaling
+
+Exit criterion: a user can import an image, crop and reuse it, save and reopen the project offline, then export a selected frame at 1x and 2x with stable visual output.
+
+## Level 11: add components and Vault libraries
+
+Goal: let teams build reusable UI systems while keeping instances traceable and safely upgradable.
+
+### Todos
+
+- [ ] Add component definitions and instances with separate stable IDs
+- [ ] Store instance-to-definition references without copying the entire subtree
+- [ ] Add typed overrides for text, visibility, asset, token, and nested instance properties
+- [ ] Add reset, detach, swap, and go-to-main-component actions
+- [ ] Add component properties and a minimal variant model
+- [ ] Prevent component and library dependency cycles
+- [ ] Create a local Vault for images, icons, components, and token collections
+- [ ] Add Vault search, tags, previews, grouping, rename, duplicate, archive, and usage inspection
+- [ ] Define document-local, workspace, and published-library scopes
+- [ ] Publish immutable library versions with semantic metadata and release notes
+- [ ] Show available updates and preview override conflicts before upgrading instances
+- [ ] Preserve the last resolved component when a library is unavailable
+- [ ] Add copy/import workflows that explicitly include required assets and tokens
+- [ ] Test nested instances, deleted definitions, overrides, version upgrades, and offline fallback
+
+Exit criterion: a user can create a component, place and override instances, publish it to the Vault, consume it from another document, and safely preview and apply a later library update.
+
+## Level 12: package, publish, and harden the MVP
+
+Goal: make the complete vertical slice testable by other people and dependable outside the development environment.
+
+### Todos
+
 - [ ] Export a read-only static review bundle that can run on any static host
 - [ ] Add an initial GitHub Pages publishing workflow for public Community projects
 - [ ] Support a public review path that opens a prepared GitHub Issue without embedding repository credentials in the published site
@@ -203,6 +255,16 @@ Goal: demonstrate the component-library direction and make the complete vertical
 - [ ] Deploy a private MVP environment with logging, backups, and basic monitoring
 
 Exit criterion: an invited product team can create a responsive token-driven design, reuse a component and image, collaborate, comment, inspect implementation values, export an asset, recover the project locally or from the cloud, and publish a public static review build through GitHub Pages.
+
+## Delivery order and dependencies
+
+1. Finish core editing and layout invariants before introducing reusable definitions.
+2. Complete typography, font fallback, and font embedding before promising deterministic PDF or SVG text export.
+3. Build the content-addressed asset store before image nodes, Vault reuse, cloud upload, or portable export.
+4. Ship local image placement and PNG export before generalized export recipes.
+5. Stabilize tokens and assets before component definitions; stabilize component definitions before published libraries and upgrades.
+6. Build local anchored threads before real-time delivery, notifications, or forge synchronization.
+7. Keep every cloud feature optional: documents, referenced assets, fonts, and last-resolved library content must remain usable offline.
 
 ## Distribution, hosting, and ownership direction
 

@@ -13,8 +13,10 @@ import {
 } from "lucide-react";
 import {
   ArtboardGuides,
+  CanvasGrid,
   Rulers,
   SelectionOverlay,
+  TextOverlay,
 } from "./components/CanvasOverlays";
 import { ArtboardMenu } from "./components/ArtboardMenu";
 import { Inspect, Review, ToolButton } from "./components/EditorChrome";
@@ -37,6 +39,7 @@ import type {
   Mode,
   NodeSummary,
   ShadowSummary,
+  TextStyleSummary,
 } from "./editor/types";
 import init, { DocumentEngine } from "./wasm/open_libra_scene_wasm";
 import {
@@ -71,7 +74,7 @@ export function App() {
   });
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
-  const [editingText, setEditingText] = useState(false);
+  const [editingTextId, setEditingTextId] = useState<string>();
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
   const [documentModel, setDocumentModel] = useState<DocumentReadModel>({
     schema_version: 1,
@@ -91,6 +94,15 @@ export function App() {
   const [rulersVisible, setRulersVisible] = useState(
     () => localStorage.getItem("open-libra-rulers") !== "hidden",
   );
+  const [gridVisible, setGridVisible] = useState(
+    () => localStorage.getItem("open-libra-grid") === "visible",
+  );
+  const [toolbarPosition, setToolbarPosition] = useState<"top" | "bottom">(
+    () =>
+      localStorage.getItem("open-libra-toolbar-position") === "bottom"
+        ? "bottom"
+        : "top",
+  );
   const nodesById = useMemo(
     () => new Map(documentModel.nodes.map((node) => [node.id, node])),
     [documentModel.nodes],
@@ -102,6 +114,9 @@ export function App() {
         .filter((node): node is NodeSummary => node !== undefined),
     [nodesById, selectedNodeIds],
   );
+  const editingTextNode = editingTextId
+    ? nodesById.get(editingTextId)
+    : undefined;
   const documentColors = useMemo(
     () => collectDocumentColors(documentModel),
     [documentModel],
@@ -234,7 +249,7 @@ export function App() {
     );
   }
 
-  function addNode(kind: "frame" | "rectangle") {
+  function addNode(kind: "frame" | "rectangle" | "text") {
     const engine = engineRef.current;
     if (!engine) return;
     const parentId = preferredArtboardId(
@@ -244,8 +259,11 @@ export function App() {
     const id =
       kind === "frame"
         ? engine.add_frame()
-        : engine.add_rectangle_to(parentId ?? "");
+        : kind === "text"
+          ? engine.add_text_to(parentId ?? "")
+          : engine.add_rectangle_to(parentId ?? "");
     refreshDocument([id]);
+    if (kind === "text") setEditingTextId(id);
   }
 
   function addArtboard(preset: (typeof ARTBOARD_PRESETS)[number]) {
@@ -426,6 +444,29 @@ export function App() {
     }
   }
 
+  function updateNodeText(node: NodeSummary, text: TextStyleSummary) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    try {
+      const bounds = measureTextBounds(node, text);
+      engine.begin_transaction();
+      const textChanged = engine.set_node_text(node.id, JSON.stringify(text));
+      const boundsChanged = bounds
+        ? engine.set_node_bounds(
+            node.id,
+            node.x,
+            node.y,
+            bounds.width,
+            bounds.height,
+          )
+        : false;
+      engine.end_transaction();
+      if (textChanged || boundsChanged) refreshDocument([node.id]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   function updateNodeTransform(
     node: NodeSummary,
     change: Partial<Pick<NodeSummary, "rotation" | "flip_x" | "flip_y">>,
@@ -573,10 +614,25 @@ export function App() {
       resetView: () => rendererRef.current?.resetView(),
       zoomToFit: () => rendererRef.current?.zoomToFit(),
       toggleRulers: () => setRulersVisible((visible) => !visible),
+      toggleGrid: () => setGridVisible((visible) => !visible),
       deleteSelection: deleteSelected,
       undo,
       redo,
       nudgeSelection: moveSelection,
+      beginTextEdit: (clientX, clientY) => {
+        const renderer = rendererRef.current;
+        const engine = engineRef.current;
+        if (!renderer || !engine) return;
+        const world = renderer.worldPointFromClient(clientX, clientY);
+        const id = engine.hit_test(world.x, world.y);
+        const node = documentModelRef.current?.nodes.find(
+          (item) => item.id === id,
+        );
+        if (node?.kind === "text" && !node.locked) {
+          applySelection([node.id]);
+          setEditingTextId(node.id);
+        }
+      },
     };
   }
 
@@ -726,6 +782,20 @@ export function App() {
     [rulersVisible],
   );
 
+  useEffect(
+    () => localStorage.setItem("open-libra-toolbar-position", toolbarPosition),
+    [toolbarPosition],
+  );
+
+  useEffect(
+    () =>
+      localStorage.setItem(
+        "open-libra-grid",
+        gridVisible ? "visible" : "hidden",
+      ),
+    [gridVisible],
+  );
+
   useEffect(() => {
     rendererRef.current?.setTool(canvasTool);
   }, [canvasTool]);
@@ -803,6 +873,30 @@ export function App() {
                   <span>Show rulers</span>
                   <kbd>⇧R</kbd>
                 </button>
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={gridVisible}
+                  onClick={() => setGridVisible((visible) => !visible)}
+                >
+                  <span className="menu-check">{gridVisible ? "✓" : ""}</span>
+                  <span>Show grid</span>
+                  <kbd>⇧G</kbd>
+                </button>
+                <div className="menu-section-label">Toolbar</div>
+                {(["top", "bottom"] as const).map((position) => (
+                  <button
+                    key={position}
+                    role="menuitemradio"
+                    aria-checked={toolbarPosition === position}
+                    onClick={() => setToolbarPosition(position)}
+                  >
+                    <span className="menu-check">
+                      {toolbarPosition === position ? "●" : ""}
+                    </span>
+                    <span>{position === "top" ? "Top" : "Bottom"}</span>
+                    <span />
+                  </button>
+                ))}
               </div>
             )}
           </div>
@@ -870,7 +964,9 @@ export function App() {
           />
         </aside>
 
-        <section className="stage">
+        <section
+          className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
+        >
           <div className="tool-rail" aria-label="Canvas tools">
             <ToolButton
               label="Select (V)"
@@ -902,6 +998,7 @@ export function App() {
               label="Text"
               icon={<Type />}
               disabled={mode !== "design"}
+              onClick={() => addNode("text")}
             />
             <ToolButton
               label="Comment"
@@ -922,25 +1019,43 @@ export function App() {
               ref={canvasRef}
               aria-label="Open Libra WebGPU editor canvas"
             />
+            {gridVisible && (
+              <CanvasGrid rendererRef={rendererRef} theme={theme} />
+            )}
             <ArtboardGuides
               rendererRef={rendererRef}
               nodes={documentModel.nodes}
               artboards={guidedArtboards}
             />
+            <TextOverlay
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
+              editingTextId={editingTextId}
+            />
             <SelectionOverlay
               rendererRef={rendererRef}
               selected={selectedNodes}
             />
-            {editingText && (
-              <input
-                className="text-spike"
-                defaultValue="Edit in the DOM, render in the engine"
+            {editingTextNode?.text && (
+              <textarea
+                className="text-editor-overlay"
+                defaultValue={editingTextNode.text.content}
                 autoFocus
-                onBlur={() => setEditingText(false)}
-                onKeyDown={(event) =>
-                  event.key === "Escape" && setEditingText(false)
+                wrap={
+                  editingTextNode.text.sizing === "auto_width" ? "off" : "soft"
                 }
-                aria-label="Text editing boundary experiment"
+                style={textEditorStyle(editingTextNode, rendererRef.current)}
+                onBlur={(event) => {
+                  updateNodeText(editingTextNode, {
+                    ...editingTextNode.text!,
+                    content: event.currentTarget.value,
+                  });
+                  setEditingTextId(undefined);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setEditingTextId(undefined);
+                }}
+                aria-label="Edit text content"
               />
             )}
             {error && (
@@ -992,6 +1107,7 @@ export function App() {
               onBoundsChange={updateNodeBounds}
               onOpacityChange={updateNodeOpacity}
               onShadowsChange={updateNodeShadows}
+              onTextChange={updateNodeText}
               onTransformChange={updateNodeTransform}
               onLayoutChange={updateNodeLayout}
               onWidthSizingChange={updateNodeWidthSizing}
@@ -1004,4 +1120,61 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function textEditorStyle(node: NodeSummary, renderer?: OpenLibraRenderer) {
+  const view = renderer?.getViewState() ?? { pan: { x: 0, y: 0 }, zoom: 1 };
+  const text = node.text!;
+  return {
+    left: node.x * view.zoom + view.pan.x,
+    top: node.y * view.zoom + view.pan.y,
+    width: node.width * view.zoom,
+    height: node.height * view.zoom,
+    fontFamily: text.font_family,
+    fontWeight: text.font_weight,
+    fontStyle: text.font_style,
+    fontSize: text.font_size * view.zoom,
+    lineHeight: text.line_height,
+    letterSpacing: text.letter_spacing * view.zoom,
+    textAlign: text.horizontal_align,
+    whiteSpace: text.sizing === "auto_width" ? "pre" : "pre-wrap",
+    overflow: text.sizing === "fixed" ? "auto" : "hidden",
+    color: rgbaToHex(node.fill),
+  } as const;
+}
+
+function measureTextBounds(node: NodeSummary, text: TextStyleSummary) {
+  if (text.sizing === "fixed") return undefined;
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return undefined;
+  context.font = `${text.font_style} ${text.font_weight} ${text.font_size}px ${JSON.stringify(text.font_family)}, sans-serif`;
+  const measure = (value: string) =>
+    context.measureText(value).width +
+    Math.max(0, value.length - 1) * text.letter_spacing;
+  let lines: string[];
+  if (text.sizing === "auto_width") {
+    lines = text.content.split("\n");
+  } else {
+    lines = [];
+    for (const paragraph of text.content.split("\n")) {
+      const words = paragraph.split(/\s+/);
+      let line = "";
+      for (const word of words) {
+        const candidate = line ? `${line} ${word}` : word;
+        if (line && measure(candidate) > node.width) {
+          lines.push(line);
+          line = word;
+        } else line = candidate;
+      }
+      lines.push(line);
+    }
+  }
+  return {
+    width:
+      text.sizing === "auto_width"
+        ? Math.max(8, ...lines.map(measure))
+        : node.width,
+    height: Math.max(8, lines.length * text.font_size * text.line_height),
+  };
 }

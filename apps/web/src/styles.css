@@ -1,4 +1,6 @@
 :root {
+  --control-height: 30px;
+  --ruler-size: 24px;
   color: #f3f4f7;
   background: #0f1013;
   font-family:
@@ -138,6 +140,14 @@ button {
   width: 14px;
   color: #82e6b8;
   font-weight: 800;
+}
+.menu-section-label {
+  padding: 8px 8px 3px 26px;
+  color: #777c87;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .mode-switcher {
   display: flex;
@@ -460,10 +470,16 @@ canvas[data-tool="hand"]:active {
   z-index: 2;
   pointer-events: none;
 }
-.artboard-guides {
+.canvas-grid {
   position: absolute;
   inset: 0;
   z-index: 1;
+  pointer-events: none;
+}
+.artboard-guides {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   pointer-events: none;
 }
 .rulers {
@@ -475,25 +491,25 @@ canvas[data-tool="hand"]:active {
 .horizontal-ruler {
   position: absolute;
   top: 0;
-  left: 24px;
-  width: calc(100% - 24px);
-  height: 24px;
+  left: var(--ruler-size);
+  width: calc(100% - var(--ruler-size));
+  height: var(--ruler-size);
   border-bottom: 1px solid #343740;
 }
 .vertical-ruler {
   position: absolute;
-  top: 24px;
+  top: var(--ruler-size);
   left: 0;
-  width: 24px;
-  height: calc(100% - 24px);
+  width: var(--ruler-size);
+  height: calc(100% - var(--ruler-size));
   border-right: 1px solid #343740;
 }
 .ruler-corner {
   position: absolute;
   top: 0;
   left: 0;
-  width: 24px;
-  height: 24px;
+  width: var(--ruler-size);
+  height: var(--ruler-size);
   border-right: 1px solid #343740;
   border-bottom: 1px solid #343740;
   background: #17181c;
@@ -511,6 +527,14 @@ canvas[data-tool="hand"]:active {
   background: #1b1d22ee;
   box-shadow: 0 7px 22px #0007;
   transform: translateX(-50%);
+  transition: top 0.15s ease;
+}
+.stage.with-rulers .tool-rail {
+  top: calc(var(--ruler-size) + 12px);
+}
+.stage.toolbar-bottom .tool-rail {
+  top: auto;
+  bottom: 12px;
 }
 .tool-rail button {
   display: grid;
@@ -547,6 +571,14 @@ canvas[data-tool="hand"]:active {
   background: #1c1e23f5;
   box-shadow: 0 14px 40px #000a;
   transform: translateX(-50%);
+}
+.stage.with-rulers .artboard-menu {
+  top: calc(var(--ruler-size) + 54px);
+}
+.stage.toolbar-bottom .artboard-menu,
+.stage.with-rulers.toolbar-bottom .artboard-menu {
+  top: auto;
+  bottom: 54px;
 }
 .artboard-menu-header {
   display: flex;
@@ -677,35 +709,62 @@ canvas[data-tool="hand"]:active {
 
 .segmented-control {
   display: grid;
-  gap: 6px;
-  margin-top: 10px;
+  grid-template-columns: 62px 1fr;
+  align-items: center;
+  gap: 0;
+  margin-top: 8px;
 }
 
 .segmented-control > span {
-  color: var(--muted);
-  font-size: 11px;
+  color: #8f949f;
+  font-size: 10px;
 }
 
 .segmented-control > div {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  gap: 3px;
+  gap: 4px;
 }
 
 .segmented-control button {
+  display: grid;
+  place-items: center;
   min-width: 0;
-  padding: 6px 4px;
+  height: var(--control-height);
+  padding: 0 4px;
+  border: 1px solid #343740;
+  border-radius: 5px;
+  color: #969ba5;
+  background: #202228;
   text-transform: capitalize;
 }
 
+.segmented-control button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.segmented-control button:hover {
+  border-color: #5a9d7d;
+  color: #c9f6df;
+  background: #24382f;
+}
+
 .segmented-control button.active {
-  background: var(--accent-soft);
-  color: var(--text);
+  border-color: #62b98f;
+  color: #82e6b8;
+  background: #24382f;
+}
+
+.segmented-control button:focus-visible {
+  outline: 2px solid #82e6b8;
+  outline-offset: 1px;
 }
 .color-swatch-button {
   width: 100%;
-  height: 25px;
+  height: var(--control-height);
   padding: 3px;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -722,7 +781,7 @@ canvas[data-tool="hand"]:active {
 .number-control input[type="number"] {
   min-width: 0;
   width: 100%;
-  height: 25px;
+  height: var(--control-height);
   padding: 3px 5px;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -829,7 +888,7 @@ canvas[data-tool="hand"]:active {
 }
 .custom-color-row input {
   width: 42px;
-  height: 25px;
+  height: var(--control-height);
   padding: 2px;
   border: 1px solid #3b3e46;
   border-radius: 5px;
@@ -848,7 +907,8 @@ canvas[data-tool="hand"]:active {
   margin: 3px 0 10px;
 }
 .library-actions button {
-  padding: 6px 4px;
+  height: var(--control-height);
+  padding: 0 4px;
   border: 1px solid #373a42;
   border-radius: 5px;
   color: #bfc3cb;
@@ -885,7 +945,7 @@ canvas[data-tool="hand"]:active {
 .geometry-input input {
   min-width: 0;
   width: 100%;
-  height: 28px;
+  height: var(--control-height);
   padding: 4px 6px;
   border: 0;
   outline: 0;
@@ -896,7 +956,7 @@ canvas[data-tool="hand"]:active {
 }
 .transform-controls {
   display: grid;
-  grid-template-columns: 1fr repeat(3, 30px);
+  grid-template-columns: 1fr repeat(3, var(--control-height));
   align-items: center;
   gap: 6px;
   margin-top: 7px;
@@ -905,7 +965,7 @@ canvas[data-tool="hand"]:active {
   display: grid;
   grid-template-columns: 20px 1fr;
   align-items: center;
-  height: 30px;
+  height: var(--control-height);
   box-sizing: border-box;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -920,7 +980,7 @@ canvas[data-tool="hand"]:active {
 .transform-controls input {
   min-width: 0;
   width: 100%;
-  height: 28px;
+  height: calc(var(--control-height) - 2px);
   padding: 0 5px;
   border: 0;
   outline: 0;
@@ -931,8 +991,8 @@ canvas[data-tool="hand"]:active {
 .transform-controls button {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: var(--control-height);
+  height: var(--control-height);
   box-sizing: border-box;
   padding: 0;
   border: 1px solid #343740;
@@ -964,7 +1024,7 @@ canvas[data-tool="hand"]:active {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 29px;
+  height: var(--control-height);
   padding: 0;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -990,7 +1050,7 @@ canvas[data-tool="hand"]:active {
   font-size: 10px;
 }
 .layout-select select {
-  height: 28px;
+  height: var(--control-height);
   padding: 0 6px;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -1008,7 +1068,7 @@ canvas[data-tool="hand"]:active {
 .layout-number-input input {
   min-width: 0;
   width: 100%;
-  height: 28px;
+  height: var(--control-height);
   box-sizing: border-box;
   padding: 4px 7px;
   border: 1px solid #343740;
@@ -1077,7 +1137,7 @@ canvas[data-tool="hand"]:active {
   gap: 4px;
 }
 .child-sizing button {
-  height: 28px;
+  height: var(--control-height);
   padding: 0;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -1115,7 +1175,7 @@ canvas[data-tool="hand"]:active {
 }
 .shadow-effect-header button,
 .shadow-effect-header select {
-  height: 26px;
+  height: var(--control-height);
   min-width: 0;
   border: 1px solid #343740;
   border-radius: 5px;
@@ -1149,7 +1209,7 @@ canvas[data-tool="hand"]:active {
 .alignment-controls button {
   display: grid;
   place-items: center;
-  height: 29px;
+  height: var(--control-height);
   border: 1px solid #343740;
   border-radius: 5px;
   color: #aeb2bb;
@@ -1185,7 +1245,8 @@ canvas[data-tool="hand"]:active {
 .secondary-button,
 .danger-button {
   margin: 10px 4px 0;
-  padding: 8px 11px;
+  height: var(--control-height);
+  padding: 0 11px;
   border-radius: 6px;
   font-size: 11px;
 }
@@ -1200,18 +1261,60 @@ canvas[data-tool="hand"]:active {
   color: #ffc9ce;
   background: #4a252a;
 }
-.text-spike {
+.text-editor-overlay {
   position: absolute;
-  top: 35%;
-  left: 35%;
-  width: 340px;
-  padding: 10px 12px;
+  z-index: 5;
+  box-sizing: border-box;
+  padding: 0;
   border: 2px solid #82e6b8;
-  border-radius: 4px;
   outline: none;
-  color: #16181d;
-  background: white;
-  box-shadow: 0 8px 30px #0008;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  transform-origin: center;
+}
+.text-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.text-content-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 78px;
+  padding: 8px;
+  border: 1px solid #343740;
+  border-radius: 5px;
+  color: inherit;
+  background: #24262c;
+  resize: vertical;
+}
+.select-control {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.select-control select {
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 6px;
+  border: 1px solid #343740;
+  border-radius: 4px;
+  color: inherit;
+  background: #24262c;
+}
+.typography-number-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.typography-number-grid .number-control,
+.typography-number-grid .select-control {
+  grid-template-columns: 48px 1fr;
 }
 .error-card {
   position: absolute;
@@ -1352,6 +1455,30 @@ canvas[data-tool="hand"]:active {
 }
 :root[data-theme="light"] .property-section summary {
   color: #292c33;
+}
+:root[data-theme="light"] .segmented-control > span {
+  color: #676d78;
+}
+:root[data-theme="light"] .segmented-control button {
+  border-color: #d5d8de;
+  color: #4f5560;
+  background: #fff;
+}
+:root[data-theme="light"] .segmented-control button:hover {
+  border-color: #aeb4bd;
+  color: #202229;
+  background: #f0f2f5;
+}
+:root[data-theme="light"] .segmented-control button.active {
+  border-color: #62b98f;
+  color: #195f40;
+  background: #dff5e9;
+}
+:root[data-theme="light"] .text-content-input,
+:root[data-theme="light"] .select-control select {
+  border-color: #d5d8de;
+  color: #252830;
+  background: #fff;
 }
 :root[data-theme="light"] .geometry-input,
 :root[data-theme="light"] .hex-input,
