@@ -43,8 +43,8 @@ impl NodeStyleState {
 
 #[derive(Clone, PartialEq)]
 struct NodeGeometryState {
-    id: u64,
-    parent_id: Option<u64>,
+    id: EntityId,
+    parent_id: Option<EntityId>,
     x: f32,
     y: f32,
     width: f32,
@@ -87,12 +87,12 @@ impl NodeGeometryState {
 enum HistoryEntry {
     Document(Document),
     NodeStyle {
-        page_id: u64,
-        node_id: u64,
+        page_id: EntityId,
+        node_id: EntityId,
         style: NodeStyleState,
     },
     Geometry {
-        page_id: u64,
+        page_id: EntityId,
         nodes: Vec<NodeGeometryState>,
     },
 }
@@ -187,26 +187,26 @@ impl DocumentEngine {
         serde_json::to_string_pretty(&self.document).expect("document is serializable")
     }
 
-    pub fn node_json(&self, node_id: u64) -> String {
+    pub fn node_json(&self, node_id: EntityId) -> String {
         self.document
             .active_node(node_id)
             .and_then(|node| serde_json::to_string(node).ok())
             .unwrap_or_default()
     }
 
-    pub fn add_rectangle(&mut self) -> u64 {
+    pub fn add_rectangle(&mut self) -> EntityId {
         self.mutate(|document| document.add_node(NodeKind::Rectangle))
     }
 
-    pub fn add_rectangle_to(&mut self, parent_id: u64) -> u64 {
+    pub fn add_rectangle_to(&mut self, parent_id: EntityId) -> EntityId {
         self.mutate(|document| document.add_rectangle_to((parent_id != 0).then_some(parent_id)))
     }
 
-    pub fn add_frame(&mut self) -> u64 {
+    pub fn add_frame(&mut self) -> EntityId {
         self.mutate(|document| document.add_node(NodeKind::Frame))
     }
 
-    pub fn add_artboard(&mut self, name: String, width: f32, height: f32) -> Result<u64, JsValue> {
+    pub fn add_artboard(&mut self, name: String, width: f32, height: f32) -> Result<EntityId, JsValue> {
         if !width.is_finite()
             || !height.is_finite()
             || width < 1.0
@@ -221,24 +221,24 @@ impl DocumentEngine {
         Ok(self.mutate(|document| document.add_artboard(name, width, height)))
     }
 
-    pub fn add_page(&mut self, name: String) -> u64 {
+    pub fn add_page(&mut self, name: String) -> EntityId {
         self.mutate(|document| document.add_page(name))
     }
 
-    pub fn set_active_page(&mut self, page_id: u64) -> bool {
+    pub fn set_active_page(&mut self, page_id: EntityId) -> bool {
         self.document.set_active_page(page_id)
     }
 
-    pub fn delete_node(&mut self, node_id: u64) -> bool {
+    pub fn delete_node(&mut self, node_id: EntityId) -> bool {
         self.mutate(|document| document.delete_node(node_id))
     }
 
-    pub fn rename_node(&mut self, node_id: u64, name: String) -> bool {
+    pub fn rename_node(&mut self, node_id: EntityId, name: String) -> bool {
         self.mutate(|document| document.rename_node(node_id, name))
     }
 
-    pub fn group_nodes(&mut self, node_ids_json: &str) -> Result<u64, JsValue> {
-        let node_ids: Vec<u64> = serde_json::from_str(node_ids_json)
+    pub fn group_nodes(&mut self, node_ids_json: &str) -> Result<EntityId, JsValue> {
+        let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
         self.mutate(|document| document.group_nodes(&node_ids))
             .ok_or_else(|| {
@@ -247,24 +247,24 @@ impl DocumentEngine {
     }
 
     pub fn move_nodes(&mut self, node_ids_json: &str, dx: f32, dy: f32) -> Result<bool, JsValue> {
-        let node_ids: Vec<u64> = serde_json::from_str(node_ids_json)
+        let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
         Ok(self.mutate(|document| document.move_nodes(&node_ids, dx, dy)))
     }
 
-    pub fn reorder_node(&mut self, dragged_id: u64, target_id: u64, before: bool) -> bool {
+    pub fn reorder_node(&mut self, dragged_id: EntityId, target_id: EntityId, before: bool) -> bool {
         self.mutate(|document| document.reorder_node(dragged_id, target_id, before))
     }
 
     pub fn reparent_nodes_to_artboards(&mut self, node_ids_json: &str) -> Result<bool, JsValue> {
-        let node_ids: Vec<u64> = serde_json::from_str(node_ids_json)
+        let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
         Ok(self.mutate(|document| document.reparent_nodes_to_artboards(&node_ids)))
     }
 
     pub fn set_node_style(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         fill_hex: String,
         stroke_hex: String,
         stroke_width: f32,
@@ -307,19 +307,19 @@ impl DocumentEngine {
         Ok(changed)
     }
 
-    pub fn resize_node(&mut self, node_id: u64, handle: String, dx: f32, dy: f32) -> bool {
+    pub fn resize_node(&mut self, node_id: EntityId, handle: String, dx: f32, dy: f32) -> bool {
         self.mutate(|document| document.resize_node(node_id, &handle, dx, dy))
     }
 
-    pub fn set_node_locked(&mut self, node_id: u64, locked: bool) -> bool {
+    pub fn set_node_locked(&mut self, node_id: EntityId, locked: bool) -> bool {
         self.mutate(|document| document.set_node_locked(node_id, locked))
     }
 
-    pub fn set_node_opacity(&mut self, node_id: u64, opacity: f32) -> bool {
+    pub fn set_node_opacity(&mut self, node_id: EntityId, opacity: f32) -> bool {
         self.mutate(|document| document.set_node_opacity(node_id, opacity))
     }
 
-    pub fn set_node_shadows(&mut self, node_id: u64, shadows_json: &str) -> Result<bool, JsValue> {
+    pub fn set_node_shadows(&mut self, node_id: EntityId, shadows_json: &str) -> Result<bool, JsValue> {
         let shadows: Vec<Shadow> = serde_json::from_str(shadows_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid shadows: {error}")))?;
         Ok(self.mutate(|document| document.set_node_shadows(node_id, shadows)))
@@ -327,7 +327,7 @@ impl DocumentEngine {
 
     pub fn set_node_transform(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         rotation: f32,
         flip_x: bool,
         flip_y: bool,
@@ -335,9 +335,12 @@ impl DocumentEngine {
         self.mutate(|document| document.set_node_transform(node_id, rotation, flip_x, flip_y))
     }
 
+    // Keep scalar arguments at the WASM boundary so JavaScript callers do not
+    // need to construct or serialize a Rust-specific layout type.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_node_layout(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         mode: String,
         align: String,
         justify: String,
@@ -374,7 +377,7 @@ impl DocumentEngine {
         })
     }
 
-    pub fn set_node_width_sizing(&mut self, node_id: u64, sizing: String) -> bool {
+    pub fn set_node_width_sizing(&mut self, node_id: EntityId, sizing: String) -> bool {
         let sizing = if sizing == "fill" {
             LayoutSizing::Fill
         } else {
@@ -383,13 +386,13 @@ impl DocumentEngine {
         self.mutate(|document| document.set_node_width_sizing(node_id, sizing))
     }
 
-    pub fn set_node_auto_height(&mut self, node_id: u64, auto_height: bool) -> bool {
+    pub fn set_node_auto_height(&mut self, node_id: EntityId, auto_height: bool) -> bool {
         self.mutate(|document| document.set_node_auto_height(node_id, auto_height))
     }
 
     pub fn set_artboard_guide(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         mode: String,
         count: u32,
         gap: f32,
@@ -408,21 +411,21 @@ impl DocumentEngine {
         }))
     }
 
-    pub fn add_document_color(&mut self, name: String, color_hex: String) -> Result<u64, JsValue> {
+    pub fn add_document_color(&mut self, name: String, color_hex: String) -> Result<EntityId, JsValue> {
         let color = normalize_hex_color(&color_hex)
             .ok_or_else(|| JsValue::from_str("Document color must be a six-digit hex color"))?;
         Ok(self.mutate(|document| document.add_document_color(name, color)))
     }
 
     pub fn align_nodes(&mut self, node_ids_json: &str, alignment: String) -> Result<bool, JsValue> {
-        let node_ids: Vec<u64> = serde_json::from_str(node_ids_json)
+        let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
         Ok(self.mutate(|document| document.align_nodes(&node_ids, &alignment)))
     }
 
     pub fn set_node_bounds(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         x: f32,
         y: f32,
         width: f32,
@@ -441,14 +444,14 @@ impl DocumentEngine {
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             return Ok(());
         }
-        let node_ids: Vec<u64> = serde_json::from_str(node_ids_json)
+        let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
         if self.document.active_page().benchmark_node_count.is_none() {
             self.begin_transaction();
             return Ok(());
         }
         let page_id = self.document.active_page_id;
-        let selected: std::collections::HashSet<u64> = node_ids.iter().copied().collect();
+        let selected: std::collections::HashSet<EntityId> = node_ids.iter().copied().collect();
         let includes_group = node_ids.iter().any(|id| {
             self.document
                 .active_node(*id)
@@ -489,11 +492,11 @@ impl DocumentEngine {
     }
 
     pub fn end_transaction(&mut self) {
-        if let Some(before) = self.transaction_start.take() {
-            if before != self.document {
-                self.push_undo(HistoryEntry::Document(before));
-                self.redo_stack.clear();
-            }
+        if let Some(before) = self.transaction_start.take()
+            && before != self.document
+        {
+            self.push_undo(HistoryEntry::Document(before));
+            self.redo_stack.clear();
         }
         if let Some(entry @ HistoryEntry::Geometry { .. }) = self.geometry_transaction_start.take()
         {
@@ -548,7 +551,7 @@ impl DocumentEngine {
     }
 
     /// Returns the topmost renderable node under a world-space point, or zero.
-    pub fn hit_test(&self, x: f32, y: f32) -> u64 {
+    pub fn hit_test(&self, x: f32, y: f32) -> EntityId {
         if let Some(hit) = self.document.benchmark_hit_test(x, y) {
             return hit;
         }

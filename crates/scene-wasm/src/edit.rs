@@ -3,8 +3,8 @@ use crate::*;
 use std::collections::HashSet;
 
 impl Document {
-    pub(crate) fn group_nodes(&mut self, node_ids: &[u64]) -> Option<u64> {
-        let unique: HashSet<u64> = node_ids.iter().copied().collect();
+    pub(crate) fn group_nodes(&mut self, node_ids: &[EntityId]) -> Option<EntityId> {
+        let unique: HashSet<EntityId> = node_ids.iter().copied().collect();
         if unique.len() < 2 {
             return None;
         }
@@ -57,7 +57,7 @@ impl Document {
         Some(group_id)
     }
 
-    pub(crate) fn move_nodes(&mut self, node_ids: &[u64], dx: f32, dy: f32) -> bool {
+    pub(crate) fn move_nodes(&mut self, node_ids: &[EntityId], dx: f32, dy: f32) -> bool {
         let can_use_benchmark_fast_path = self.active_page().benchmark_node_count.is_some()
             && node_ids.iter().all(|id| {
                 self.active_node(*id)
@@ -65,12 +65,9 @@ impl Document {
             });
         if can_use_benchmark_fast_path {
             let page = self.active_page_mut();
-            let Some(first_id) = page.nodes.first().map(|node| node.id) else {
-                return false;
-            };
             let indices: Vec<_> = node_ids
                 .iter()
-                .filter_map(|id| id.checked_sub(first_id).map(|index| index as usize))
+                .filter_map(|id| page.nodes.iter().position(|node| node.id == *id))
                 .collect();
             if indices.len() != node_ids.len()
                 || indices
@@ -90,7 +87,7 @@ impl Document {
             }
             return !node_ids.is_empty();
         }
-        let roots: HashSet<u64> = node_ids.iter().copied().collect();
+        let roots: HashSet<EntityId> = node_ids.iter().copied().collect();
         if roots.is_empty() {
             return false;
         }
@@ -134,7 +131,7 @@ impl Document {
 
     pub(crate) fn set_node_style(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         fill: [f32; 4],
         stroke: [f32; 4],
         stroke_width: f32,
@@ -153,7 +150,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn resize_node(&mut self, node_id: u64, handle: &str, dx: f32, dy: f32) -> bool {
+    pub(crate) fn resize_node(&mut self, node_id: EntityId, handle: &str, dx: f32, dy: f32) -> bool {
         self.mark_benchmark_node_modified(node_id);
         let Some(node) = self.active_node_mut(node_id) else {
             return false;
@@ -229,7 +226,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn set_node_locked(&mut self, node_id: u64, locked: bool) -> bool {
+    pub(crate) fn set_node_locked(&mut self, node_id: EntityId, locked: bool) -> bool {
         let Some(node) = self.active_node_mut(node_id) else {
             return false;
         };
@@ -237,7 +234,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn set_node_opacity(&mut self, node_id: u64, opacity: f32) -> bool {
+    pub(crate) fn set_node_opacity(&mut self, node_id: EntityId, opacity: f32) -> bool {
         if !opacity.is_finite() {
             return false;
         }
@@ -256,7 +253,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn set_node_shadows(&mut self, node_id: u64, mut shadows: Vec<Shadow>) -> bool {
+    pub(crate) fn set_node_shadows(&mut self, node_id: EntityId, mut shadows: Vec<Shadow>) -> bool {
         let Some(node) = self
             .active_page_mut()
             .nodes
@@ -291,7 +288,7 @@ impl Document {
 
     pub(crate) fn set_node_transform(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         rotation: f32,
         flip_x: bool,
         flip_y: bool,
@@ -314,7 +311,7 @@ impl Document {
 
     pub(crate) fn set_node_layout(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         mode: LayoutMode,
         align: LayoutAlign,
         justify: LayoutAlign,
@@ -344,7 +341,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn set_node_width_sizing(&mut self, node_id: u64, sizing: LayoutSizing) -> bool {
+    pub(crate) fn set_node_width_sizing(&mut self, node_id: EntityId, sizing: LayoutSizing) -> bool {
         let parent_id = {
             let Some(node) = self
                 .active_page_mut()
@@ -366,7 +363,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn set_node_auto_height(&mut self, node_id: u64, auto_height: bool) -> bool {
+    pub(crate) fn set_node_auto_height(&mut self, node_id: EntityId, auto_height: bool) -> bool {
         let Some(node) = self
             .active_page_mut()
             .nodes
@@ -388,7 +385,7 @@ impl Document {
 
     pub(crate) fn set_artboard_guide(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         mode: GuideMode,
         count: u32,
         gap: f32,
@@ -417,8 +414,8 @@ impl Document {
         true
     }
 
-    pub(crate) fn align_nodes(&mut self, node_ids: &[u64], alignment: &str) -> bool {
-        let ids: HashSet<u64> = node_ids.iter().copied().collect();
+    pub(crate) fn align_nodes(&mut self, node_ids: &[EntityId], alignment: &str) -> bool {
+        let ids: HashSet<EntityId> = node_ids.iter().copied().collect();
         let selected: Vec<_> = self
             .active_page()
             .nodes
@@ -464,7 +461,7 @@ impl Document {
 
     pub(crate) fn set_node_bounds(
         &mut self,
-        node_id: u64,
+        node_id: EntityId,
         x: f32,
         y: f32,
         width: f32,
@@ -496,7 +493,7 @@ impl Document {
         true
     }
 
-    pub(crate) fn reorder_node(&mut self, dragged_id: u64, target_id: u64, before: bool) -> bool {
+    pub(crate) fn reorder_node(&mut self, dragged_id: EntityId, target_id: EntityId, before: bool) -> bool {
         if dragged_id == target_id {
             return false;
         }
@@ -538,8 +535,8 @@ impl Document {
         true
     }
 
-    pub(crate) fn reparent_nodes_to_artboards(&mut self, node_ids: &[u64]) -> bool {
-        let selected: HashSet<u64> = node_ids.iter().copied().collect();
+    pub(crate) fn reparent_nodes_to_artboards(&mut self, node_ids: &[EntityId]) -> bool {
+        let selected: HashSet<EntityId> = node_ids.iter().copied().collect();
         let artboards: Vec<Node> = self
             .active_page()
             .nodes
@@ -551,7 +548,7 @@ impl Document {
             })
             .cloned()
             .collect();
-        let changes: Vec<(u64, Option<u64>, Option<u64>)> = self
+        let changes: Vec<(EntityId, Option<EntityId>, Option<EntityId>)> = self
             .active_page()
             .nodes
             .iter()
@@ -581,7 +578,7 @@ impl Document {
                 node.parent_id = *target;
             }
         }
-        let affected: HashSet<u64> = changes
+        let affected: HashSet<EntityId> = changes
             .iter()
             .flat_map(|(_, old, new)| [*old, *new])
             .flatten()

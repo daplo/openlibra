@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+pub(crate) type EntityId = Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Document {
     pub(crate) schema_version: u32,
-    pub(crate) next_id: u64,
-    pub(crate) active_page_id: u64,
+    pub(crate) active_page_id: EntityId,
     pub(crate) pages: Vec<Page>,
     #[serde(default)]
     pub(crate) color_library: Vec<ColorAsset>,
@@ -12,14 +14,14 @@ pub struct Document {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ColorAsset {
-    pub(crate) id: u64,
+    pub(crate) id: EntityId,
     pub(crate) name: String,
     pub(crate) value: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Page {
-    pub(crate) id: u64,
+    pub(crate) id: EntityId,
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) description: String,
@@ -27,15 +29,15 @@ pub struct Page {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) benchmark_node_count: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) benchmark_modified_node_ids: Vec<u64>,
+    pub(crate) benchmark_modified_node_ids: Vec<EntityId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Node {
-    pub(crate) id: u64,
+    pub(crate) id: EntityId,
     pub(crate) name: String,
     pub(crate) kind: NodeKind,
-    pub(crate) parent_id: Option<u64>,
+    pub(crate) parent_id: Option<EntityId>,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) width: f32,
@@ -155,7 +157,7 @@ pub enum NodeKind {
 #[derive(Serialize)]
 pub(crate) struct DocumentReadModel<'a> {
     pub(crate) schema_version: u32,
-    pub(crate) active_page_id: u64,
+    pub(crate) active_page_id: EntityId,
     pub(crate) pages: Vec<PageSummary<'a>>,
     pub(crate) nodes: &'a [Node],
     pub(crate) document_colors: &'a [ColorAsset],
@@ -163,7 +165,7 @@ pub(crate) struct DocumentReadModel<'a> {
 
 #[derive(Serialize)]
 pub(crate) struct PageSummary<'a> {
-    pub(crate) id: u64,
+    pub(crate) id: EntityId,
     pub(crate) name: &'a str,
     pub(crate) description: &'a str,
 }

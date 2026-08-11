@@ -1,6 +1,7 @@
 {
   "name": "open-libra",
   "private": true,
+  "type": "module",
   "workspaces": [
     "apps/web"
   ],
@@ -8,12 +9,25 @@
     "build": "npm run build:wasm && npm run build --workspace @open-libra/web",
     "build:wasm": "wasm-pack build crates/scene-wasm --target web --out-dir ../../apps/web/src/wasm",
     "dev": "npm run build:wasm && npm run dev --workspace @open-libra/web",
+    "benchmark:browser": "node scripts/measure-performance.mjs",
+    "check": "npm run format && npm run lint && npm test && npm run test:ui",
+    "format": "cargo fmt --all --check && prettier --check apps/web/src scripts *.js *.json *.md docs",
+    "lint": "npm run lint:rust && npm run lint:web",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "lint:web": "eslint apps/web/src --max-warnings=0",
     "test": "cargo test --workspace && npm run typecheck --workspace @open-libra/web",
-    "format": "cargo fmt --all --check",
+    "test:ui": "npm run build && node scripts/ui-tests.mjs",
     "typecheck": "npm run typecheck --workspace @open-libra/web"
   },
   "devDependencies": {
-    "playwright-core": "^1.62.1"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.9.0",
+    "playwright-core": "^1.62.1",
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.67.0"
   },
   "dependencies": {
     "lucide-react": "^1.31.0"

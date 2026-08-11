@@ -1,7 +1,7 @@
 use crate::*;
 
 impl Document {
-    pub(crate) fn relayout_container(&mut self, node_id: u64) {
+    pub(crate) fn relayout_container(&mut self, node_id: EntityId) {
         let Some(mut container) = self
             .active_page()
             .nodes
@@ -15,7 +15,7 @@ impl Document {
             return;
         }
         let [top, right, bottom, left] = container.layout_padding;
-        let children: Vec<(u64, f32, f32, LayoutSizing)> = self
+        let children: Vec<(EntityId, f32, f32, LayoutSizing)> = self
             .active_page()
             .nodes
             .iter()

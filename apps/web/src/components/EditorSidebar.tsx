@@ -144,6 +144,11 @@ export function Panel({
       <div className="layer-branch" key={node.id}>
         <div
           data-layer-editor={node.id}
+          data-testid={`layer-node-${node.id}`}
+          data-node-id={node.id}
+          data-node-kind={node.kind}
+          data-selected={selectedNodeIds.includes(node.id)}
+          data-locked={node.locked}
           className={`layer-row ${selectedNodeIds.includes(node.id) ? "selected" : ""} ${node.locked ? "locked" : ""} ${dropTarget?.id === node.id ? (dropTarget.before ? "drop-before" : "drop-after") : ""}`}
           style={{ paddingLeft: 5 + depth * 14 }}
           draggable={!node.locked && editingNodeId !== node.id}
@@ -290,6 +295,9 @@ export function Panel({
         {model.pages.map((page) => (
           <button
             key={page.id}
+            data-testid={`page-node-${page.id}`}
+            data-page-id={page.id}
+            data-active={page.id === model.active_page_id}
             className={`page-row ${page.id === model.active_page_id ? "active" : ""}`}
             onClick={() => onSelectPage(page.id)}
             title={page.description || page.name}

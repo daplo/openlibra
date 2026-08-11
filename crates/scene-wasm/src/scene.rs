@@ -86,8 +86,8 @@ fn append_node_scene(scene: &mut Vec<f32>, node: &Node) {
 
 pub(crate) fn ordered_nodes(page: &Page) -> Vec<&Node> {
     fn append_children<'a>(
-        children: &HashMap<Option<u64>, Vec<&'a Node>>,
-        parent_id: Option<u64>,
+        children: &HashMap<Option<EntityId>, Vec<&'a Node>>,
+        parent_id: Option<EntityId>,
         ordered: &mut Vec<&'a Node>,
     ) {
         for &node in children.get(&parent_id).into_iter().flatten() {
@@ -95,7 +95,7 @@ pub(crate) fn ordered_nodes(page: &Page) -> Vec<&Node> {
             append_children(children, Some(node.id), ordered);
         }
     }
-    let mut children: HashMap<Option<u64>, Vec<&Node>> = HashMap::new();
+    let mut children: HashMap<Option<EntityId>, Vec<&Node>> = HashMap::new();
     for node in &page.nodes {
         children.entry(node.parent_id).or_default().push(node);
     }

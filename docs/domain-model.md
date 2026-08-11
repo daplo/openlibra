@@ -82,8 +82,11 @@ Initial payload families include creating/deleting nodes, setting node propertie
 - IDs are globally unique and never reused.
 - The page/node ownership graph is acyclic.
 - A node belongs to exactly one page and at most one parent.
+- A parent belongs to the same page and must be a frame or group.
+- Deleting a container deletes its complete descendant subtree.
 - Child ordering is deterministic.
 - Token and asset references are by stable ID.
 - Missing external resources degrade predictably instead of corrupting a document.
 - Unknown schema fields survive a read/write cycle when feasible.
 - Serialized documents carry an explicit schema version.
+- Invalid ownership graphs are rejected when a document is loaded.

@@ -11,7 +11,7 @@ Goal: remove the largest technical unknowns before building the application.
 - [x] Create a minimal Rust crate compiled to WebAssembly
 - [x] Create a minimal TypeScript/React application that loads the WASM module
 - [x] Initialize WebGPU and draw rectangles from Rust-owned scene data
-- [ ] Render 1,000 simple objects and record frame time on the reference laptop
+- [x] Render 1,000 simple objects and record frame time on the reference laptop
 - [x] Implement pan and zoom in the spike
 - [x] Measure batched scene creation and GPU upload traffic across the WASM boundary
 - [x] Spike the DOM-overlay text-editing boundary
@@ -27,12 +27,12 @@ Goal: create the application structure in which every later capability will live
 ### Todos
 
 - [x] Establish the Rust workspace and frontend package structure
-- [ ] Add reproducible development, build, formatting, linting, and test commands
+- [x] Add reproducible development, build, formatting, linting, and test commands
 - [x] Build the editor shell with toolbar, left panel, canvas, and right panel
 - [x] Add Design, Developer, and Review mode switching
 - [x] Add a full-window WebGPU canvas with resize and device-loss reporting
 - [x] Implement viewport coordinates, pan, zoom, reset, and zoom-to-fit
-- [ ] Route pointer and keyboard input through one input layer
+- [x] Route pointer and keyboard input through one input layer
 - [x] Add diagnostics for FPS, visible objects, scene creation, upload, and render time
 - [x] Add renderer errors and an unsupported-browser message
 
@@ -48,7 +48,7 @@ Goal: make a versioned Rust document the single source of truth.
 - [x] Implement documents containing multiple named pages
 - [x] Define node types for frames, groups, rectangles, and text placeholders
 - [x] Store parent relationships in deterministic document order
-- [ ] Enforce acyclic trees and page-ownership invariants
+- [x] Enforce acyclic trees and page-ownership invariants
 - [x] Build a retained render scene from the active page
 - [ ] Add viewport culling and object-level dirty tracking
 - [x] Build the Pages and Layers panels from engine read models
@@ -114,16 +114,20 @@ Goal: make reusable design-system values part of the document model.
 
 Exit criterion: changing a token updates every consuming node, and a small interface can be built without duplicating its core visual values.
 
-## Level 7: persist documents in the cloud
+## Level 7: establish local-first ownership and optional cloud persistence
 
-Goal: move from a local editor prototype to a recoverable cloud product.
+Goal: make the local project file the durable source of ownership while allowing users to opt into recoverable cloud persistence.
 
 ### Todos
 
+- [ ] Define a versioned, documented `.libra` project container with structured document data and bundled or referenced assets
+- [ ] Open, save, duplicate, and recover projects from the local filesystem without an account or network connection
+- [ ] Make local editing and standard export continue to work when cloud access or a subscription is unavailable
+- [ ] Define a storage-provider boundary so document persistence is independent of collaboration transport
 - [ ] Create the Rust HTTP/WebSocket backend as a modular monolith
 - [ ] Add development authentication with a clear path to a production provider
 - [ ] Model users, workspaces, memberships, and documents in PostgreSQL
-- [ ] Add create, list, rename, open, and archive document APIs
+- [ ] Add opt-in publish, list, rename, open, download, and archive document APIs
 - [ ] Store document snapshots and revision metadata
 - [ ] Add autosave with visible saving, saved, and error states
 - [ ] Prevent accidental overwrites with revision checks
@@ -131,7 +135,7 @@ Goal: move from a local editor prototype to a recoverable cloud product.
 - [ ] Add recovery from the latest valid snapshot
 - [ ] Create local development infrastructure and seed data
 
-Exit criterion: an authenticated user can create a document, edit it, close the browser, and later recover the same document from the server.
+Exit criterion: a user can create, close, reopen, and export a local project without an account, then optionally publish it and recover the same project from the server without surrendering the downloadable source file.
 
 ## Level 8: add real-time multiplayer
 
@@ -163,13 +167,17 @@ Goal: close the feedback loop around the shared design artifact.
 - [ ] Show comment activity in real time
 - [ ] Make Review mode navigation-focused and editing-safe
 - [ ] Add share permissions for owner/editor/viewer-commenter
+- [ ] Define a forge-integration boundary for GitHub, GitLab, and compatible issue trackers
+- [ ] Allow an authorized user to promote a comment thread into a linked repository issue
+- [ ] Include the stable page/node anchor, project revision, review URL, and optional screenshot in a promoted issue
+- [ ] Reflect linked issue status on the comment without making the issue tracker the source of truth for document state
 - [ ] Build Developer mode inspection for bounds, spacing, layout, and constraints
 - [ ] Display resolved token names and values
 - [ ] Produce copyable CSS-like values for the selected node
 - [ ] Add asset metadata and an initial download action where applicable
 - [ ] Verify that modes change tools without creating separate document state
 
-Exit criterion: a reviewer can leave anchored feedback while another user edits, and a developer can inspect a selected screen without entering Design mode.
+Exit criterion: a reviewer can leave anchored feedback while another user edits, an authorized user can promote that feedback into a traceable repository issue, and a developer can inspect a selected screen without entering Design mode.
 
 ## Level 10: add reusable assets and harden the MVP
 
@@ -185,13 +193,45 @@ Goal: demonstrate the component-library direction and make the complete vertical
 - [ ] Define export recipes by format, scale, density, theme, platform, and state
 - [ ] Implement one end-to-end export path, such as PNG at 1x and 2x
 - [ ] Prototype publishing a component/token set as a versioned library
+- [ ] Export a read-only static review bundle that can run on any static host
+- [ ] Add an initial GitHub Pages publishing workflow for public Community projects
+- [ ] Support a public review path that opens a prepared GitHub Issue without embedding repository credentials in the published site
 - [ ] Add an onboarding sample document demonstrating all MVP workflows
 - [ ] Run accessibility, error recovery, and unsupported-state passes
 - [ ] Meet the 1,000-visible-object interaction target on the reference laptop
 - [ ] Add end-to-end tests for the primary success scenario
 - [ ] Deploy a private MVP environment with logging, backups, and basic monitoring
 
-Exit criterion: an invited product team can create a responsive token-driven design, reuse a component and image, collaborate, comment, inspect implementation values, export an asset, and recover the cloud document in a later session.
+Exit criterion: an invited product team can create a responsive token-driven design, reuse a component and image, collaborate, comment, inspect implementation values, export an asset, recover the project locally or from the cloud, and publish a public static review build through GitHub Pages.
+
+## Distribution, hosting, and ownership direction
+
+Open Libra follows an ownership-first model: local creation is a complete Community workflow, and hosted services provide optional privacy, collaboration, reliability, and convenience.
+
+### Community edition
+
+- The downloadable application works locally without requiring an account
+- Users retain ordinary project files in a documented, versioned format
+- Public projects can be exported to any static host and published through GitHub Pages
+- GitHub-connected reviewers can turn anchored feedback into repository issues
+- The collaboration and storage services are designed to be self-hostable
+- Storage adapters should prioritize local files, S3-compatible object storage, and WebDAV; traditional FTP is not a primary target
+
+### Open Libra Cloud
+
+- Users can explicitly publish a local project to a managed account
+- Private, invitation-only review does not require clients to use GitHub
+- Managed hosting provides real-time collaboration, version history, backups, storage, and issue synchronization
+- A user can download the native project at any time
+- Ending a subscription disables paid services, not access to local files or core export
+
+### Enterprise and private deployment
+
+- Organizations can self-host the Community services or purchase a managed private deployment
+- Future enterprise work may include SSO, audit logs, retention controls, regional or customer-owned storage, support, and service guarantees
+- Document storage remains separable from the collaboration service so an organization can retain files in infrastructure it controls
+
+The intended product boundary is: public collaboration can remain free through static hosting and repository issues; private collaboration can be self-hosted or purchased from Open Libra Cloud.
 
 ## Definition of done for every level
 
@@ -204,4 +244,4 @@ Exit criterion: an invited product team can create a responsive token-driven des
 
 ## MVP boundaries
 
-The ten levels do not include full vector illustration, Figma import, interactive prototypes, offline-first editing, production billing and organization administration, complete component-to-code mapping, or guaranteed Safari/Firefox/tablet support. These remain post-MVP work unless a technical spike shows they must influence the foundational model.
+The ten levels do not include full vector illustration, Figma import, interactive prototypes, seamless offline-to-online collaborative synchronization, production billing and organization administration, production-ready multi-provider self-hosting, enterprise compliance features, complete component-to-code mapping, or guaranteed Safari/Firefox/tablet support. These remain post-MVP work unless a technical spike shows they must influence the foundational model. Local file ownership and account-free editing are foundational MVP requirements rather than post-MVP features.

@@ -53,6 +53,12 @@ The shell should own:
 - Network connection lifecycle
 - Translating UI intent into engine commands
 
+Canvas pointer and wheel events plus global editor shortcuts enter through one
+`EditorInputController`. It owns browser listener lifecycles, ignores shortcuts
+while editable controls have focus, and routes normalized intent to the renderer
+or engine-facing application callbacks. Component-local form and outside-click
+handlers remain with their components.
+
 React state may cache read models for presentation, but it must not become a second editable copy of the design document.
 
 ### Rendering
@@ -123,6 +129,7 @@ docs/
 
 - Rust/WASM owns client-side document truth.
 - React/TypeScript owns the application UI.
+- One TypeScript input controller owns canvas gestures and editor shortcuts.
 - WebGPU is the first rendering backend.
 - The product is cloud-first, not offline-first.
 - The collaboration server establishes operation order.

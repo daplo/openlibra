@@ -22,6 +22,10 @@ import { Panel } from "./components/EditorSidebar";
 import { Properties } from "./components/PropertiesPanel";
 import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
 import {
+  EditorInputController,
+  type EditorInputHandlers,
+} from "./editor/input";
+import {
   collectDocumentColors,
   findSelectedAncestor,
   hexToRgb,
@@ -39,7 +43,6 @@ import {
   OpenLibraRenderer,
   type CanvasTool,
   type ColorTheme,
-  type RenderStats,
   type ResizeHandle,
 } from "./renderer";
 
@@ -48,9 +51,11 @@ export function App() {
   const rendererRef = useRef<OpenLibraRenderer | undefined>(undefined);
   const engineRef = useRef<DocumentEngine | undefined>(undefined);
   const selectedNodeIdsRef = useRef<number[]>([]);
+  const inputControllerRef = useRef<EditorInputController | undefined>(
+    undefined,
+  );
   const canvasToolRef = useRef<CanvasTool>("select");
   const themeRef = useRef<ColorTheme>("dark");
-  const toolBeforeSpaceRef = useRef<CanvasTool | undefined>(undefined);
   const pendingSceneFrameRef = useRef<number | undefined>(undefined);
   const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
   const editMenuRef = useRef<HTMLDivElement>(null);
@@ -573,12 +578,31 @@ export function App() {
     selectNode(selectedAncestor ?? hitId, additive);
   }
 
+  function createInputHandlers(): EditorInputHandlers {
+    return {
+      selectCanvasPoint,
+      setMode,
+      setTool: setCanvasTool,
+      getTool: () => canvasToolRef.current,
+      zoomIn: () => rendererRef.current?.zoomBy(1.2),
+      zoomOut: () => rendererRef.current?.zoomBy(1 / 1.2),
+      resetView: () => rendererRef.current?.resetView(),
+      zoomToFit: () => rendererRef.current?.zoomToFit(),
+      toggleRulers: () => setRulersVisible((visible) => !visible),
+      deleteSelection: deleteSelected,
+      undo,
+      redo,
+      nudgeSelection: moveSelection,
+    };
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let disposed = false;
     let localEngine: DocumentEngine | undefined;
     let localRenderer: OpenLibraRenderer | undefined;
+    let localInputController: EditorInputController | undefined;
 
     async function start() {
       if (!navigator.gpu) {
@@ -646,6 +670,13 @@ export function App() {
           }
         },
       });
+      const inputController = new EditorInputController(
+        canvas!,
+        renderer,
+        createInputHandlers(),
+      );
+      localInputController = inputController;
+      inputControllerRef.current = inputController;
       renderer.start();
     }
 
@@ -654,13 +685,23 @@ export function App() {
     );
     return () => {
       disposed = true;
+      localInputController?.dispose();
       localRenderer?.dispose();
       localEngine?.free();
       if (rendererRef.current === localRenderer)
         rendererRef.current = undefined;
+      if (inputControllerRef.current === localInputController)
+        inputControllerRef.current = undefined;
       if (engineRef.current === localEngine) engineRef.current = undefined;
     };
+    // Renderer ownership is intentionally tied to the canvas mount lifecycle.
+    // Interaction callbacks read mutable engine and selection refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    inputControllerRef.current?.setHandlers(createInputHandlers());
+  });
 
   useEffect(() => {
     if (!editMenuOpen) return;
@@ -702,53 +743,6 @@ export function App() {
   );
 
   useEffect(() => {
-    function handleShortcut(event: KeyboardEvent) {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      )
-        return;
-      if (event.key === "1") setMode("design");
-      if (event.key === "2") setMode("developer");
-      if (event.key === "3") setMode("review");
-      if (event.key === "+" || event.key === "=")
-        rendererRef.current?.zoomBy(1.2);
-      if (event.key === "-") rendererRef.current?.zoomBy(1 / 1.2);
-      if (event.key === "0") rendererRef.current?.resetView();
-      if (event.key.toLowerCase() === "f") rendererRef.current?.zoomToFit();
-      if (event.shiftKey && event.key.toLowerCase() === "r") {
-        event.preventDefault();
-        setRulersVisible((visible) => !visible);
-      }
-      if (event.key === "Delete" || event.key === "Backspace") deleteSelected();
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        if (event.shiftKey) redo();
-        else undo();
-      }
-      const distance = event.shiftKey ? 10 : 1;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        moveSelection(-distance, 0);
-      }
-      if (event.key === "ArrowRight") {
-        event.preventDefault();
-        moveSelection(distance, 0);
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        moveSelection(0, -distance);
-      }
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        moveSelection(0, distance);
-      }
-    }
-    window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
-  });
-
-  useEffect(() => {
     rendererRef.current?.setTool(canvasTool);
   }, [canvasTool]);
 
@@ -757,35 +751,6 @@ export function App() {
     localStorage.setItem("open-libra-theme", theme);
     rendererRef.current?.setTheme(theme);
   }, [theme]);
-
-  useEffect(() => {
-    function handleToolKeyDown(event: KeyboardEvent) {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      )
-        return;
-      if (event.key.toLowerCase() === "v") setCanvasTool("select");
-      if (event.key.toLowerCase() === "h") setCanvasTool("hand");
-      if (event.code === "Space" && !event.repeat) {
-        event.preventDefault();
-        toolBeforeSpaceRef.current = canvasToolRef.current;
-        setCanvasTool("hand");
-      }
-    }
-    function handleToolKeyUp(event: KeyboardEvent) {
-      if (event.code === "Space" && toolBeforeSpaceRef.current) {
-        setCanvasTool(toolBeforeSpaceRef.current);
-        toolBeforeSpaceRef.current = undefined;
-      }
-    }
-    window.addEventListener("keydown", handleToolKeyDown);
-    window.addEventListener("keyup", handleToolKeyUp);
-    return () => {
-      window.removeEventListener("keydown", handleToolKeyDown);
-      window.removeEventListener("keyup", handleToolKeyUp);
-    };
-  }, []);
 
   return (
     <main className="app-shell">
@@ -978,20 +943,6 @@ export function App() {
             <canvas
               ref={canvasRef}
               aria-label="Open Libra WebGPU editor canvas"
-              onPointerDownCapture={(event) => {
-                if (
-                  event.button === 0 &&
-                  !rendererRef.current?.resizeHandleFromClient(
-                    event.clientX,
-                    event.clientY,
-                  )
-                )
-                  selectCanvasPoint(
-                    event.clientX,
-                    event.clientY,
-                    event.shiftKey || event.metaKey || event.ctrlKey,
-                  );
-              }}
             />
             <ArtboardGuides
               rendererRef={rendererRef}

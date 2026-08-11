@@ -125,7 +125,6 @@ export class OpenLibraRenderer {
   private instanceBuffer: GPUBuffer;
   private instanceBufferCapacity: number;
   private readonly vertexBuffer: GPUBuffer;
-  private readonly abortController = new AbortController();
   private pan = { x: 20, y: 20 };
   private targetPan = { x: 20, y: 20 };
   private zoom = 0.8;
@@ -190,7 +189,6 @@ export class OpenLibraRenderer {
       objectCount * FLOATS_PER_RECT * Float32Array.BYTES_PER_ELEMENT,
     );
     this.vertexBuffer = resources.vertexBuffer;
-    this.attachInput();
   }
 
   static async create(
@@ -475,97 +473,67 @@ export class OpenLibraRenderer {
 
   dispose() {
     cancelAnimationFrame(this.animationFrame);
-    this.abortController.abort();
     this.vertexBuffer.destroy();
     this.instanceBuffer.destroy();
     this.uniformBuffer.destroy();
   }
 
-  private attachInput() {
-    const signal = this.abortController.signal;
-    this.canvas.addEventListener(
-      "pointerdown",
-      (event) => {
-        const world = this.worldPointFromClient(event.clientX, event.clientY);
-        const shouldPan = this.tool === "hand" || event.button === 1;
-        this.resizingHandle =
-          !shouldPan && event.button === 0
-            ? this.hitResizeHandle(world.x, world.y)
-            : undefined;
-        const hit =
-          !shouldPan && !this.resizingHandle && event.button === 0
-            ? this.interactions?.hitTest(world.x, world.y)
-            : undefined;
-        this.draggingSelection = hit !== undefined;
-        this.dragging = shouldPan;
-        if (this.draggingSelection || this.resizingHandle)
-          this.interactions?.beginEdit();
-        this.targetPan = { ...this.pan };
-        this.targetZoom = this.zoom;
-        this.lastPointer = { x: event.clientX, y: event.clientY };
-        this.canvas.setPointerCapture(event.pointerId);
-      },
-      { signal },
-    );
-    this.canvas.addEventListener(
-      "pointermove",
-      (event) => {
-        const dx = event.clientX - this.lastPointer.x;
-        const dy = event.clientY - this.lastPointer.y;
-        if (this.resizingHandle) {
-          this.interactions?.resizeSelection(
-            this.resizingHandle,
-            dx / this.zoom,
-            dy / this.zoom,
-          );
-        } else if (this.draggingSelection) {
-          this.interactions?.moveSelection(dx / this.zoom, dy / this.zoom);
-        } else if (this.dragging) {
-          this.pan.x += dx;
-          this.pan.y += dy;
-          this.targetPan = { ...this.pan };
-        } else return;
-        this.lastPointer = { x: event.clientX, y: event.clientY };
-      },
-      { signal },
-    );
-    this.canvas.addEventListener(
-      "pointerup",
-      () => {
-        if (this.draggingSelection || this.resizingHandle)
-          this.interactions?.endEdit();
-        this.dragging = false;
-        this.draggingSelection = false;
-        this.resizingHandle = undefined;
-      },
-      { signal },
-    );
-    this.canvas.addEventListener(
-      "pointercancel",
-      () => {
-        if (this.draggingSelection || this.resizingHandle)
-          this.interactions?.endEdit();
-        this.dragging = false;
-        this.draggingSelection = false;
-        this.resizingHandle = undefined;
-      },
-      { signal },
-    );
-    this.canvas.addEventListener(
-      "wheel",
-      (event) => {
-        event.preventDefault();
-        const bounds = this.canvas.getBoundingClientRect();
-        const cursor = {
-          x: event.clientX - bounds.left,
-          y: event.clientY - bounds.top,
-        };
-        this.setZoomAround(
-          cursor,
-          this.targetZoom * Math.exp(-event.deltaY * 0.0015),
-        );
-      },
-      { passive: false, signal },
+  pointerDown(input: { clientX: number; clientY: number; button: number }) {
+    const world = this.worldPointFromClient(input.clientX, input.clientY);
+    const shouldPan = this.tool === "hand" || input.button === 1;
+    this.resizingHandle =
+      !shouldPan && input.button === 0
+        ? this.hitResizeHandle(world.x, world.y)
+        : undefined;
+    const hit =
+      !shouldPan && !this.resizingHandle && input.button === 0
+        ? this.interactions?.hitTest(world.x, world.y)
+        : undefined;
+    this.draggingSelection = hit !== undefined;
+    this.dragging = shouldPan;
+    if (this.draggingSelection || this.resizingHandle)
+      this.interactions?.beginEdit();
+    this.targetPan = { ...this.pan };
+    this.targetZoom = this.zoom;
+    this.lastPointer = { x: input.clientX, y: input.clientY };
+  }
+
+  pointerMove(input: { clientX: number; clientY: number }) {
+    const dx = input.clientX - this.lastPointer.x;
+    const dy = input.clientY - this.lastPointer.y;
+    if (this.resizingHandle) {
+      this.interactions?.resizeSelection(
+        this.resizingHandle,
+        dx / this.zoom,
+        dy / this.zoom,
+      );
+    } else if (this.draggingSelection) {
+      this.interactions?.moveSelection(dx / this.zoom, dy / this.zoom);
+    } else if (this.dragging) {
+      this.pan.x += dx;
+      this.pan.y += dy;
+      this.targetPan = { ...this.pan };
+    } else return;
+    this.lastPointer = { x: input.clientX, y: input.clientY };
+  }
+
+  pointerEnd() {
+    if (this.draggingSelection || this.resizingHandle)
+      this.interactions?.endEdit();
+    this.dragging = false;
+    this.draggingSelection = false;
+    this.resizingHandle = undefined;
+  }
+
+  wheel(input: { clientX: number; clientY: number; deltaY: number }) {
+    const bounds = this.canvas.getBoundingClientRect();
+    const cursor = {
+      x: input.clientX - bounds.left,
+      y: input.clientY - bounds.top,
+    };
+    this.setZoomAround(
+      cursor,
+      this.targetZoom * Math.exp(-input.deltaY * 0.0015),
     );
   }
 

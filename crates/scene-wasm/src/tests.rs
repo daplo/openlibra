@@ -114,6 +114,106 @@ fn deleting_a_frame_removes_its_direct_children() {
 }
 
 #[test]
+fn deleting_a_container_removes_its_full_descendant_subtree() {
+    let mut document = Document::demo();
+    let frame = document.active_page().nodes[0].id;
+    let children: Vec<_> = document
+        .active_page()
+        .nodes
+        .iter()
+        .filter(|node| node.parent_id == Some(frame))
+        .take(2)
+        .map(|node| node.id)
+        .collect();
+    let group = document.group_nodes(&children).unwrap();
+    assert!(document.delete_node(frame));
+    assert!(document.active_node(group).is_none());
+    assert!(
+        children
+            .iter()
+            .all(|id| document.active_node(*id).is_none())
+    );
+    document.validate().unwrap();
+}
+
+#[test]
+fn document_validation_rejects_parent_cycles() {
+    let mut document = Document::demo();
+    let frames: Vec<_> = document
+        .active_page()
+        .nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Frame)
+        .map(|node| node.id)
+        .collect();
+    for node in &mut document.active_page_mut().nodes {
+        if node.id == frames[0] {
+            node.parent_id = Some(frames[1]);
+        } else if node.id == frames[1] {
+            node.parent_id = Some(frames[0]);
+        }
+    }
+    assert!(document.validate().unwrap_err().contains("parent cycle"));
+}
+
+#[test]
+fn document_validation_rejects_cross_page_node_ownership() {
+    let mut document = Document::demo();
+    let duplicate = document.active_page().nodes[0].clone();
+    let other_page = document.pages[1].id;
+    document
+        .pages
+        .iter_mut()
+        .find(|page| page.id == other_page)
+        .unwrap()
+        .nodes
+        .push(duplicate);
+    assert!(
+        document
+            .validate()
+            .unwrap_err()
+            .contains("more than one page")
+    );
+}
+
+#[test]
+fn document_validation_rejects_cross_page_and_non_container_parents() {
+    let mut cross_page = Document::demo();
+    let child = cross_page.active_page().nodes[1].clone();
+    cross_page.active_page_mut().nodes.remove(1);
+    cross_page.pages[1].nodes.push(child);
+    assert!(
+        cross_page
+            .validate()
+            .unwrap_err()
+            .contains("parent outside page")
+    );
+
+    let mut non_container = Document::demo();
+    let rectangle = non_container.active_page().nodes[1].id;
+    non_container.active_page_mut().nodes[2].parent_id = Some(rectangle);
+    assert!(
+        non_container
+            .validate()
+            .unwrap_err()
+            .contains("non-container parent")
+    );
+}
+
+#[test]
+fn invalid_reparenting_does_not_change_document_or_history() {
+    let mut engine = DocumentEngine::new();
+    let frame = engine.document.active_page().nodes[0].id;
+    let descendant = engine.document.active_page().nodes[1].id;
+    let before = engine.document.clone();
+
+    assert!(!engine.reorder_node(frame, descendant, true));
+    assert_eq!(engine.document, before);
+    assert!(!engine.can_undo());
+    engine.document.validate().unwrap();
+}
+
+#[test]
 fn page_switching_changes_the_render_scene() {
     let mut document = Document::demo();
     let page = document.add_page("Empty".into());
