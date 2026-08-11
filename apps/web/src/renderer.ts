@@ -4,6 +4,7 @@ export type RenderStats = {
   sceneBuildMs: number;
   uploadMs: number;
   objects: number;
+  visibleObjects: number;
   zoom: number;
 };
 
@@ -112,6 +113,7 @@ export class OpenLibraRenderer {
   private readonly bindGroup: GPUBindGroup;
   private readonly uniformBuffer: GPUBuffer;
   private instanceBuffer: GPUBuffer;
+  private instanceBufferCapacity: number;
   private readonly vertexBuffer: GPUBuffer;
   private readonly abortController = new AbortController();
   private pan = { x: 20, y: 20 };
@@ -122,7 +124,13 @@ export class OpenLibraRenderer {
   private draggingSelection = false;
   private interactions?: InteractionHandlers;
   private tool: CanvasTool = "select";
-  private selectionBounds?: { x: number; y: number; width: number; height: number; rotation?: number };
+  private selectionBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation?: number;
+  };
   private resizingHandle?: ResizeHandle;
   private clearColor = { r: 0.075, g: 0.08, b: 0.095, a: 1 };
   private lastPointer = { x: 0, y: 0 };
@@ -130,13 +138,24 @@ export class OpenLibraRenderer {
   private frameCount = 0;
   private frameTotal = 0;
   private previousFrameTime = performance.now();
+  private sceneBounds = { x: 0, y: 0, width: 1, height: 1 };
+  private sceneData: Float32Array<ArrayBufferLike> = new Float32Array();
+  private visibleSceneData: Float32Array<ArrayBufferLike> = new Float32Array();
+  private totalObjectCount = 0;
+  private lastCullingView?: {
+    panX: number;
+    panY: number;
+    zoom: number;
+    width: number;
+    height: number;
+  };
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly device: GPUDevice,
     private objectCount: number,
-    private readonly sceneBuildMs: number,
-    private readonly uploadMs: number,
+    private sceneBuildMs: number,
+    private uploadMs: number,
     private readonly onStats: (stats: RenderStats) => void,
     onError: (message: string) => void,
     resources: {
@@ -155,6 +174,10 @@ export class OpenLibraRenderer {
     this.bindGroup = resources.bindGroup;
     this.uniformBuffer = resources.uniformBuffer;
     this.instanceBuffer = resources.instanceBuffer;
+    this.instanceBufferCapacity = Math.max(
+      4,
+      objectCount * FLOATS_PER_RECT * Float32Array.BYTES_PER_ELEMENT,
+    );
     this.vertexBuffer = resources.vertexBuffer;
     this.attachInput();
   }
@@ -166,8 +189,13 @@ export class OpenLibraRenderer {
     onStats: (stats: RenderStats) => void,
     onError: (message: string) => void,
   ) {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!adapter) throw new Error("WebGPU is available, but no compatible GPU adapter was found.");
+    const adapter = await navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+    });
+    if (!adapter)
+      throw new Error(
+        "WebGPU is available, but no compatible GPU adapter was found.",
+      );
     const device = await adapter.requestDevice();
     const context = canvas.getContext("webgpu");
     if (!context) throw new Error("Could not create a WebGPU canvas context.");
@@ -175,7 +203,10 @@ export class OpenLibraRenderer {
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format, alphaMode: "opaque" });
 
-    const shader = device.createShaderModule({ label: "Open Libra rectangles", code: SHADER });
+    const shader = device.createShaderModule({
+      label: "Open Libra rectangles",
+      code: SHADER,
+    });
     const pipeline = device.createRenderPipeline({
       label: "Open Libra instanced rectangle pipeline",
       layout: "auto",
@@ -203,13 +234,23 @@ export class OpenLibraRenderer {
       fragment: {
         module: shader,
         entryPoint: "fragment_main",
-        targets: [{
-          format,
-          blend: {
-            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
-            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+        targets: [
+          {
+            format,
+            blend: {
+              color: {
+                srcFactor: "src-alpha",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
+              },
+            },
           },
-        }],
+        ],
       },
       primitive: { topology: "triangle-list" },
     });
@@ -217,7 +258,11 @@ export class OpenLibraRenderer {
     const vertices = new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]);
     const vertexBuffer = createBuffer(device, vertices, GPUBufferUsage.VERTEX);
     const uploadStarted = performance.now();
-    const instanceBuffer = createBuffer(device, rectData, GPUBufferUsage.VERTEX);
+    const instanceBuffer = createBuffer(
+      device,
+      rectData,
+      GPUBufferUsage.VERTEX,
+    );
     const uploadMs = performance.now() - uploadStarted;
     const uniformBuffer = device.createBuffer({
       label: "Open Libra viewport uniform",
@@ -229,17 +274,36 @@ export class OpenLibraRenderer {
       entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
     });
 
-    device.lost.then((info) => onError(`The GPU device was lost: ${info.message || info.reason}. Reload to reconnect.`));
+    device.lost.then((info) =>
+      onError(
+        `The GPU device was lost: ${info.message || info.reason}. Reload to reconnect.`,
+      ),
+    );
 
-    return new OpenLibraRenderer(canvas, device, rectData.length / FLOATS_PER_RECT, sceneBuildMs, uploadMs, onStats, onError, {
-      context,
-      format,
-      pipeline,
-      bindGroup,
-      uniformBuffer,
-      instanceBuffer,
-      vertexBuffer,
-    });
+    const renderer = new OpenLibraRenderer(
+      canvas,
+      device,
+      rectData.length / FLOATS_PER_RECT,
+      sceneBuildMs,
+      uploadMs,
+      onStats,
+      onError,
+      {
+        context,
+        format,
+        pipeline,
+        bindGroup,
+        uniformBuffer,
+        instanceBuffer,
+        vertexBuffer,
+      },
+    );
+    renderer.sceneBounds = measureSceneBounds(rectData);
+    renderer.sceneData = rectData;
+    renderer.visibleSceneData = new Float32Array(rectData.length);
+    renderer.totalObjectCount = rectData.length / FLOATS_PER_RECT;
+    renderer.updateVisibleInstances(true);
+    return renderer;
   }
 
   start() {
@@ -247,15 +311,53 @@ export class OpenLibraRenderer {
   }
 
   zoomBy(factor: number) {
-    const center = { x: this.canvas.clientWidth / 2, y: this.canvas.clientHeight / 2 };
+    const center = {
+      x: this.canvas.clientWidth / 2,
+      y: this.canvas.clientHeight / 2,
+    };
     this.setZoomAround(center, this.targetZoom * factor);
   }
 
-  setScene(rectData: Float32Array) {
-    const nextBuffer = createBuffer(this.device, rectData, GPUBufferUsage.VERTEX);
-    this.instanceBuffer.destroy();
-    this.instanceBuffer = nextBuffer;
+  setScene(rectData: Float32Array, sceneBuildMs = this.sceneBuildMs) {
+    const uploadStarted = performance.now();
+    if (rectData.byteLength > this.instanceBufferCapacity) {
+      const nextBuffer = createBuffer(
+        this.device,
+        rectData,
+        GPUBufferUsage.VERTEX,
+      );
+      this.instanceBuffer.destroy();
+      this.instanceBuffer = nextBuffer;
+      this.instanceBufferCapacity = Math.max(4, rectData.byteLength);
+    }
+    this.sceneData = rectData;
+    if (this.visibleSceneData.length < rectData.length)
+      this.visibleSceneData = new Float32Array(rectData.length);
+    this.totalObjectCount = rectData.length / FLOATS_PER_RECT;
+    this.objectCount = this.totalObjectCount;
+    this.sceneBuildMs = sceneBuildMs;
+    this.uploadMs = performance.now() - uploadStarted;
+    this.sceneBounds = measureSceneBounds(rectData);
+    this.updateVisibleInstances(true);
+  }
+
+  setVisibleScene(rectData: Float32Array, sceneBuildMs = this.sceneBuildMs) {
+    const uploadStarted = performance.now();
+    if (rectData.byteLength > this.instanceBufferCapacity) {
+      const nextBuffer = createBuffer(
+        this.device,
+        rectData,
+        GPUBufferUsage.VERTEX,
+      );
+      this.instanceBuffer.destroy();
+      this.instanceBuffer = nextBuffer;
+      this.instanceBufferCapacity = Math.max(4, rectData.byteLength);
+    } else if (rectData.length > 0) {
+      this.device.queue.writeBuffer(this.instanceBuffer, 0, rectData);
+    }
     this.objectCount = rectData.length / FLOATS_PER_RECT;
+    this.sceneBuildMs = sceneBuildMs;
+    this.uploadMs = performance.now() - uploadStarted;
   }
 
   setInteractionHandlers(handlers: InteractionHandlers) {
@@ -268,17 +370,38 @@ export class OpenLibraRenderer {
   }
 
   setTheme(theme: ColorTheme) {
-    this.clearColor = theme === "light"
-      ? { r: 0.90, g: 0.91, b: 0.93, a: 1 }
-      : { r: 0.075, g: 0.08, b: 0.095, a: 1 };
+    this.clearColor =
+      theme === "light"
+        ? { r: 0.9, g: 0.91, b: 0.93, a: 1 }
+        : { r: 0.075, g: 0.08, b: 0.095, a: 1 };
   }
 
   getViewState() {
     return { pan: { ...this.pan }, zoom: this.zoom };
   }
 
-  setSelectionBounds(bounds?: { x: number; y: number; width: number; height: number; rotation?: number }) {
+  getVisibleWorldBounds() {
+    const margin = 128 / this.zoom;
+    return {
+      left: -this.pan.x / this.zoom - margin,
+      top: -this.pan.y / this.zoom - margin,
+      right: (this.canvas.clientWidth - this.pan.x) / this.zoom + margin,
+      bottom: (this.canvas.clientHeight - this.pan.y) / this.zoom + margin,
+    };
+  }
+
+  setSelectionBounds(bounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation?: number;
+  }) {
     this.selectionBounds = bounds;
+  }
+
+  getSelectionBounds() {
+    return this.selectionBounds ? { ...this.selectionBounds } : undefined;
   }
 
   resizeHandleFromClient(clientX: number, clientY: number) {
@@ -292,25 +415,42 @@ export class OpenLibraRenderer {
   }
 
   zoomToFit() {
-    const sceneWidth = 1_430;
-    const sceneHeight = 1_620;
+    const { x, y, width: sceneWidth, height: sceneHeight } = this.sceneBounds;
     const padding = 48;
-    this.targetZoom = Math.max(0.1, Math.min(4, Math.min(
-      (this.canvas.clientWidth - padding * 2) / sceneWidth,
-      (this.canvas.clientHeight - padding * 2) / sceneHeight,
-    )));
-    this.targetPan = { x: padding, y: padding };
+    this.targetZoom = Math.max(
+      0.1,
+      Math.min(
+        4,
+        Math.min(
+          (this.canvas.clientWidth - padding * 2) / sceneWidth,
+          (this.canvas.clientHeight - padding * 2) / sceneHeight,
+        ),
+      ),
+    );
+    this.targetPan = {
+      x: padding - x * this.targetZoom,
+      y: padding - y * this.targetZoom,
+    };
   }
 
-  centerOnBounds(bounds: { x: number; y: number; width: number; height: number }) {
+  centerOnBounds(bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) {
     const fitZoom = Math.min(
       (this.canvas.clientWidth - 120) / Math.max(1, bounds.width),
       (this.canvas.clientHeight - 120) / Math.max(1, bounds.height),
     );
     this.targetZoom = Math.max(0.1, Math.min(1.5, fitZoom));
     this.targetPan = {
-      x: this.canvas.clientWidth / 2 - (bounds.x + bounds.width / 2) * this.targetZoom,
-      y: this.canvas.clientHeight / 2 - (bounds.y + bounds.height / 2) * this.targetZoom,
+      x:
+        this.canvas.clientWidth / 2 -
+        (bounds.x + bounds.width / 2) * this.targetZoom,
+      y:
+        this.canvas.clientHeight / 2 -
+        (bounds.y + bounds.height / 2) * this.targetZoom,
     };
   }
 
@@ -324,41 +464,90 @@ export class OpenLibraRenderer {
 
   private attachInput() {
     const signal = this.abortController.signal;
-    this.canvas.addEventListener("pointerdown", (event) => {
-      const world = this.worldPointFromClient(event.clientX, event.clientY);
-      const shouldPan = this.tool === "hand" || event.button === 1;
-      this.resizingHandle = !shouldPan && event.button === 0 ? this.hitResizeHandle(world.x, world.y) : undefined;
-      const hit = !shouldPan && !this.resizingHandle && event.button === 0 ? this.interactions?.hitTest(world.x, world.y) : undefined;
-      this.draggingSelection = hit !== undefined;
-      this.dragging = shouldPan;
-      if (this.draggingSelection || this.resizingHandle) this.interactions?.beginEdit();
-      this.targetPan = { ...this.pan };
-      this.targetZoom = this.zoom;
-      this.lastPointer = { x: event.clientX, y: event.clientY };
-      this.canvas.setPointerCapture(event.pointerId);
-    }, { signal });
-    this.canvas.addEventListener("pointermove", (event) => {
-      const dx = event.clientX - this.lastPointer.x;
-      const dy = event.clientY - this.lastPointer.y;
-      if (this.resizingHandle) {
-        this.interactions?.resizeSelection(this.resizingHandle, dx / this.zoom, dy / this.zoom);
-      } else if (this.draggingSelection) {
-        this.interactions?.moveSelection(dx / this.zoom, dy / this.zoom);
-      } else if (this.dragging) {
-        this.pan.x += dx;
-        this.pan.y += dy;
+    this.canvas.addEventListener(
+      "pointerdown",
+      (event) => {
+        const world = this.worldPointFromClient(event.clientX, event.clientY);
+        const shouldPan = this.tool === "hand" || event.button === 1;
+        this.resizingHandle =
+          !shouldPan && event.button === 0
+            ? this.hitResizeHandle(world.x, world.y)
+            : undefined;
+        const hit =
+          !shouldPan && !this.resizingHandle && event.button === 0
+            ? this.interactions?.hitTest(world.x, world.y)
+            : undefined;
+        this.draggingSelection = hit !== undefined;
+        this.dragging = shouldPan;
+        if (this.draggingSelection || this.resizingHandle)
+          this.interactions?.beginEdit();
         this.targetPan = { ...this.pan };
-      } else return;
-      this.lastPointer = { x: event.clientX, y: event.clientY };
-    }, { signal });
-    this.canvas.addEventListener("pointerup", () => { if (this.draggingSelection || this.resizingHandle) this.interactions?.endEdit(); this.dragging = false; this.draggingSelection = false; this.resizingHandle = undefined; }, { signal });
-    this.canvas.addEventListener("pointercancel", () => { if (this.draggingSelection || this.resizingHandle) this.interactions?.endEdit(); this.dragging = false; this.draggingSelection = false; this.resizingHandle = undefined; }, { signal });
-    this.canvas.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      const bounds = this.canvas.getBoundingClientRect();
-      const cursor = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-      this.setZoomAround(cursor, this.targetZoom * Math.exp(-event.deltaY * 0.0015));
-    }, { passive: false, signal });
+        this.targetZoom = this.zoom;
+        this.lastPointer = { x: event.clientX, y: event.clientY };
+        this.canvas.setPointerCapture(event.pointerId);
+      },
+      { signal },
+    );
+    this.canvas.addEventListener(
+      "pointermove",
+      (event) => {
+        const dx = event.clientX - this.lastPointer.x;
+        const dy = event.clientY - this.lastPointer.y;
+        if (this.resizingHandle) {
+          this.interactions?.resizeSelection(
+            this.resizingHandle,
+            dx / this.zoom,
+            dy / this.zoom,
+          );
+        } else if (this.draggingSelection) {
+          this.interactions?.moveSelection(dx / this.zoom, dy / this.zoom);
+        } else if (this.dragging) {
+          this.pan.x += dx;
+          this.pan.y += dy;
+          this.targetPan = { ...this.pan };
+        } else return;
+        this.lastPointer = { x: event.clientX, y: event.clientY };
+      },
+      { signal },
+    );
+    this.canvas.addEventListener(
+      "pointerup",
+      () => {
+        if (this.draggingSelection || this.resizingHandle)
+          this.interactions?.endEdit();
+        this.dragging = false;
+        this.draggingSelection = false;
+        this.resizingHandle = undefined;
+      },
+      { signal },
+    );
+    this.canvas.addEventListener(
+      "pointercancel",
+      () => {
+        if (this.draggingSelection || this.resizingHandle)
+          this.interactions?.endEdit();
+        this.dragging = false;
+        this.draggingSelection = false;
+        this.resizingHandle = undefined;
+      },
+      { signal },
+    );
+    this.canvas.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        const bounds = this.canvas.getBoundingClientRect();
+        const cursor = {
+          x: event.clientX - bounds.left,
+          y: event.clientY - bounds.top,
+        };
+        this.setZoomAround(
+          cursor,
+          this.targetZoom * Math.exp(-event.deltaY * 0.0015),
+        );
+      },
+      { passive: false, signal },
+    );
   }
 
   private render = (time: number) => {
@@ -370,10 +559,14 @@ export class OpenLibraRenderer {
     this.pan.x += (this.targetPan.x - this.pan.x) * easing;
     this.pan.y += (this.targetPan.y - this.pan.y) * easing;
 
-    if (Math.abs(this.targetZoom - this.zoom) < 0.0001) this.zoom = this.targetZoom;
-    if (Math.abs(this.targetPan.x - this.pan.x) < 0.01) this.pan.x = this.targetPan.x;
-    if (Math.abs(this.targetPan.y - this.pan.y) < 0.01) this.pan.y = this.targetPan.y;
+    if (Math.abs(this.targetZoom - this.zoom) < 0.0001)
+      this.zoom = this.targetZoom;
+    if (Math.abs(this.targetPan.x - this.pan.x) < 0.01)
+      this.pan.x = this.targetPan.x;
+    if (Math.abs(this.targetPan.y - this.pan.y) < 0.01)
+      this.pan.y = this.targetPan.y;
     this.resizeCanvas();
+    this.updateVisibleInstances(false);
     const view = new Float32Array([
       this.canvas.width,
       this.canvas.height,
@@ -386,14 +579,18 @@ export class OpenLibraRenderer {
     ]);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, view);
 
-    const encoder = this.device.createCommandEncoder({ label: "Open Libra frame" });
+    const encoder = this.device.createCommandEncoder({
+      label: "Open Libra frame",
+    });
     const pass = encoder.beginRenderPass({
-      colorAttachments: [{
-        view: this.context.getCurrentTexture().createView(),
-        clearValue: this.clearColor,
-        loadOp: "clear",
-        storeOp: "store",
-      }],
+      colorAttachments: [
+        {
+          view: this.context.getCurrentTexture().createView(),
+          clearValue: this.clearColor,
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
     });
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
@@ -408,11 +605,12 @@ export class OpenLibraRenderer {
     this.frameTotal += frameMs;
     if (time - this.lastSample >= 500) {
       this.onStats({
-        fps: this.frameCount * 1_000 / (time - this.lastSample),
+        fps: (this.frameCount * 1_000) / (time - this.lastSample),
         frameMs: this.frameTotal / this.frameCount,
         sceneBuildMs: this.sceneBuildMs,
         uploadMs: this.uploadMs,
-        objects: this.objectCount,
+        objects: this.totalObjectCount,
+        visibleObjects: this.objectCount,
         zoom: this.zoom,
       });
       this.lastSample = time;
@@ -423,17 +621,83 @@ export class OpenLibraRenderer {
     this.animationFrame = requestAnimationFrame(this.render);
   };
 
+  private updateVisibleInstances(force: boolean) {
+    const previous = this.lastCullingView;
+    if (
+      !force &&
+      previous &&
+      previous.width === this.canvas.clientWidth &&
+      previous.height === this.canvas.clientHeight &&
+      Math.abs(previous.panX - this.pan.x) < 64 &&
+      Math.abs(previous.panY - this.pan.y) < 64 &&
+      Math.abs(Math.log(previous.zoom / this.zoom)) < 0.08
+    )
+      return;
+
+    this.lastCullingView = {
+      panX: this.pan.x,
+      panY: this.pan.y,
+      zoom: this.zoom,
+      width: this.canvas.clientWidth,
+      height: this.canvas.clientHeight,
+    };
+    const margin = 128 / this.zoom;
+    const left = -this.pan.x / this.zoom - margin;
+    const top = -this.pan.y / this.zoom - margin;
+    const right = (this.canvas.clientWidth - this.pan.x) / this.zoom + margin;
+    const bottom = (this.canvas.clientHeight - this.pan.y) / this.zoom + margin;
+    let visibleFloats = 0;
+    for (
+      let offset = 0;
+      offset < this.sceneData.length;
+      offset += FLOATS_PER_RECT
+    ) {
+      const x = this.sceneData[offset];
+      const y = this.sceneData[offset + 1];
+      const width = this.sceneData[offset + 2];
+      const height = this.sceneData[offset + 3];
+      if (x + width < left || x > right || y + height < top || y > bottom)
+        continue;
+      this.visibleSceneData.set(
+        this.sceneData.subarray(offset, offset + FLOATS_PER_RECT),
+        visibleFloats,
+      );
+      visibleFloats += FLOATS_PER_RECT;
+    }
+    this.objectCount = visibleFloats / FLOATS_PER_RECT;
+    if (visibleFloats > 0)
+      this.device.queue.writeBuffer(
+        this.instanceBuffer,
+        0,
+        this.visibleSceneData.subarray(0, visibleFloats),
+      );
+  }
+
   private resizeCanvas() {
-    const width = Math.max(1, Math.floor(this.canvas.clientWidth * devicePixelRatio));
-    const height = Math.max(1, Math.floor(this.canvas.clientHeight * devicePixelRatio));
+    const width = Math.max(
+      1,
+      Math.floor(this.canvas.clientWidth * devicePixelRatio),
+    );
+    const height = Math.max(
+      1,
+      Math.floor(this.canvas.clientHeight * devicePixelRatio),
+    );
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
-      this.context.configure({ device: this.device, format: this.format, alphaMode: "opaque" });
+      this.context.configure({
+        device: this.device,
+        format: this.format,
+        alphaMode: "opaque",
+      });
     }
   }
 
-  private setZoomAround(cursor: { x: number; y: number }, targetZoom: number, worldPoint?: { x: number; y: number }) {
+  private setZoomAround(
+    cursor: { x: number; y: number },
+    targetZoom: number,
+    worldPoint?: { x: number; y: number },
+  ) {
     const before = worldPoint ?? {
       x: (cursor.x - this.targetPan.x) / this.targetZoom,
       y: (cursor.y - this.targetPan.y) / this.targetZoom,
@@ -458,12 +722,16 @@ export class OpenLibraRenderer {
     if (!bounds) return undefined;
     const tolerance = 8 / this.zoom;
     const points: [ResizeHandle, number, number][] = [
-      ["nw", bounds.x, bounds.y], ["n", bounds.x + bounds.width / 2, bounds.y], ["ne", bounds.x + bounds.width, bounds.y],
-      ["e", bounds.x + bounds.width, bounds.y + bounds.height / 2], ["se", bounds.x + bounds.width, bounds.y + bounds.height],
-      ["s", bounds.x + bounds.width / 2, bounds.y + bounds.height], ["sw", bounds.x, bounds.y + bounds.height],
+      ["nw", bounds.x, bounds.y],
+      ["n", bounds.x + bounds.width / 2, bounds.y],
+      ["ne", bounds.x + bounds.width, bounds.y],
+      ["e", bounds.x + bounds.width, bounds.y + bounds.height / 2],
+      ["se", bounds.x + bounds.width, bounds.y + bounds.height],
+      ["s", bounds.x + bounds.width / 2, bounds.y + bounds.height],
+      ["sw", bounds.x, bounds.y + bounds.height],
       ["w", bounds.x, bounds.y + bounds.height / 2],
     ];
-    const angle = (bounds.rotation ?? 0) * Math.PI / 180;
+    const angle = ((bounds.rotation ?? 0) * Math.PI) / 180;
     const centerX = bounds.x + bounds.width / 2;
     const centerY = bounds.y + bounds.height / 2;
     return points.find(([, handleX, handleY]) => {
@@ -471,12 +739,19 @@ export class OpenLibraRenderer {
       const dy = handleY - centerY;
       const rotatedX = centerX + dx * Math.cos(angle) - dy * Math.sin(angle);
       const rotatedY = centerY + dx * Math.sin(angle) + dy * Math.cos(angle);
-      return Math.abs(x - rotatedX) <= tolerance && Math.abs(y - rotatedY) <= tolerance;
+      return (
+        Math.abs(x - rotatedX) <= tolerance &&
+        Math.abs(y - rotatedY) <= tolerance
+      );
     })?.[0];
   }
 }
 
-function createBuffer(device: GPUDevice, data: Float32Array, usage: GPUBufferUsageFlags) {
+function createBuffer(
+  device: GPUDevice,
+  data: Float32Array,
+  usage: GPUBufferUsageFlags,
+) {
   const buffer = device.createBuffer({
     size: Math.max(4, data.byteLength),
     usage: usage | GPUBufferUsage.COPY_DST,
@@ -485,4 +760,27 @@ function createBuffer(device: GPUDevice, data: Float32Array, usage: GPUBufferUsa
   new Float32Array(buffer.getMappedRange()).set(data);
   buffer.unmap();
   return buffer;
+}
+
+function measureSceneBounds(rectData: Float32Array) {
+  if (rectData.length < FLOATS_PER_RECT)
+    return { x: 0, y: 0, width: 1, height: 1 };
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (let offset = 0; offset < rectData.length; offset += FLOATS_PER_RECT) {
+    const x = rectData[offset];
+    const y = rectData[offset + 1];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + rectData[offset + 2]);
+    maxY = Math.max(maxY, y + rectData[offset + 3]);
+  }
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
 }

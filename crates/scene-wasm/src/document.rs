@@ -1,0 +1,497 @@
+use crate::geometry::point_in_rotated_node;
+use crate::*;
+
+impl Document {
+    pub(crate) fn demo() -> Self {
+        let mut document = Self {
+            schema_version: SCHEMA_VERSION,
+            next_id: 2,
+            active_page_id: 1,
+            pages: vec![Page {
+                id: 1,
+                name: "Home".into(),
+                description: "Sample mobile and desktop interface composition.".into(),
+                nodes: Vec::new(),
+                benchmark_node_count: None,
+            }],
+            color_library: Vec::new(),
+        };
+
+        let mobile = document.insert_node(
+            "Mobile app",
+            NodeKind::Frame,
+            None,
+            [80.0, 80.0, 390.0, 760.0],
+            [0.96, 0.97, 0.99, 1.0],
+        );
+        document.insert_node(
+            "Navigation",
+            NodeKind::Rectangle,
+            Some(mobile),
+            [104.0, 108.0, 342.0, 64.0],
+            [0.10, 0.12, 0.16, 1.0],
+        );
+        document.insert_node(
+            "Hero",
+            NodeKind::Rectangle,
+            Some(mobile),
+            [104.0, 196.0, 342.0, 180.0],
+            [0.23, 0.36, 0.78, 1.0],
+        );
+        document.insert_node(
+            "Primary action",
+            NodeKind::Rectangle,
+            Some(mobile),
+            [124.0, 286.0, 110.0, 42.0],
+            [0.46, 0.91, 0.72, 1.0],
+        );
+        document.insert_node(
+            "Card A",
+            NodeKind::Rectangle,
+            Some(mobile),
+            [104.0, 400.0, 160.0, 170.0],
+            [0.88, 0.90, 0.94, 1.0],
+        );
+        document.insert_node(
+            "Card B",
+            NodeKind::Rectangle,
+            Some(mobile),
+            [286.0, 400.0, 160.0, 170.0],
+            [0.88, 0.90, 0.94, 1.0],
+        );
+
+        let desktop = document.insert_node(
+            "Dashboard",
+            NodeKind::Frame,
+            None,
+            [530.0, 80.0, 820.0, 620.0],
+            [0.96, 0.97, 0.99, 1.0],
+        );
+        document.insert_node(
+            "Top bar",
+            NodeKind::Rectangle,
+            Some(desktop),
+            [554.0, 104.0, 772.0, 58.0],
+            [0.10, 0.12, 0.16, 1.0],
+        );
+        document.insert_node(
+            "Sidebar",
+            NodeKind::Rectangle,
+            Some(desktop),
+            [554.0, 162.0, 170.0, 514.0],
+            [0.90, 0.92, 0.95, 1.0],
+        );
+        document.insert_node(
+            "Metric A",
+            NodeKind::Rectangle,
+            Some(desktop),
+            [748.0, 194.0, 260.0, 110.0],
+            [0.23, 0.36, 0.78, 1.0],
+        );
+        document.insert_node(
+            "Metric B",
+            NodeKind::Rectangle,
+            Some(desktop),
+            [1030.0, 194.0, 272.0, 110.0],
+            [0.46, 0.91, 0.72, 1.0],
+        );
+        document.insert_node(
+            "Chart",
+            NodeKind::Rectangle,
+            Some(desktop),
+            [748.0, 328.0, 554.0, 220.0],
+            [0.88, 0.90, 0.94, 1.0],
+        );
+        for (name, description, count) in [
+            (
+                "1K Nodes · Baseline",
+                "A lightweight grid for validating normal editor responsiveness.",
+                1_000,
+            ),
+            (
+                "10K Nodes · Large",
+                "A large scene for measuring interaction and rendering headroom.",
+                10_000,
+            ),
+            (
+                "50K Nodes · Stress",
+                "A stress scene for observing frame rate and memory pressure.",
+                50_000,
+            ),
+            (
+                "100K Nodes · Extreme",
+                "An extreme scene for testing engine and GPU scaling limits.",
+                100_000,
+            ),
+        ] {
+            document.add_benchmark_page(name, description, count);
+        }
+        document
+    }
+
+    fn add_benchmark_page(&mut self, name: &str, description: &str, node_count: usize) {
+        let id = self.allocate_id();
+        self.pages.push(Page {
+            id,
+            name: name.into(),
+            description: description.into(),
+            nodes: Vec::new(),
+            benchmark_node_count: Some(node_count),
+        });
+    }
+
+    pub(crate) fn populate_active_benchmark(&mut self) {
+        let node_count = self
+            .active_page()
+            .benchmark_node_count
+            .filter(|_| self.active_page().nodes.is_empty());
+        let Some(node_count) = node_count else {
+            return;
+        };
+        let first_id = self.next_id;
+        self.next_id += node_count as u64;
+        let columns = (node_count as f32).sqrt().ceil() as usize;
+        self.active_page_mut().nodes = (0..node_count)
+            .map(|index| benchmark_node(first_id + index as u64, index, columns))
+            .collect();
+    }
+
+    pub(crate) fn active_page(&self) -> &Page {
+        self.pages
+            .iter()
+            .find(|page| page.id == self.active_page_id)
+            .expect("active page exists")
+    }
+
+    pub(crate) fn active_page_mut(&mut self) -> &mut Page {
+        let active = self.active_page_id;
+        self.pages
+            .iter_mut()
+            .find(|page| page.id == active)
+            .expect("active page exists")
+    }
+
+    pub(crate) fn benchmark_hit_test(&self, x: f32, y: f32) -> Option<u64> {
+        let page = self.active_page();
+        let node_count = page.benchmark_node_count?;
+        if page.nodes.is_empty() || x < 0.0 || y < 0.0 {
+            return Some(0);
+        }
+        let columns = (node_count as f32).sqrt().ceil() as usize;
+        if let Some(node) = page
+            .nodes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, node)| {
+                let expected_x = (index % columns) as f32 * 16.0;
+                let expected_y = (index / columns) as f32 * 16.0;
+                let geometry_changed = node.x != expected_x
+                    || node.y != expected_y
+                    || node.width != 12.0
+                    || node.height != 12.0
+                    || node.rotation != 0.0
+                    || node.flip_x
+                    || node.flip_y;
+                (geometry_changed && !node.locked && point_in_rotated_node(node, x, y))
+                    .then_some(node)
+            })
+        {
+            return Some(node.id);
+        }
+        let column = (x / 16.0).floor() as usize;
+        let row = (y / 16.0).floor() as usize;
+        let index = row.saturating_mul(columns).saturating_add(column);
+        let Some(node) = page.nodes.get(index) else {
+            return Some(0);
+        };
+        Some(
+            (!node.locked && x <= node.x + node.width && y <= node.y + node.height)
+                .then_some(node.id)
+                .unwrap_or(0),
+        )
+    }
+
+    pub(crate) fn allocate_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub(crate) fn insert_node(
+        &mut self,
+        name: &str,
+        kind: NodeKind,
+        parent_id: Option<u64>,
+        bounds: [f32; 4],
+        fill: [f32; 4],
+    ) -> u64 {
+        let id = self.allocate_id();
+        self.active_page_mut().nodes.push(Node {
+            id,
+            name: name.into(),
+            kind,
+            parent_id,
+            x: bounds[0],
+            y: bounds[1],
+            width: bounds[2],
+            height: bounds[3],
+            fill,
+            stroke: [0.12, 0.14, 0.18, 1.0],
+            stroke_width: 0.0,
+            corner_radius: 0.0,
+            opacity: 1.0,
+            rotation: 0.0,
+            flip_x: false,
+            flip_y: false,
+            shadows: Vec::new(),
+            layout_mode: LayoutMode::None,
+            layout_align: LayoutAlign::Start,
+            layout_justify: LayoutAlign::Start,
+            layout_gap: 0.0,
+            layout_padding: [0.0; 4],
+            width_sizing: LayoutSizing::Fixed,
+            auto_height: false,
+            guide_mode: GuideMode::None,
+            guide_count: default_guide_count(),
+            guide_gap: default_guide_gap(),
+            guide_color: [0.25, 0.55, 1.0, 1.0],
+            guide_opacity: default_guide_opacity(),
+            locked: false,
+        });
+        id
+    }
+
+    pub(crate) fn add_node(&mut self, kind: NodeKind) -> u64 {
+        let index = self.active_page().nodes.len() as f32;
+        let offset = (index % 12.0) * 18.0;
+        match kind {
+            NodeKind::Frame => self.insert_node(
+                "Frame",
+                kind,
+                None,
+                [120.0 + offset, 120.0 + offset, 320.0, 240.0],
+                [0.96, 0.97, 0.99, 1.0],
+            ),
+            _ => self.insert_node(
+                "Rectangle",
+                kind,
+                None,
+                [160.0 + offset, 160.0 + offset, 160.0, 100.0],
+                [0.46, 0.91, 0.72, 1.0],
+            ),
+        }
+    }
+
+    pub(crate) fn add_rectangle_to(&mut self, parent_id: Option<u64>) -> u64 {
+        let parent = parent_id.and_then(|id| {
+            self.active_page()
+                .nodes
+                .iter()
+                .find(|node| {
+                    node.id == id && matches!(node.kind, NodeKind::Frame | NodeKind::Group)
+                })
+                .cloned()
+        });
+        let index = self.active_page().nodes.len() as f32;
+        let bounds = parent
+            .as_ref()
+            .map(|parent| {
+                [
+                    parent.x + parent.layout_padding[3] + 24.0,
+                    parent.y + parent.layout_padding[0] + 24.0,
+                    160.0,
+                    100.0,
+                ]
+            })
+            .unwrap_or([
+                160.0 + (index % 12.0) * 18.0,
+                160.0 + (index % 12.0) * 18.0,
+                160.0,
+                100.0,
+            ]);
+        let actual_parent = parent.as_ref().map(|parent| parent.id);
+        let id = self.insert_node(
+            "Rectangle",
+            NodeKind::Rectangle,
+            actual_parent,
+            bounds,
+            [0.46, 0.91, 0.72, 1.0],
+        );
+        if let Some(parent_id) = actual_parent {
+            self.relayout_container(parent_id);
+        }
+        id
+    }
+
+    pub(crate) fn add_artboard(&mut self, name: String, width: f32, height: f32) -> u64 {
+        let right_edge = self
+            .active_page()
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::Frame && node.parent_id.is_none())
+            .map(|node| node.x + node.width)
+            .fold(0.0_f32, f32::max);
+        let x = if right_edge == 0.0 {
+            80.0
+        } else {
+            right_edge + 80.0
+        };
+        self.insert_node(
+            &name,
+            NodeKind::Frame,
+            None,
+            [x, 80.0, width, height],
+            [0.96, 0.97, 0.99, 1.0],
+        )
+    }
+
+    pub(crate) fn add_page(&mut self, name: String) -> u64 {
+        let id = self.allocate_id();
+        self.pages.push(Page {
+            id,
+            name,
+            description: String::new(),
+            nodes: Vec::new(),
+            benchmark_node_count: None,
+        });
+        self.active_page_id = id;
+        id
+    }
+
+    pub(crate) fn add_document_color(&mut self, name: String, value: String) -> u64 {
+        if let Some(existing) = self.color_library.iter().find(|color| color.value == value) {
+            return existing.id;
+        }
+        let id = self.allocate_id();
+        self.color_library.push(ColorAsset {
+            id,
+            name: if name.trim().is_empty() {
+                value.clone()
+            } else {
+                name.trim().to_owned()
+            },
+            value,
+        });
+        id
+    }
+
+    pub(crate) fn set_active_page(&mut self, page_id: u64) -> bool {
+        if self.pages.iter().any(|page| page.id == page_id) {
+            self.active_page_id = page_id;
+            self.populate_active_benchmark();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn delete_node(&mut self, node_id: u64) -> bool {
+        let page = self.active_page_mut();
+        if page
+            .nodes
+            .iter()
+            .any(|node| node.id == node_id && node.locked)
+        {
+            return false;
+        }
+        let before = page.nodes.len();
+        page.nodes
+            .retain(|node| node.id != node_id && node.parent_id != Some(node_id));
+        page.nodes.len() != before
+    }
+
+    pub(crate) fn rename_node(&mut self, node_id: u64, name: String) -> bool {
+        if let Some(node) = self
+            .active_page_mut()
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == node_id)
+        {
+            if node.locked {
+                return false;
+            }
+            node.name = name;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn read_model(&self) -> DocumentReadModel<'_> {
+        DocumentReadModel {
+            schema_version: self.schema_version,
+            active_page_id: self.active_page_id,
+            pages: self
+                .pages
+                .iter()
+                .map(|page| PageSummary {
+                    id: page.id,
+                    name: &page.name,
+                    description: &page.description,
+                })
+                .collect(),
+            nodes: &self.active_page().nodes,
+            document_colors: &self.color_library,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(format!(
+                "Unsupported schema version {}",
+                self.schema_version
+            ));
+        }
+        if !self.pages.iter().any(|page| page.id == self.active_page_id) {
+            return Err("Active page does not exist".into());
+        }
+        for page in &self.pages {
+            for node in &page.nodes {
+                if let Some(parent_id) = node.parent_id {
+                    if !page.nodes.iter().any(|parent| parent.id == parent_id) {
+                        return Err(format!("Node {} has a missing parent", node.id));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn benchmark_node(id: u64, index: usize, columns: usize) -> Node {
+    let column = index % columns;
+    let row = index / columns;
+    Node {
+        id,
+        name: format!("Node {}", index + 1),
+        kind: NodeKind::Rectangle,
+        parent_id: None,
+        x: column as f32 * 16.0,
+        y: row as f32 * 16.0,
+        width: 12.0,
+        height: 12.0,
+        fill: [0.23, 0.36, 0.78, 1.0],
+        stroke: [0.0; 4],
+        stroke_width: 0.0,
+        corner_radius: 0.0,
+        opacity: 1.0,
+        rotation: 0.0,
+        flip_x: false,
+        flip_y: false,
+        shadows: Vec::new(),
+        layout_mode: LayoutMode::None,
+        layout_align: LayoutAlign::Start,
+        layout_justify: LayoutAlign::Start,
+        layout_gap: 0.0,
+        layout_padding: [0.0; 4],
+        width_sizing: LayoutSizing::Fixed,
+        auto_height: false,
+        guide_mode: GuideMode::None,
+        guide_count: default_guide_count(),
+        guide_gap: default_guide_gap(),
+        guide_color: [0.0; 4],
+        guide_opacity: default_guide_opacity(),
+        locked: false,
+    }
+}
