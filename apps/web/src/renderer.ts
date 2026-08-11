@@ -31,7 +31,7 @@ type SelectionNodeBounds = {
   rotation: number;
 };
 
-const FLOATS_PER_RECT = 20;
+const FLOATS_PER_RECT = 24;
 const SHADER = /* wgsl */ `
 struct View {
   viewport_pan: vec4f,
@@ -46,7 +46,8 @@ struct VertexInput {
   @location(2) color: vec4f,
   @location(3) stroke: vec4f,
   @location(4) style: vec4f,
-  @location(5) transform: vec4f,
+  @location(5) radii: vec4f,
+  @location(6) transform: vec4f,
 }
 
 struct VertexOutput {
@@ -56,6 +57,7 @@ struct VertexOutput {
   @location(2) size: vec2f,
   @location(3) stroke: vec4f,
   @location(4) style: vec4f,
+  @location(5) radii: vec4f,
 }
 
 @vertex
@@ -77,41 +79,45 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
   output.size = input.bounds.zw;
   output.stroke = input.stroke;
   output.style = input.style;
+  output.radii = input.radii;
   return output;
 }
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4f {
-  if (input.style.w == 1.0) {
+  let right = input.local.x >= input.size.x * 0.5;
+  let bottom = input.local.y >= input.size.y * 0.5;
+  let radius = select(select(input.radii.x, input.radii.y, right), select(input.radii.w, input.radii.z, right), bottom);
+  if (input.style.z == 1.0) {
     let inset = input.stroke.x;
     let shadowSize = input.size - vec2f(inset * 2.0);
     let shadowLocal = input.local - vec2f(inset);
-    let radius = min(input.style.x, min(shadowSize.x, shadowSize.y) * 0.5);
-    let centered = abs(shadowLocal - shadowSize * 0.5) - (shadowSize * 0.5 - vec2f(radius));
+    let boundedRadius = min(radius, min(shadowSize.x, shadowSize.y) * 0.5);
+    let centered = abs(shadowLocal - shadowSize * 0.5) - (shadowSize * 0.5 - vec2f(boundedRadius));
     let distance = length(max(centered, vec2f(0.0))) + min(max(centered.x, centered.y), 0.0) - radius;
     let alpha = 1.0 - smoothstep(-input.stroke.y, input.stroke.y, distance);
-    return vec4f(input.color.rgb, input.color.a * alpha * input.style.z);
+    return vec4f(input.color.rgb, input.color.a * alpha * input.style.y);
   }
-  let radius = min(input.style.x, min(input.size.x, input.size.y) * 0.5);
-  let centered = abs(input.local - input.size * 0.5) - (input.size * 0.5 - vec2f(radius));
-  let distance = length(max(centered, vec2f(0.0))) + min(max(centered.x, centered.y), 0.0) - radius;
+  let boundedRadius = min(radius, min(input.size.x, input.size.y) * 0.5);
+  let centered = abs(input.local - input.size * 0.5) - (input.size * 0.5 - vec2f(boundedRadius));
+  let distance = length(max(centered, vec2f(0.0))) + min(max(centered.x, centered.y), 0.0) - boundedRadius;
   let coverage = 1.0 - smoothstep(-0.75, 0.75, distance);
-  if (input.style.w == 2.0) {
+  if (input.style.z == 2.0) {
     let contractedSize = max(vec2f(1.0), input.size - vec2f(input.stroke.w * 2.0));
     let shiftedLocal = input.local - vec2f(input.stroke.x, input.stroke.y) - vec2f(input.stroke.w);
-    let innerRadius = min(max(0.0, radius - input.stroke.w), min(contractedSize.x, contractedSize.y) * 0.5);
+    let innerRadius = min(max(0.0, boundedRadius - input.stroke.w), min(contractedSize.x, contractedSize.y) * 0.5);
     let innerCentered = abs(shiftedLocal - contractedSize * 0.5) - (contractedSize * 0.5 - vec2f(innerRadius));
     let innerDistance = length(max(innerCentered, vec2f(0.0))) + min(max(innerCentered.x, innerCentered.y), 0.0) - innerRadius;
     let alpha = smoothstep(-input.stroke.z, input.stroke.z, innerDistance) * coverage;
-    return vec4f(input.color.rgb, input.color.a * alpha * input.style.z);
+    return vec4f(input.color.rgb, input.color.a * alpha * input.style.y);
   }
   let borderMix = select(
     0.0,
-    smoothstep(-input.style.y - 0.5, -input.style.y + 0.5, distance),
-    input.style.y > 0.0,
+    smoothstep(-input.style.x - 0.5, -input.style.x + 0.5, distance),
+    input.style.x > 0.0,
   );
   let color = mix(input.color, input.stroke, borderMix);
-  return vec4f(color.rgb, color.a * coverage * input.style.z);
+  return vec4f(color.rgb, color.a * coverage * input.style.y);
 }
 `;
 
@@ -236,6 +242,7 @@ export class OpenLibraRenderer {
               { shaderLocation: 3, offset: 32, format: "float32x4" },
               { shaderLocation: 4, offset: 48, format: "float32x4" },
               { shaderLocation: 5, offset: 64, format: "float32x4" },
+              { shaderLocation: 6, offset: 80, format: "float32x4" },
             ],
           },
         ],

@@ -23,7 +23,9 @@ export type NodeSummary = {
   fill: number[];
   stroke: number[];
   stroke_width: number;
-  corner_radius: number;
+  corner_radii: number[];
+  stroke_align: "inside" | "center" | "outside";
+  stroke_join: "round" | "straight";
   opacity: number;
   rotation: number;
   flip_x: boolean;

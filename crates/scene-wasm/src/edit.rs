@@ -129,13 +129,16 @@ impl Document {
         changed
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn set_node_style(
         &mut self,
         node_id: EntityId,
         fill: [f32; 4],
         stroke: [f32; 4],
         stroke_width: f32,
-        corner_radius: f32,
+        corner_radii: [f32; 4],
+        stroke_align: StrokeAlign,
+        stroke_join: StrokeJoin,
     ) -> bool {
         let Some(node) = self.active_node_mut(node_id) else {
             return false;
@@ -146,7 +149,10 @@ impl Document {
         node.fill = fill;
         node.stroke = stroke;
         node.stroke_width = stroke_width.clamp(0.0, 100.0);
-        node.corner_radius = corner_radius.clamp(0.0, node.width.min(node.height) / 2.0);
+        let max_radius = node.width.min(node.height) / 2.0;
+        node.corner_radii = corner_radii.map(|radius| radius.clamp(0.0, max_radius));
+        node.stroke_align = stroke_align;
+        node.stroke_join = stroke_join;
         true
     }
 
@@ -220,7 +226,8 @@ impl Document {
         let fixed_after = rotate_around(fixed_after_local, new_center, node.rotation.to_radians());
         node.x += fixed_before.0 - fixed_after.0;
         node.y += fixed_before.1 - fixed_after.1;
-        node.corner_radius = node.corner_radius.min(node.width.min(node.height) / 2.0);
+        let max_radius = node.width.min(node.height) / 2.0;
+        node.corner_radii = node.corner_radii.map(|radius| radius.min(max_radius));
         let parent_id = node.parent_id;
         let relayout_self = node.auto_height && node.layout_mode != LayoutMode::None;
         if relayout_self {
@@ -491,7 +498,8 @@ impl Document {
         node.y = y;
         node.width = width.max(8.0);
         node.height = height.max(8.0);
-        node.corner_radius = node.corner_radius.min(node.width.min(node.height) / 2.0);
+        let max_radius = node.width.min(node.height) / 2.0;
+        node.corner_radii = node.corner_radii.map(|radius| radius.min(max_radius));
         let parent_id = node.parent_id;
         let relayout_self = node.auto_height && node.layout_mode != LayoutMode::None;
         if relayout_self {

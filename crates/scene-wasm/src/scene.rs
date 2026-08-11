@@ -53,18 +53,41 @@ fn append_node_scene(scene: &mut Vec<f32>, node: &Node) {
         ]);
         scene.extend_from_slice(&shadow.color);
         scene.extend_from_slice(&[feather, shadow.blur.max(0.5), 0.0, 0.0]);
-        scene.extend_from_slice(&[
-            (node.corner_radius + shadow.spread).max(0.0),
-            0.0,
-            node.opacity,
-            1.0,
-        ]);
+        scene.extend_from_slice(&[0.0, node.opacity, 1.0, 0.0]);
+        scene.extend_from_slice(
+            &node
+                .corner_radii
+                .map(|radius| (radius + shadow.spread).max(0.0)),
+        );
         scene.extend_from_slice(&node_transform(node));
     }
-    scene.extend_from_slice(&[node.x, node.y, node.width, node.height]);
+    let expansion = match node.stroke_align {
+        StrokeAlign::Inside => 0.0,
+        StrokeAlign::Center => node.stroke_width / 2.0,
+        StrokeAlign::Outside => node.stroke_width,
+    };
+    scene.extend_from_slice(&[
+        node.x - expansion,
+        node.y - expansion,
+        node.width + expansion * 2.0,
+        node.height + expansion * 2.0,
+    ]);
     scene.extend_from_slice(&node.fill);
     scene.extend_from_slice(&node.stroke);
-    scene.extend_from_slice(&[node.corner_radius, node.stroke_width, node.opacity, 0.0]);
+    scene.extend_from_slice(&[
+        node.stroke_width,
+        node.opacity,
+        0.0,
+        (node.stroke_join == StrokeJoin::Round) as u8 as f32,
+    ]);
+    scene.extend_from_slice(&node.corner_radii.map(|radius| {
+        let outer = radius + expansion;
+        if node.stroke_join == StrokeJoin::Round {
+            outer.max(expansion)
+        } else {
+            outer
+        }
+    }));
     scene.extend_from_slice(&node_transform(node));
     for shadow in node
         .shadows
@@ -79,7 +102,8 @@ fn append_node_scene(scene: &mut Vec<f32>, node: &Node) {
             shadow.blur.max(0.5),
             shadow.spread,
         ]);
-        scene.extend_from_slice(&[node.corner_radius, 0.0, node.opacity, 2.0]);
+        scene.extend_from_slice(&[0.0, node.opacity, 2.0, 0.0]);
+        scene.extend_from_slice(&node.corner_radii);
         scene.extend_from_slice(&node_transform(node));
     }
 }

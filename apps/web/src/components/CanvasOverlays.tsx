@@ -194,10 +194,8 @@ function drawArtboardGuides(
         -childHeight / 2,
         childWidth,
         childHeight,
-        Math.min(
-          child.corner_radius * view.zoom,
-          childWidth / 2,
-          childHeight / 2,
+        child.corner_radii.map((radius) =>
+          Math.min(radius * view.zoom, childWidth / 2, childHeight / 2),
         ),
       );
       context.fill();

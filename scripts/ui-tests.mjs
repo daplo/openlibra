@@ -131,6 +131,63 @@ try {
   await firstLayer.locator(".layer-main").click();
   assert.equal(await firstLayer.getAttribute("data-selected"), "true");
 
+  const cornerInputs = page.locator(".corner-grid input");
+  assert.equal(await cornerInputs.count(), 4);
+  const cornerValues = await cornerInputs.evaluateAll((inputs) =>
+    inputs.map((input) => input.value),
+  );
+  await cornerInputs.first().click();
+  await cornerInputs
+    .first()
+    .press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await cornerInputs.first().pressSequentially("20");
+  assert.equal(await cornerInputs.first().inputValue(), "20");
+  assert.deepEqual(
+    await cornerInputs.evaluateAll((inputs) =>
+      inputs.slice(1).map((input) => input.value),
+    ),
+    cornerValues.slice(1),
+  );
+  await cornerInputs.first().press("Enter");
+  assert.equal(await cornerInputs.first().inputValue(), "20");
+
+  const alignment = page.getByRole("group", { name: "Alignment" });
+  await alignment.getByRole("button", { name: "outside" }).click();
+  assert.equal(
+    await alignment
+      .getByRole("button", { name: "outside" })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+  const join = page.getByRole("group", { name: "Join" });
+  await join.getByRole("button", { name: "straight" }).click();
+  assert.equal(
+    await join
+      .getByRole("button", { name: "straight" })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+
+  await page.getByRole("button", { name: "Row", exact: true }).click();
+  const paddingInputs = page.locator(".padding-grid input");
+  const paddingBefore = await paddingInputs.evaluateAll((inputs) =>
+    inputs.map((input) => input.value),
+  );
+  await paddingInputs.first().click();
+  await paddingInputs
+    .first()
+    .press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await paddingInputs.first().pressSequentially("20");
+  assert.equal(await paddingInputs.first().inputValue(), "20");
+  assert.deepEqual(
+    await paddingInputs.evaluateAll((inputs) =>
+      inputs.slice(1).map((input) => input.value),
+    ),
+    paddingBefore.slice(1),
+  );
+  await paddingInputs.first().press("Enter");
+  assert.equal(await paddingInputs.first().inputValue(), "20");
+
   await firstLayer.getByRole("button", { name: /^Rename / }).click();
   const nameInput = firstLayer.locator("input.layer-name-input");
   await nameInput.fill("UI test layer");
@@ -186,7 +243,7 @@ try {
   );
 
   console.log(
-    "UI smoke tests passed (input routing, selection, rename, lock, create/delete, pages, 1K scene).",
+    "UI smoke tests passed (corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
   );
 } finally {
   await browser?.close();

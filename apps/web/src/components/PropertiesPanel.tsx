@@ -28,7 +28,9 @@ export function Properties(props: {
       fill: string;
       stroke: string;
       strokeWidth: number;
-      cornerRadius: number;
+      cornerRadii: number[];
+      strokeAlign: NodeSummary["stroke_align"];
+      strokeJoin: NodeSummary["stroke_join"];
     }>,
   ) => void;
   onBoundsChange: (
@@ -221,7 +223,9 @@ function StyleControls({
       fill: string;
       stroke: string;
       strokeWidth: number;
-      cornerRadius: number;
+      cornerRadii: number[];
+      strokeAlign: NodeSummary["stroke_align"];
+      strokeJoin: NodeSummary["stroke_join"];
     }>,
   ) => void;
   onOpacityChange: (opacity: number) => void;
@@ -252,14 +256,37 @@ function StyleControls({
           max={20}
           onChange={(strokeWidth) => onChange({ strokeWidth })}
         />
+        <SegmentedControl
+          label="Alignment"
+          value={node.stroke_align}
+          options={["inside", "center", "outside"]}
+          onChange={(strokeAlign) => onChange({ strokeAlign })}
+        />
+        <SegmentedControl
+          label="Join"
+          value={node.stroke_join}
+          options={["round", "straight"]}
+          onChange={(strokeJoin) => onChange({ strokeJoin })}
+        />
       </PropertySection>
       <PropertySection title="Corners">
-        <NumberControl
-          label="Radius"
-          value={node.corner_radius}
-          max={Math.floor(Math.min(node.width, node.height) / 2)}
-          onChange={(cornerRadius) => onChange({ cornerRadius })}
-        />
+        <div className="geometry-grid corner-grid">
+          {["TL", "TR", "BR", "BL"].map((label, index) => (
+            <GeometryInput
+              key={label}
+              label={label}
+              value={node.corner_radii[index] ?? 0}
+              min={0}
+              onChange={(radius) =>
+                onChange({
+                  cornerRadii: node.corner_radii.map((value, position) =>
+                    position === index ? radius : value,
+                  ),
+                })
+              }
+            />
+          ))}
+        </div>
       </PropertySection>
       <PropertySection title="Shadows">
         <ShadowControls
@@ -527,12 +554,9 @@ function AutoLayoutControls({
   const padding = node.layout_padding;
   const setPadding = (index: number, value: number) =>
     onChange({
-      layout_padding:
-        padding.every((current) => current === 0) && value !== 0
-          ? [value, value, value, value]
-          : padding.map((current, position) =>
-              position === index ? value : current,
-            ),
+      layout_padding: padding.map((current, position) =>
+        position === index ? value : current,
+      ),
     });
   return (
     <div className="auto-layout-controls">
@@ -808,18 +832,37 @@ function GeometryInput({
   min?: number;
   onChange: (value: number) => void;
 }) {
+  const [draft, setDraft] = useState(() =>
+    String(Math.round(value * 100) / 100),
+  );
+  useEffect(() => setDraft(String(Math.round(value * 100) / 100)), [value]);
+
+  function commit() {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(Math.round(value * 100) / 100));
+      return;
+    }
+    const next = min === undefined ? parsed : Math.max(min, parsed);
+    setDraft(String(next));
+    if (next !== value) onChange(next);
+  }
+
   return (
     <label className="geometry-input">
       <span>{label}</span>
       <input
         type="number"
-        value={Math.round(value * 100) / 100}
+        value={draft}
         min={min}
         step="1"
-        onChange={(event) => {
-          const next = Number(event.target.value);
-          if (Number.isFinite(next))
-            onChange(min === undefined ? next : Math.max(min, next));
+        aria-label={label}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+          if (event.key === "Escape")
+            setDraft(String(Math.round(value * 100) / 100));
         }}
       />
     </label>
@@ -1021,18 +1064,28 @@ function NumberControl({
   max: number;
   onChange: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  const [draft, setDraft] = useState(() => String(value));
+  useEffect(() => setDraft(String(value)), [value]);
 
   function clamp(next: number) {
     return Math.min(max, Math.max(0, next));
   }
 
-  function commit(next = draft) {
-    const normalized = clamp(next);
-    setDraft(normalized);
+  function commit(next: string | number = draft) {
+    const parsed = typeof next === "number" ? next : Number(next);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const normalized = clamp(parsed);
+    setDraft(String(normalized));
     if (normalized !== value) onChange(normalized);
   }
+
+  const numericDraft = Number(draft);
+  const sliderValue = Number.isFinite(numericDraft)
+    ? clamp(numericDraft)
+    : value;
 
   return (
     <label className="number-control">
@@ -1042,10 +1095,11 @@ function NumberControl({
         min="0"
         max={max}
         step="1"
-        value={draft}
-        onChange={(event) => setDraft(clamp(Number(event.target.value)))}
+        value={sliderValue}
+        aria-label={`${label} slider`}
+        onChange={(event) => setDraft(event.target.value)}
         onPointerUp={(event) => commit(Number(event.currentTarget.value))}
-        onPointerCancel={() => setDraft(value)}
+        onPointerCancel={() => setDraft(String(value))}
         onKeyUp={(event) => {
           if (event.key.startsWith("Arrow"))
             commit(Number(event.currentTarget.value));
@@ -1055,14 +1109,46 @@ function NumberControl({
         type="number"
         min="0"
         max={max}
-        value={Math.round(draft)}
-        onChange={(event) => setDraft(clamp(Number(event.target.value)))}
+        value={draft}
+        aria-label={label}
+        onChange={(event) => setDraft(event.target.value)}
         onBlur={() => commit()}
         onKeyDown={(event) => {
           if (event.key === "Enter") commit(Number(event.currentTarget.value));
-          if (event.key === "Escape") setDraft(value);
+          if (event.key === "Escape") setDraft(String(value));
         }}
       />
     </label>
+  );
+}
+
+function SegmentedControl<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: readonly T[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="segmented-control">
+      <span>{label}</span>
+      <div role="group" aria-label={label}>
+        {options.map((option) => (
+          <button
+            type="button"
+            key={option}
+            className={value === option ? "active" : ""}
+            aria-pressed={value === option}
+            onClick={() => onChange(option)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

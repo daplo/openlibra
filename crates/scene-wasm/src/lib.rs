@@ -13,21 +13,18 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 2;
-const FLOATS_PER_RECT: usize = 20;
+const SCHEMA_VERSION: u32 = 3;
+const FLOATS_PER_RECT: usize = 24;
 
 fn parse_entity_id(value: &str) -> EntityId {
     Uuid::parse_str(value).unwrap_or_else(|_| Uuid::nil())
 }
 
 fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
-    if value
+    let schema = value
         .get("schema_version")
         .and_then(|version| version.as_u64())
-        != Some(1)
-    {
-        return;
-    }
+        .unwrap_or(1);
     let migrate_id = |id: &mut serde_json::Value| {
         if let Some(number) = id.as_u64() {
             *id = serde_json::Value::String(
@@ -39,7 +36,9 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
             );
         }
     };
-    if let Some(id) = value.get_mut("active_page_id") {
+    if schema == 1
+        && let Some(id) = value.get_mut("active_page_id")
+    {
         migrate_id(id);
     }
     if let Some(pages) = value
@@ -47,22 +46,42 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
         .and_then(|pages| pages.as_array_mut())
     {
         for page in pages {
-            if let Some(id) = page.get_mut("id") {
+            if schema == 1
+                && let Some(id) = page.get_mut("id")
+            {
                 migrate_id(id);
             }
             if let Some(nodes) = page.get_mut("nodes").and_then(|nodes| nodes.as_array_mut()) {
                 for node in nodes {
-                    if let Some(id) = node.get_mut("id") {
+                    if schema == 1
+                        && let Some(id) = node.get_mut("id")
+                    {
                         migrate_id(id);
                     }
-                    if let Some(parent) = node.get_mut("parent_id") {
+                    if schema == 1
+                        && let Some(parent) = node.get_mut("parent_id")
+                    {
                         migrate_id(parent);
+                    }
+                    if node.get("corner_radii").is_none() {
+                        let radius = node
+                            .get("corner_radius")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0);
+                        node["corner_radii"] = serde_json::json!([radius, radius, radius, radius]);
+                    }
+                    if node.get("stroke_align").is_none() {
+                        node["stroke_align"] = serde_json::Value::String("inside".into());
+                    }
+                    if node.get("stroke_join").is_none() {
+                        node["stroke_join"] = serde_json::Value::String("round".into());
                     }
                 }
             }
             if let Some(ids) = page
                 .get_mut("benchmark_modified_node_ids")
                 .and_then(|ids| ids.as_array_mut())
+                && schema == 1
             {
                 for id in ids {
                     migrate_id(id);
@@ -75,7 +94,9 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
         .and_then(|colors| colors.as_array_mut())
     {
         for color in colors {
-            if let Some(id) = color.get_mut("id") {
+            if schema == 1
+                && let Some(id) = color.get_mut("id")
+            {
                 migrate_id(id);
             }
         }
@@ -88,7 +109,9 @@ struct NodeStyleState {
     fill: [f32; 4],
     stroke: [f32; 4],
     stroke_width: f32,
-    corner_radius: f32,
+    corner_radii: [f32; 4],
+    stroke_align: StrokeAlign,
+    stroke_join: StrokeJoin,
 }
 
 impl NodeStyleState {
@@ -97,7 +120,9 @@ impl NodeStyleState {
             fill: node.fill,
             stroke: node.stroke,
             stroke_width: node.stroke_width,
-            corner_radius: node.corner_radius,
+            corner_radii: node.corner_radii,
+            stroke_align: node.stroke_align,
+            stroke_join: node.stroke_join,
         }
     }
 
@@ -105,7 +130,9 @@ impl NodeStyleState {
         node.fill = self.fill;
         node.stroke = self.stroke;
         node.stroke_width = self.stroke_width;
-        node.corner_radius = self.corner_radius;
+        node.corner_radii = self.corner_radii;
+        node.stroke_align = self.stroke_align;
+        node.stroke_join = self.stroke_join;
     }
 }
 
@@ -117,7 +144,7 @@ struct NodeGeometryState {
     y: f32,
     width: f32,
     height: f32,
-    corner_radius: f32,
+    corner_radii: [f32; 4],
     rotation: f32,
     flip_x: bool,
     flip_y: bool,
@@ -132,7 +159,7 @@ impl NodeGeometryState {
             y: node.y,
             width: node.width,
             height: node.height,
-            corner_radius: node.corner_radius,
+            corner_radii: node.corner_radii,
             rotation: node.rotation,
             flip_x: node.flip_x,
             flip_y: node.flip_y,
@@ -145,7 +172,7 @@ impl NodeGeometryState {
         node.y = self.y;
         node.width = self.width;
         node.height = self.height;
-        node.corner_radius = self.corner_radius;
+        node.corner_radii = self.corner_radii;
         node.rotation = self.rotation;
         node.flip_x = self.flip_x;
         node.flip_y = self.flip_y;
@@ -349,15 +376,38 @@ impl DocumentEngine {
         Ok(self.mutate(|document| document.reparent_nodes_to_artboards(&node_ids)))
     }
 
+    // Kept flat because wasm-bindgen exposes this method directly to JavaScript.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_node_style(
         &mut self,
         node_id: String,
         fill_hex: String,
         stroke_hex: String,
         stroke_width: f32,
-        corner_radius: f32,
+        radius_top_left: f32,
+        radius_top_right: f32,
+        radius_bottom_right: f32,
+        radius_bottom_left: f32,
+        stroke_align: String,
+        stroke_join: String,
     ) -> Result<bool, JsValue> {
         let node_id = parse_entity_id(&node_id);
+        let corner_radii = [
+            radius_top_left,
+            radius_top_right,
+            radius_bottom_right,
+            radius_bottom_left,
+        ];
+        let stroke_align = match stroke_align.as_str() {
+            "center" => StrokeAlign::Center,
+            "outside" => StrokeAlign::Outside,
+            _ => StrokeAlign::Inside,
+        };
+        let stroke_join = if stroke_join == "straight" {
+            StrokeJoin::Straight
+        } else {
+            StrokeJoin::Round
+        };
         let fill = parse_hex_color(&fill_hex)
             .ok_or_else(|| JsValue::from_str("Fill must be a six-digit hex color"))?;
         let stroke = parse_hex_color(&stroke_hex)
@@ -368,7 +418,9 @@ impl DocumentEngine {
                 fill,
                 stroke,
                 stroke_width,
-                corner_radius,
+                corner_radii,
+                stroke_align,
+                stroke_join,
             ));
         }
         let page_id = self.document.active_page_id;
@@ -379,9 +431,15 @@ impl DocumentEngine {
             .iter()
             .find(|node| node.id == node_id)
             .map(NodeStyleState::capture);
-        let changed =
-            self.document
-                .set_node_style(node_id, fill, stroke, stroke_width, corner_radius);
+        let changed = self.document.set_node_style(
+            node_id,
+            fill,
+            stroke,
+            stroke_width,
+            corner_radii,
+            stroke_align,
+            stroke_join,
+        );
         if changed {
             if let Some(style) = before {
                 self.push_undo(HistoryEntry::NodeStyle {

@@ -41,6 +41,24 @@ fn schema_one_numeric_ids_migrate_deterministically() {
 }
 
 #[test]
+fn legacy_radius_migrates_to_four_corners_and_border_defaults() {
+    let mut value = serde_json::to_value(Document::demo()).unwrap();
+    value["schema_version"] = serde_json::json!(2);
+    let node = value["pages"][0]["nodes"][0].as_object_mut().unwrap();
+    node.remove("corner_radii");
+    node.remove("stroke_align");
+    node.remove("stroke_join");
+    node.insert("corner_radius".into(), serde_json::json!(7.0));
+
+    migrate_legacy_document_ids(&mut value);
+    let document: Document = serde_json::from_value(value).unwrap();
+    let node = &document.pages[0].nodes[0];
+    assert_eq!(node.corner_radii, [7.0; 4]);
+    assert_eq!(node.stroke_align, StrokeAlign::Inside);
+    assert_eq!(node.stroke_join, StrokeJoin::Round);
+}
+
+#[test]
 fn benchmark_pages_are_lazy_and_generate_exact_scene_sizes() {
     let mut document = Document::demo();
     let benchmarks = [
@@ -343,7 +361,15 @@ fn artboards_use_requested_dimensions_and_do_not_overlap() {
 fn node_styles_are_clamped_and_serialized() {
     let mut document = Document::demo();
     let id = document.active_page().nodes[1].id;
-    assert!(document.set_node_style(id, [1.0, 0.0, 0.5, 1.0], [0.0, 0.0, 0.0, 1.0], 4.0, 1_000.0));
+    assert!(document.set_node_style(
+        id,
+        [1.0, 0.0, 0.5, 1.0],
+        [0.0, 0.0, 0.0, 1.0],
+        4.0,
+        [1_000.0; 4],
+        StrokeAlign::Outside,
+        StrokeJoin::Straight,
+    ));
     let node = document
         .active_page()
         .nodes
@@ -351,11 +377,13 @@ fn node_styles_are_clamped_and_serialized() {
         .find(|node| node.id == id)
         .unwrap();
     assert_eq!(node.stroke_width, 4.0);
-    assert_eq!(node.corner_radius, node.width.min(node.height) / 2.0);
+    assert_eq!(node.corner_radii, [node.width.min(node.height) / 2.0; 4]);
+    assert_eq!(node.stroke_align, StrokeAlign::Outside);
+    assert_eq!(node.stroke_join, StrokeJoin::Straight);
     assert!(
         serde_json::to_string(&document)
             .unwrap()
-            .contains("corner_radius")
+            .contains("corner_radii")
     );
 }
 
@@ -765,7 +793,12 @@ fn compact_style_history_restores_node_without_document_snapshots() {
                 "#3366CC".into(),
                 "#000000".into(),
                 3.0,
+                4.0,
+                8.0,
                 12.0,
+                16.0,
+                "outside".into(),
+                "straight".into(),
             )
             .unwrap()
     );
@@ -775,11 +808,22 @@ fn compact_style_history_restores_node_without_document_snapshots() {
     ));
     assert!(engine.undo());
     assert_eq!(
-        engine.document.active_page().nodes[1].corner_radius,
-        node.corner_radius
+        engine.document.active_page().nodes[1].corner_radii,
+        node.corner_radii
     );
     assert!(engine.redo());
-    assert_eq!(engine.document.active_page().nodes[1].corner_radius, 12.0);
+    assert_eq!(
+        engine.document.active_page().nodes[1].corner_radii,
+        [4.0, 8.0, 12.0, 16.0]
+    );
+    assert_eq!(
+        engine.document.active_page().nodes[1].stroke_align,
+        StrokeAlign::Outside
+    );
+    assert_eq!(
+        engine.document.active_page().nodes[1].stroke_join,
+        StrokeJoin::Straight
+    );
 }
 
 #[test]

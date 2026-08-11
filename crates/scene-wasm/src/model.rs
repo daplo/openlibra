@@ -45,7 +45,12 @@ pub struct Node {
     pub(crate) fill: [f32; 4],
     pub(crate) stroke: [f32; 4],
     pub(crate) stroke_width: f32,
-    pub(crate) corner_radius: f32,
+    #[serde(default)]
+    pub(crate) corner_radii: [f32; 4],
+    #[serde(default)]
+    pub(crate) stroke_align: StrokeAlign,
+    #[serde(default)]
+    pub(crate) stroke_join: StrokeJoin,
     pub(crate) opacity: f32,
     #[serde(default)]
     pub(crate) rotation: f32,
@@ -89,6 +94,23 @@ pub enum LayoutMode {
     None,
     Row,
     Column,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StrokeAlign {
+    #[default]
+    Inside,
+    Center,
+    Outside,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StrokeJoin {
+    #[default]
+    Round,
+    Straight,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]

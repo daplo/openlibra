@@ -340,18 +340,26 @@ export function App() {
       fill: string;
       stroke: string;
       strokeWidth: number;
-      cornerRadius: number;
+      cornerRadii: number[];
+      strokeAlign: NodeSummary["stroke_align"];
+      strokeJoin: NodeSummary["stroke_join"];
     }>,
   ) {
     const engine = engineRef.current;
     if (!engine) return;
     try {
+      const radii = change.cornerRadii ?? node.corner_radii;
       const changed = engine.set_node_style(
         node.id,
         change.fill ?? rgbaToHex(node.fill),
         change.stroke ?? rgbaToHex(node.stroke),
         change.strokeWidth ?? node.stroke_width,
-        change.cornerRadius ?? node.corner_radius,
+        radii[0],
+        radii[1],
+        radii[2],
+        radii[3],
+        change.strokeAlign ?? node.stroke_align,
+        change.strokeJoin ?? node.stroke_join,
       );
       if (!changed) return;
       const updated: NodeSummary = {
@@ -363,13 +371,9 @@ export function App() {
           ? [...hexToRgb(change.stroke), node.stroke[3]]
           : node.stroke,
         stroke_width: change.strokeWidth ?? node.stroke_width,
-        corner_radius:
-          change.cornerRadius === undefined
-            ? node.corner_radius
-            : Math.min(
-                Math.max(0, change.cornerRadius),
-                Math.min(node.width, node.height) / 2,
-              ),
+        corner_radii: change.cornerRadii ?? node.corner_radii,
+        stroke_align: change.strokeAlign ?? node.stroke_align,
+        stroke_join: change.strokeJoin ?? node.stroke_join,
       };
       setDocumentModel((current) => ({
         ...current,
