@@ -1776,6 +1776,16 @@ impl Document {
                 [1.0; 4]
             },
         );
+        let component_source_parent = actual_parent.is_some_and(|parent_id| {
+            let mut current = self.active_node(parent_id);
+            while let Some(node) = current {
+                if node.component_id.is_some() && node.instance_root_id.is_none() {
+                    return true;
+                }
+                current = node.parent_id.and_then(|id| self.active_node(id));
+            }
+            false
+        });
         let node = self.active_node_mut(id).unwrap();
         node.asset_id = Some(asset_id);
         node.corner_radii = if node_kind == NodeKind::Image {
@@ -1783,6 +1793,9 @@ impl Document {
         } else {
             [0.0; 4]
         };
+        if component_source_parent {
+            node.component_slot_id = Some(id);
+        }
         if let Some(parent_id) = actual_parent {
             self.relayout_container(parent_id);
         }

@@ -3,6 +3,7 @@ import {
   Boxes,
   Component,
   Copy,
+  FileArchive,
   ImagePlus,
   Layers3,
   Plus,
@@ -42,6 +43,7 @@ export function Panel({
   onDeleteTextStyle,
   hasSelectedText,
   onImportImage,
+  onImportFigma,
   onAddLibraryIcon,
   onAddNodeFromAsset,
   onAddComponentInstance,
@@ -72,6 +74,7 @@ export function Panel({
   onDeleteTextStyle: (id: string) => void;
   hasSelectedText: boolean;
   onImportImage: (file: File) => void;
+  onImportFigma: (file: File) => void;
   onAddLibraryIcon: (name: string, svg: string) => void;
   onAddNodeFromAsset: (assetId: string) => void;
   onAddComponentInstance: (componentId: string, variantId: string) => void;
@@ -376,6 +379,7 @@ export function Panel({
           onUpdateTextStyle={onUpdateTextStyle}
           onDeleteTextStyle={onDeleteTextStyle}
           onImportImage={onImportImage}
+          onImportFigma={onImportFigma}
           onAddLibraryIcon={onAddLibraryIcon}
           onAddNodeFromAsset={onAddNodeFromAsset}
           onAddComponentInstance={onAddComponentInstance}
@@ -523,6 +527,7 @@ function VaultPanel({
   onUpdateTextStyle,
   onDeleteTextStyle,
   onImportImage,
+  onImportFigma,
   onAddLibraryIcon,
   onAddNodeFromAsset,
   onAddComponentInstance,
@@ -542,6 +547,7 @@ function VaultPanel({
   ) => void;
   onDeleteTextStyle: (id: string) => void;
   onImportImage: (file: File) => void;
+  onImportFigma: (file: File) => void;
   onAddLibraryIcon: (name: string, svg: string) => void;
   onAddNodeFromAsset: (assetId: string) => void;
   onAddComponentInstance: (componentId: string, variantId: string) => void;
@@ -565,6 +571,29 @@ function VaultPanel({
         </div>
         <small>Saved with this document</small>
       </div>
+
+      <section className="vault-section figma-import-section">
+        <div>
+          <h3>Figma file</h3>
+          <small>
+            Import editable pages, layers, text, and embedded images.
+          </small>
+        </div>
+        <label className="figma-import-button" title="Import Figma file">
+          <FileArchive aria-hidden="true" />
+          <span>Import .fig</span>
+          <input
+            data-testid="figma-upload"
+            type="file"
+            accept=".fig,application/octet-stream"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onImportFigma(file);
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+      </section>
 
       <section className="vault-section">
         <div className="vault-section-heading">
@@ -854,9 +883,7 @@ function hasSelectedComponentCandidate(
   if (selectedNodeIds.length !== 1) return false;
   const node = model.nodes.find((item) => item.id === selectedNodeIds[0]);
   return Boolean(
-    node &&
-    (node.kind === "frame" || node.kind === "group") &&
-    !node.component_id,
+    node && !node.component_id && !node.instance_root_id && !node.locked,
   );
 }
 

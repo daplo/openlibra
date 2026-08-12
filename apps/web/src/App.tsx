@@ -11,6 +11,7 @@ import {
   Check,
   ChevronRight,
   Component,
+  FileArchive,
   Frame,
   Hand,
   MessageCircle,
@@ -38,6 +39,7 @@ import { Panel } from "./components/EditorSidebar";
 import { Properties } from "./components/PropertiesPanel";
 import { LibraryView } from "./components/LibraryView";
 import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
+import { figmaFileToImport } from "./editor/figma-import";
 import {
   EditorInputController,
   type EditorInputHandlers,
@@ -80,6 +82,8 @@ export function App() {
   const pendingSceneFrameRef = useRef<number | undefined>(undefined);
   const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
   const nodesByIdRef = useRef<Map<string, NodeSummary>>(new Map());
+  const fileMenuRef = useRef<HTMLDivElement>(null);
+  const figmaFileInputRef = useRef<HTMLInputElement>(null);
   const editMenuRef = useRef<HTMLDivElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("design");
@@ -124,6 +128,7 @@ export function App() {
     canUndo: false,
     canRedo: false,
   });
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [rulersVisible, setRulersVisible] = useState(
@@ -461,7 +466,8 @@ export function App() {
 
   function addSelectedComponentVariant(componentId: string) {
     const node = selectedNodes[0];
-    if (!node || (node.kind !== "frame" && node.kind !== "group")) return;
+    if (!node || node.locked || node.component_id || node.instance_root_id)
+      return;
     const id = engineRef.current?.add_component_variant(
       componentId,
       node.id,
@@ -822,7 +828,10 @@ export function App() {
     if (engineRef.current?.add_number_variable(name, value)) refreshDocument();
   }
 
-  async function importImage(file: File) {
+  async function importImage(
+    file: File,
+    dropClientPoint?: { x: number; y: number },
+  ) {
     const engine = engineRef.current;
     if (!engine) return;
     if (!file.type.match(/^image\/(png|jpeg|webp)$/)) {
@@ -836,10 +845,17 @@ export function App() {
     try {
       const source = await readFileAsDataUrl(file);
       const dimensions = await readImageDimensions(source);
-      const parentId = preferredArtboardId(
-        documentModel.nodes,
-        selectedNodeIdsRef.current,
-      );
+      const renderer = rendererRef.current;
+      const world =
+        dropClientPoint && renderer
+          ? renderer.worldPointFromClient(dropClientPoint.x, dropClientPoint.y)
+          : undefined;
+      const dropParent = world
+        ? topLevelFrameAtPoint(documentModel.nodes, world.x, world.y)
+        : undefined;
+      const parentId =
+        dropParent?.id ??
+        preferredArtboardId(documentModel.nodes, selectedNodeIdsRef.current);
       const id = engine.add_media_asset_node(
         "image",
         file.name,
@@ -850,6 +866,19 @@ export function App() {
         parentId ?? "",
       );
       if (!id) throw new Error("The image could not be added.");
+      if (world) {
+        const nodeJson = engine.node_json(id);
+        if (nodeJson) {
+          const node = JSON.parse(nodeJson) as NodeSummary;
+          engine.set_node_bounds(
+            id,
+            Math.round(world.x - node.width / 2),
+            Math.round(world.y - node.height / 2),
+            node.width,
+            node.height,
+          );
+        }
+      }
       setError(undefined);
       refreshDocument([id]);
     } catch (cause) {
@@ -857,13 +886,34 @@ export function App() {
     }
   }
 
+  async function importFigma(file: File) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (file.size > 250 * 1024 * 1024) {
+      setError("Figma files must be 250 MB or smaller.");
+      return;
+    }
+    try {
+      setError(undefined);
+      const payload = await figmaFileToImport(file);
+      const pageId = engine.import_figma_json(JSON.stringify(payload));
+      setIsolationRootId(undefined);
+      setSelectedNodeIds([]);
+      selectedNodeIdsRef.current = [];
+      refreshDocument([]);
+      if (pageId) engine.set_active_page(pageId);
+      refreshDocument([]);
+    } catch (cause) {
+      setError(
+        `Could not import ${file.name}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  }
+
   function addLibraryIcon(name: string, svg: string) {
     const engine = engineRef.current;
     if (!engine) return;
-    const parentId = preferredArtboardId(
-      documentModel.nodes,
-      selectedNodeIdsRef.current,
-    );
+    const parentId = assetInsertionParentId();
     const id = engine.add_media_asset_node(
       "icon",
       name,
@@ -879,15 +929,36 @@ export function App() {
   function addNodeFromAsset(assetId: string) {
     const engine = engineRef.current;
     if (!engine) return;
-    const parentId = preferredArtboardId(
-      documentModel.nodes,
-      selectedNodeIdsRef.current,
-    );
+    const parentId = assetInsertionParentId();
     const id = engine.add_node_from_asset(assetId, parentId ?? "");
     if (id) refreshDocument([id]);
   }
 
-  function dropAssetOnCanvas(event: ReactDragEvent<HTMLCanvasElement>) {
+  function assetInsertionParentId() {
+    const isolationId = isolationRootIdRef.current;
+    if (isolationId) {
+      const selectedContainer = selectedNodeIdsRef.current
+        .map((id) => nodesByIdRef.current.get(id))
+        .find(
+          (node) =>
+            node &&
+            (node.kind === "frame" || node.kind === "group") &&
+            isNodeWithinRoot(node.id, isolationId, nodesByIdRef.current),
+        );
+      return selectedContainer?.id ?? isolationId;
+    }
+    return preferredArtboardId(documentModel.nodes, selectedNodeIdsRef.current);
+  }
+
+  async function dropAssetOnCanvas(event: ReactDragEvent<HTMLCanvasElement>) {
+    const file = Array.from(event.dataTransfer.files).find((item) =>
+      item.type.match(/^image\/(png|jpeg|webp)$/),
+    );
+    if (file) {
+      event.preventDefault();
+      await importImage(file, { x: event.clientX, y: event.clientY });
+      return;
+    }
     const payload = event.dataTransfer.getData(
       "application/x-open-libra-asset",
     );
@@ -900,17 +971,11 @@ export function App() {
         | { kind: "asset"; assetId: string }
         | { kind: "icon"; name: string; svg: string };
       const world = renderer.worldPointFromClient(event.clientX, event.clientY);
-      const parent = documentModel.nodes
-        .filter(
-          (node) =>
-            node.kind === "frame" &&
-            !node.parent_id &&
-            world.x >= node.x &&
-            world.x <= node.x + node.width &&
-            world.y >= node.y &&
-            world.y <= node.y + node.height,
-        )
-        .at(-1);
+      const parent = topLevelFrameAtPoint(
+        documentModel.nodes,
+        world.x,
+        world.y,
+      );
       const id =
         item.kind === "asset"
           ? engine.add_node_from_asset(item.assetId, parent?.id ?? "")
@@ -1310,6 +1375,21 @@ export function App() {
   });
 
   useEffect(() => {
+    if (!fileMenuOpen) return;
+    function closeFileMenu(event: PointerEvent) {
+      if (
+        event.target instanceof Node &&
+        fileMenuRef.current?.contains(event.target)
+      )
+        return;
+      setFileMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", closeFileMenu, true);
+    return () =>
+      document.removeEventListener("pointerdown", closeFileMenu, true);
+  }, [fileMenuOpen]);
+
+  useEffect(() => {
     if (!editMenuOpen) return;
     function closeEditMenu(event: PointerEvent) {
       if (
@@ -1379,10 +1459,52 @@ export function App() {
           <span className="mark">OL</span>
           <strong>Open Libra</strong>
           <span className="file-name">Engine study</span>
+          <div className="menu-anchor" ref={fileMenuRef}>
+            <button
+              className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
+              aria-haspopup="menu"
+              aria-expanded={fileMenuOpen}
+              onClick={() => {
+                setEditMenuOpen(false);
+                setViewMenuOpen(false);
+                setFileMenuOpen((open) => !open);
+              }}
+            >
+              File
+            </button>
+            {fileMenuOpen && (
+              <div className="edit-menu file-menu" role="menu">
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    figmaFileInputRef.current?.click();
+                  }}
+                >
+                  <FileArchive />
+                  <span>Import Figma file…</span>
+                  <kbd>.fig</kbd>
+                </button>
+              </div>
+            )}
+            <input
+              ref={figmaFileInputRef}
+              className="hidden-file-input"
+              data-testid="file-menu-figma-upload"
+              type="file"
+              accept=".fig,application/octet-stream"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importFigma(file);
+                event.currentTarget.value = "";
+              }}
+            />
+          </div>
           <div className="menu-anchor" ref={editMenuRef}>
             <button
               className={`menu-trigger ${editMenuOpen ? "active" : ""}`}
               onClick={() => {
+                setFileMenuOpen(false);
                 setViewMenuOpen(false);
                 setEditMenuOpen((open) => !open);
               }}
@@ -1422,6 +1544,7 @@ export function App() {
             <button
               className={`menu-trigger ${viewMenuOpen ? "active" : ""}`}
               onClick={() => {
+                setFileMenuOpen(false);
                 setEditMenuOpen(false);
                 setViewMenuOpen((open) => !open);
               }}
@@ -1574,6 +1697,7 @@ export function App() {
               (node) => node.kind === "text",
             )}
             onImportImage={importImage}
+            onImportFigma={importFigma}
             onAddLibraryIcon={addLibraryIcon}
             onAddNodeFromAsset={addNodeFromAsset}
             onAddComponentInstance={createComponentInstance}
@@ -1658,6 +1782,7 @@ export function App() {
               }}
               onDragOver={(event) => {
                 if (
+                  event.dataTransfer.types.includes("Files") ||
                   event.dataTransfer.types.includes(
                     "application/x-open-libra-asset",
                   )
@@ -2029,6 +2154,20 @@ function readImageDimensions(source: string) {
     image.onerror = () => reject(new Error("The selected image is invalid."));
     image.src = source;
   });
+}
+
+function topLevelFrameAtPoint(nodes: NodeSummary[], x: number, y: number) {
+  return nodes
+    .filter(
+      (node) =>
+        node.kind === "frame" &&
+        !node.parent_id &&
+        x >= node.x &&
+        x <= node.x + node.width &&
+        y >= node.y &&
+        y <= node.y + node.height,
+    )
+    .at(-1);
 }
 
 function isNodeWithinRoot(

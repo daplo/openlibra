@@ -61,6 +61,38 @@ impl Document {
             .filter(|node| node.instance_root_id.is_none())
             .filter_map(|node| node.component_slot_id.map(|slot| (slot, node.clone())))
             .collect();
+        let variant_sources: std::collections::HashMap<_, Vec<Node>> = self
+            .components
+            .iter()
+            .flat_map(|component| &component.variants)
+            .filter_map(|variant| {
+                let page = self.pages.iter().find(|page| {
+                    page.nodes
+                        .iter()
+                        .any(|node| node.id == variant.source_root_id)
+                })?;
+                let mut ids = HashSet::from([variant.source_root_id]);
+                loop {
+                    let before = ids.len();
+                    for node in &page.nodes {
+                        if node.parent_id.is_some_and(|parent| ids.contains(&parent)) {
+                            ids.insert(node.id);
+                        }
+                    }
+                    if ids.len() == before {
+                        break;
+                    }
+                }
+                Some((
+                    variant.id,
+                    page.nodes
+                        .iter()
+                        .filter(|node| ids.contains(&node.id))
+                        .cloned()
+                        .collect(),
+                ))
+            })
+            .collect();
         for page in &mut self.pages {
             let instance_roots: Vec<_> = page
                 .nodes
@@ -68,10 +100,51 @@ impl Document {
                 .filter(|node| node.instance_root_id == Some(node.id))
                 .filter_map(|node| {
                     let source = source_by_slot.get(&node.component_slot_id?)?;
-                    Some((node.id, node.x - source.x, node.y - source.y))
+                    Some((
+                        node.id,
+                        node.component_variant_id?,
+                        node.x - source.x,
+                        node.y - source.y,
+                    ))
                 })
                 .collect();
-            for (root_id, dx, dy) in instance_roots {
+            for (root_id, variant_id, dx, dy) in instance_roots {
+                let Some(sources) = variant_sources.get(&variant_id) else {
+                    continue;
+                };
+                let desired_slots: HashSet<_> = sources.iter().map(|node| node.id).collect();
+                page.nodes.retain(|node| {
+                    node.instance_root_id != Some(root_id)
+                        || node
+                            .component_slot_id
+                            .is_some_and(|slot| desired_slots.contains(&slot))
+                });
+                let mut instance_by_slot: std::collections::HashMap<_, _> = page
+                    .nodes
+                    .iter()
+                    .filter(|node| node.instance_root_id == Some(root_id))
+                    .filter_map(|node| node.component_slot_id.map(|slot| (slot, node.id)))
+                    .collect();
+                for source in sources {
+                    if instance_by_slot.contains_key(&source.id) {
+                        continue;
+                    }
+                    let mut clone = source.clone();
+                    clone.id = uuid::Uuid::now_v7();
+                    clone.parent_id = source
+                        .parent_id
+                        .and_then(|parent| instance_by_slot.get(&parent).copied());
+                    clone.x = source.x + dx;
+                    clone.y = source.y + dy;
+                    clone.component_id = None;
+                    clone.component_variant_id = None;
+                    clone.component_slot_id = Some(source.id);
+                    clone.instance_root_id = Some(root_id);
+                    clone.text_override = false;
+                    clone.asset_override = false;
+                    instance_by_slot.insert(source.id, clone.id);
+                    page.nodes.push(clone);
+                }
                 for node in &mut page.nodes {
                     if node.instance_root_id != Some(root_id) {
                         continue;
@@ -121,7 +194,7 @@ impl Document {
 
     pub(crate) fn create_component(&mut self, root_id: EntityId, name: String) -> Option<EntityId> {
         let root = self.active_node(root_id)?;
-        if !matches!(root.kind, NodeKind::Frame | NodeKind::Group) || root.component_id.is_some() {
+        if root.locked || root.component_id.is_some() || root.instance_root_id.is_some() {
             return None;
         }
         let component_id = self.allocate_id();
@@ -155,7 +228,7 @@ impl Document {
         name: String,
     ) -> Option<EntityId> {
         let root = self.active_node(root_id)?;
-        if !matches!(root.kind, NodeKind::Frame | NodeKind::Group) {
+        if root.locked || root.component_id.is_some() || root.instance_root_id.is_some() {
             return None;
         }
         let variant_id = self.allocate_id();

@@ -465,6 +465,48 @@ fn duplicate_nodes_clones_groups_and_component_instances() {
 }
 
 #[test]
+fn adding_an_icon_to_a_component_master_updates_existing_instances() {
+    let mut engine = DocumentEngine::new();
+    let component = engine
+        .document
+        .components
+        .iter()
+        .find(|component| component.name == "Button / Primary")
+        .unwrap()
+        .clone();
+    let source_root = component.variants[0].source_root_id;
+    let instance_root = parse_entity_id(&engine.create_component_instance(
+        component.id.to_string(),
+        component.variants[0].id.to_string(),
+        String::new(),
+    ));
+    let icon_asset = engine
+        .document
+        .media_assets
+        .iter()
+        .find(|asset| asset.kind == MediaAssetKind::Icon)
+        .unwrap()
+        .id;
+    let source_icon = parse_entity_id(
+        &engine.add_node_from_asset(icon_asset.to_string(), source_root.to_string()),
+    );
+    assert_eq!(
+        engine
+            .document
+            .active_node(source_icon)
+            .unwrap()
+            .component_slot_id,
+        Some(source_icon)
+    );
+    assert!(engine.document.active_page().nodes.iter().any(|node| {
+        node.instance_root_id == Some(instance_root)
+            && node.component_slot_id == Some(source_icon)
+            && node.kind == NodeKind::Icon
+    }));
+    engine.document.validate().unwrap();
+}
+
+#[test]
 fn component_variant_can_be_duplicated_for_editing() {
     let mut document = Document::demo();
     let root_id = document
@@ -500,6 +542,32 @@ fn component_variant_can_be_duplicated_for_editing() {
 }
 
 #[test]
+fn a_single_shape_layer_can_become_a_component() {
+    let mut document = Document::demo();
+    let rectangle = document.add_node(NodeKind::Rectangle);
+    let component_id = document
+        .create_component(rectangle, "Icon background".into())
+        .unwrap();
+    let component = document
+        .components
+        .iter()
+        .find(|component| component.id == component_id)
+        .unwrap();
+    let instance = document
+        .create_component_instance(component_id, component.variants[0].id, None)
+        .unwrap();
+    assert_eq!(
+        document.active_node(rectangle).unwrap().component_id,
+        Some(component_id)
+    );
+    assert_eq!(
+        document.active_node(instance).unwrap().component_id,
+        Some(component_id)
+    );
+    document.validate().unwrap();
+}
+
+#[test]
 fn new_pages_nodes_and_colors_use_uuid_v7_ids() {
     let mut document = Document::demo();
     let node = document.add_node(NodeKind::Rectangle);
@@ -517,6 +585,36 @@ fn new_pages_nodes_and_colors_use_uuid_v7_ids() {
     );
     let json = serde_json::to_value(&document).unwrap();
     assert!(json["active_page_id"].is_string());
+}
+
+#[test]
+fn figma_import_appends_editable_pages_and_preserves_hierarchy() {
+    let mut engine = DocumentEngine::new();
+    let page_id = engine
+        .import_figma_json(
+            r#"{
+                "name":"Imported design",
+                "assets":[],
+                "pages":[{
+                    "name":"Figma screen",
+                    "nodes":[
+                        {"source_id":"1:1","name":"Phone","kind":"frame","x":80,"y":80,"width":375,"height":812,"fill":[1,1,1,1],"stroke":[0,0,0,0],"stroke_width":0,"corner_radii":[24,24,24,24],"stroke_align":"inside","opacity":1,"rotation":0,"layout_mode":"column","layout_gap":16,"layout_padding":[24,24,24,24]},
+                        {"source_id":"1:2","parent_source_id":"1:1","name":"Heading","kind":"text","x":24,"y":24,"width":200,"height":40,"fill":[0,0,0,1],"stroke":[0,0,0,0],"stroke_width":0,"corner_radii":[0,0,0,0],"stroke_align":"inside","opacity":1,"rotation":0,"layout_mode":"none","layout_gap":0,"layout_padding":[0,0,0,0],"text":{"content":"Tasks","font_family":"Inter","font_weight":700,"font_size":32,"line_height":1.2,"letter_spacing":0,"horizontal_align":"left","vertical_align":"top","font_style":"normal","sizing":"fixed"}}
+                    ]
+                }]
+            }"#,
+        )
+        .expect("Figma payload imports");
+    let model: serde_json::Value = serde_json::from_str(&engine.read_model_json()).unwrap();
+    assert_eq!(model["active_page_id"], page_id);
+    assert_eq!(
+        model["pages"].as_array().unwrap().last().unwrap()["name"],
+        "Figma screen"
+    );
+    let nodes = model["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[1]["parent_id"], nodes[0]["id"]);
+    assert_eq!(nodes[1]["text"]["content"], "Tasks");
 }
 
 #[test]

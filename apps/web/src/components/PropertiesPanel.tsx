@@ -267,8 +267,9 @@ export function Properties(props: {
         )}
         <PropertySection title="Actions">
           {selected.length === 1 &&
-            (node.kind === "frame" || node.kind === "group") &&
-            !node.component_id && (
+            !node.component_id &&
+            !node.instance_root_id &&
+            !node.locked && (
               <button
                 className="primary-button"
                 onClick={() => props.onCreateComponent(node)}
@@ -701,6 +702,7 @@ function StyleControls({
   onShadowsChange: (shadows: ShadowSummary[]) => void;
 }) {
   const [cornersLinked, setCornersLinked] = useState(true);
+  const cornersLinkedRef = useRef(true);
   return (
     <>
       <PropertySection title="Fill">
@@ -765,7 +767,10 @@ function StyleControls({
           <FourValueHeading
             label="Radius"
             linked={cornersLinked}
-            onToggle={() => setCornersLinked((linked) => !linked)}
+            onToggle={() => {
+              cornersLinkedRef.current = !cornersLinkedRef.current;
+              setCornersLinked(cornersLinkedRef.current);
+            }}
           />
           <div className="geometry-grid corner-grid">
             {["TL", "TR", "BR", "BL"].map((label, index) => (
@@ -776,7 +781,7 @@ function StyleControls({
                 min={0}
                 onChange={(radius) =>
                   onChange({
-                    cornerRadii: cornersLinked
+                    cornerRadii: cornersLinkedRef.current
                       ? [radius, radius, radius, radius]
                       : node.corner_radii.map((value, position) =>
                           position === index ? radius : value,
@@ -1053,9 +1058,10 @@ function AutoLayoutControls({
 }) {
   const padding = node.layout_padding;
   const [paddingLinked, setPaddingLinked] = useState(true);
+  const paddingLinkedRef = useRef(true);
   const setPadding = (index: number, value: number) =>
     onChange({
-      layout_padding: paddingLinked
+      layout_padding: paddingLinkedRef.current
         ? [value, value, value, value]
         : padding.map((current, position) =>
             position === index ? value : current,
@@ -1118,7 +1124,10 @@ function AutoLayoutControls({
           <FourValueHeading
             label="Padding"
             linked={paddingLinked}
-            onToggle={() => setPaddingLinked((linked) => !linked)}
+            onToggle={() => {
+              paddingLinkedRef.current = !paddingLinkedRef.current;
+              setPaddingLinked(paddingLinkedRef.current);
+            }}
           />
           <div className="geometry-grid padding-grid">
             <GeometryInput

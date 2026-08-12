@@ -146,6 +146,16 @@ button {
 .view-menu {
   width: 190px;
 }
+.file-menu {
+  width: 220px;
+}
+.hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 .menu-check {
   display: grid;
   place-items: center;
@@ -1972,6 +1982,51 @@ canvas[data-tool="hand"]:active {
 }
 
 .asset-upload-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.figma-import-section {
+  display: grid;
+  gap: var(--control-gap);
+}
+
+.figma-import-section small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.figma-import-button {
+  position: relative;
+  display: flex;
+  height: var(--control-height);
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.figma-import-button:hover {
+  border-color: var(--accent);
+}
+
+.figma-import-button svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
+.figma-import-button input {
   position: absolute;
   width: 1px;
   height: 1px;

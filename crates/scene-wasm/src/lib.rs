@@ -16,6 +16,54 @@ use wasm_bindgen::prelude::*;
 const SCHEMA_VERSION: u32 = 7;
 const FLOATS_PER_RECT: usize = 24;
 
+#[derive(serde::Deserialize)]
+struct FigmaImportPayload {
+    pages: Vec<FigmaImportPage>,
+    #[serde(default)]
+    assets: Vec<FigmaImportAsset>,
+}
+
+#[derive(serde::Deserialize)]
+struct FigmaImportPage {
+    name: String,
+    nodes: Vec<FigmaImportNode>,
+}
+
+#[derive(serde::Deserialize)]
+struct FigmaImportAsset {
+    source_id: String,
+    name: String,
+    mime_type: String,
+    source: String,
+}
+
+#[derive(serde::Deserialize)]
+struct FigmaImportNode {
+    source_id: String,
+    #[serde(default)]
+    parent_source_id: Option<String>,
+    name: String,
+    kind: NodeKind,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    fill: [f32; 4],
+    stroke: [f32; 4],
+    stroke_width: f32,
+    corner_radii: [f32; 4],
+    stroke_align: StrokeAlign,
+    opacity: f32,
+    rotation: f32,
+    layout_mode: LayoutMode,
+    layout_gap: f32,
+    layout_padding: [f32; 4],
+    #[serde(default)]
+    text: Option<TextStyle>,
+    #[serde(default)]
+    asset_source_id: Option<String>,
+}
+
 fn parse_entity_id(value: &str) -> EntityId {
     Uuid::parse_str(value).unwrap_or_else(|_| Uuid::nil())
 }
@@ -388,6 +436,95 @@ impl DocumentEngine {
 
     pub fn add_page(&mut self, name: String) -> String {
         self.mutate(|document| document.add_page(name)).to_string()
+    }
+
+    pub fn import_figma_json(&mut self, json: &str) -> Result<String, JsValue> {
+        let payload: FigmaImportPayload = serde_json::from_str(json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid Figma import: {error}")))?;
+        if payload.pages.is_empty() {
+            return Err(JsValue::from_str("The Figma import contains no pages"));
+        }
+        let imported_page_id = self.mutate(|document| {
+            let mut assets = std::collections::HashMap::new();
+            for asset in payload.assets {
+                let id = document.allocate_id();
+                assets.insert(asset.source_id, id);
+                document.media_assets.push(MediaAsset {
+                    id,
+                    name: asset.name,
+                    kind: MediaAssetKind::Image,
+                    mime_type: asset.mime_type,
+                    source: asset.source,
+                    width: 0,
+                    height: 0,
+                    tags: vec!["figma".into(), "imported".into()],
+                });
+            }
+            let mut first_page_id = None;
+            for page in payload.pages {
+                let page_id = document.add_page(if page.name.trim().is_empty() {
+                    "Imported page".into()
+                } else {
+                    page.name
+                });
+                first_page_id.get_or_insert(page_id);
+                let mut node_ids = std::collections::HashMap::new();
+                for imported in page.nodes {
+                    if ![
+                        imported.x,
+                        imported.y,
+                        imported.width,
+                        imported.height,
+                        imported.stroke_width,
+                        imported.opacity,
+                        imported.rotation,
+                        imported.layout_gap,
+                    ]
+                    .iter()
+                    .all(|value| value.is_finite())
+                    {
+                        continue;
+                    }
+                    let parent_id = imported
+                        .parent_source_id
+                        .as_ref()
+                        .and_then(|source| node_ids.get(source).copied());
+                    let id = document.insert_node(
+                        &imported.name,
+                        imported.kind,
+                        parent_id,
+                        [
+                            imported.x,
+                            imported.y,
+                            imported.width.max(1.0),
+                            imported.height.max(1.0),
+                        ],
+                        imported.fill,
+                    );
+                    if let Some(node) = document.active_node_mut(id) {
+                        node.stroke = imported.stroke;
+                        node.stroke_width = imported.stroke_width.max(0.0);
+                        node.corner_radii = imported.corner_radii.map(|value| value.max(0.0));
+                        node.stroke_align = imported.stroke_align;
+                        node.opacity = imported.opacity.clamp(0.0, 1.0);
+                        node.rotation = imported.rotation;
+                        node.layout_mode = imported.layout_mode;
+                        node.layout_gap = imported.layout_gap.max(0.0);
+                        node.layout_padding = imported.layout_padding.map(|value| value.max(0.0));
+                        node.text = imported.text;
+                        node.asset_id = imported
+                            .asset_source_id
+                            .as_ref()
+                            .and_then(|source| assets.get(source).copied());
+                    }
+                    node_ids.insert(imported.source_id, id);
+                }
+            }
+            let page_id = first_page_id.expect("pages were checked above");
+            document.set_active_page(page_id);
+            page_id
+        });
+        Ok(imported_page_id.to_string())
     }
 
     pub fn set_active_page(&mut self, page_id: String) -> bool {
@@ -1009,21 +1146,18 @@ impl DocumentEngine {
 }
 
 fn component_source_changed(before: &Document, after: &Document) -> bool {
-    before
-        .pages
-        .iter()
-        .zip(&after.pages)
-        .any(|(before_page, after_page)| {
-            before_page.nodes.iter().any(|before_node| {
-                before_node.instance_root_id.is_none()
-                    && before_node.component_slot_id == Some(before_node.id)
-                    && after_page
-                        .nodes
-                        .iter()
-                        .find(|node| node.id == before_node.id)
-                        .is_some_and(|node| node != before_node)
+    let sources = |document: &Document| {
+        document
+            .pages
+            .iter()
+            .flat_map(|page| &page.nodes)
+            .filter(|node| {
+                node.instance_root_id.is_none() && node.component_slot_id == Some(node.id)
             })
-        })
+            .map(|node| (node.id, node.clone()))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    sources(before) != sources(after)
 }
 
 impl Default for DocumentEngine {

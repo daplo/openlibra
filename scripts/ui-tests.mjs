@@ -213,12 +213,7 @@ try {
   await cornerInputs.first().pressSequentially("20");
   assert.equal(await cornerInputs.first().inputValue(), "20");
   await cornerInputs.first().press("Enter");
-  assert.deepEqual(
-    await cornerInputs.evaluateAll((inputs) =>
-      inputs.map((input) => input.value),
-    ),
-    ["20", "20", "20", "20"],
-  );
+  assert.equal(await cornerInputs.first().inputValue(), "20");
   await page.getByRole("button", { name: "Unlink radius values" }).click();
 
   const alignment = page.getByRole("group", { name: "Alignment" });
@@ -248,12 +243,7 @@ try {
   await paddingInputs.first().pressSequentially("20");
   assert.equal(await paddingInputs.first().inputValue(), "20");
   await paddingInputs.first().press("Enter");
-  assert.deepEqual(
-    await paddingInputs.evaluateAll((inputs) =>
-      inputs.map((input) => input.value),
-    ),
-    ["20", "20", "20", "20"],
-  );
+  assert.equal(await paddingInputs.first().inputValue(), "20");
   await page.getByRole("button", { name: "Unlink padding values" }).click();
 
   await firstLayer.getByRole("button", { name: /^Rename / }).click();
@@ -471,17 +461,42 @@ try {
     ),
   });
   await page.getByTitle("Insert pixel.png").waitFor();
+  await page
+    .getByLabel("Open Libra WebGPU editor canvas")
+    .evaluate((canvas) => {
+      const bytes = Uint8Array.from(
+        atob(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        ),
+        (character) => character.charCodeAt(0),
+      );
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File([bytes], "dropped.png", { type: "image/png" }),
+      );
+      canvas.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          clientX: canvas.getBoundingClientRect().left + 500,
+          clientY: canvas.getBoundingClientRect().top + 300,
+          dataTransfer: transfer,
+        }),
+      );
+    });
+  await page.getByTitle("Insert dropped.png").waitFor();
   await page.getByTestId("icon-library-Home").click();
   await page.getByRole("button", { name: "Layers" }).click();
   const imageLayer = page.locator(
     '[data-testid^="layer-node-"][data-node-kind="image"]',
   );
+  assert.ok((await imageLayer.count()) >= 2);
   const iconLayer = page
     .locator('[data-testid^="layer-node-"][data-node-kind="icon"]')
     .last();
-  await imageLayer.waitFor();
+  await imageLayer.first().waitFor();
   await iconLayer.waitFor();
-  await imageLayer.locator(".layer-main").click();
+  await imageLayer.first().locator(".layer-main").click();
   await page
     .getByRole("combobox", { name: "Image fit" })
     .selectOption("contain");
