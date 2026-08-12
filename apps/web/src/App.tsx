@@ -4,10 +4,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   Check,
+  ChevronRight,
   Component,
   Frame,
   Hand,
@@ -69,6 +71,7 @@ export function App() {
   const rendererRef = useRef<OpenLibraRenderer | undefined>(undefined);
   const engineRef = useRef<DocumentEngine | undefined>(undefined);
   const selectedNodeIdsRef = useRef<string[]>([]);
+  const copiedNodeIdsRef = useRef<string[]>([]);
   const inputControllerRef = useRef<EditorInputController | undefined>(
     undefined,
   );
@@ -84,6 +87,11 @@ export function App() {
   const [rightPanelWidth, setRightPanelWidth] = useState(250);
   const [libraryComponentId, setLibraryComponentId] = useState<string>();
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [canvasContextMenu, setCanvasContextMenu] = useState<{
+    x: number;
+    y: number;
+    sourceRootId: string;
+  }>();
   const [isolationRootId, setIsolationRootId] = useState<string>();
   const isolationRootIdRef = useRef<string | undefined>(undefined);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>("select");
@@ -97,6 +105,7 @@ export function App() {
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
   const [editingTextId, setEditingTextId] = useState<string>();
+  const editingTextInitialValueRef = useRef("");
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
   const [documentModel, setDocumentModel] = useState<DocumentReadModel>({
     schema_version: 1,
@@ -141,12 +150,30 @@ export function App() {
         .filter((node): node is NodeSummary => node !== undefined),
     [nodesById, selectedNodeIds],
   );
+  const selectedComponentMaster = selectedNodes.some((node) =>
+    isComponentMasterNode(node.id, nodesById),
+  );
+  const selectedMasterRoot = selectedNodes[0]
+    ? findComponentMasterRoot(selectedNodes[0].id, nodesById)
+    : undefined;
+  const editableSelectedNodes =
+    selectedComponentMaster && !isolationRootId ? [] : selectedNodes;
   const editingTextNode = editingTextId
     ? nodesById.get(editingTextId)
     : undefined;
   const isolationRoot = isolationRootId
     ? nodesById.get(isolationRootId)
     : undefined;
+  const componentWorkspace = useMemo(() => {
+    if (!isolationRootId) return undefined;
+    for (const component of documentModel.components) {
+      const variant = component.variants.find(
+        (item) => item.source_root_id === isolationRootId,
+      );
+      if (variant) return { component, variant };
+    }
+    return undefined;
+  }, [documentModel.components, isolationRootId]);
   const isolatedModel = useMemo(() => {
     if (!isolationRootId) return documentModel;
     const visibleNodes = documentModel.nodes
@@ -181,19 +208,15 @@ export function App() {
   }, [isolationRootId, nodesById]);
 
   useEffect(() => {
-    if (!isolationRootId) return;
-    const exitOnEscape = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        event.key !== "Escape" ||
-        target?.matches("input, textarea, select, [contenteditable='true']")
-      )
-        return;
-      setIsolationRootId(undefined);
+    if (!canvasContextMenu) return;
+    const close = () => setCanvasContextMenu(undefined);
+    window.addEventListener("pointerdown", close, { once: true });
+    window.addEventListener("blur", close, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
     };
-    window.addEventListener("keydown", exitOnEscape);
-    return () => window.removeEventListener("keydown", exitOnEscape);
-  }, [isolationRootId]);
+  }, [canvasContextMenu]);
 
   function refreshDocument(selection = selectedNodeIdsRef.current) {
     const engine = engineRef.current;
@@ -330,7 +353,13 @@ export function App() {
           ? engine.add_text_to(parentId ?? "")
           : engine.add_rectangle_to(parentId ?? "");
     refreshDocument([id]);
-    if (kind === "text") setEditingTextId(id);
+    if (kind === "text") {
+      const created = engine.node_json(id);
+      editingTextInitialValueRef.current = created
+        ? ((JSON.parse(created) as NodeSummary).text?.content ?? "")
+        : "";
+      setEditingTextId(id);
+    }
   }
 
   function addArtboard(preset: (typeof ARTBOARD_PRESETS)[number]) {
@@ -363,6 +392,7 @@ export function App() {
   }
 
   function deleteSelected() {
+    if (!selectionCanBeEdited()) return;
     const engine = engineRef.current;
     if (!engine || selectedNodeIds.length === 0) return;
     let changed = false;
@@ -373,12 +403,35 @@ export function App() {
   }
 
   function groupSelected() {
+    if (!selectionCanBeEdited()) return;
     if (!engineRef.current || selectedNodeIds.length < 2) return;
     try {
       const groupId = engineRef.current.group_nodes(
         JSON.stringify(selectedNodeIds),
       );
       refreshDocument([groupId]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function copySelection() {
+    if (!selectionCanBeEdited()) return;
+    copiedNodeIdsRef.current = [...selectedNodeIdsRef.current];
+  }
+
+  function pasteSelection() {
+    const engine = engineRef.current;
+    if (!engine || copiedNodeIdsRef.current.length === 0) return;
+    try {
+      const json = engine.duplicate_nodes(
+        JSON.stringify(copiedNodeIdsRef.current),
+      );
+      const ids = JSON.parse(json) as string[];
+      if (ids.length > 0) {
+        copiedNodeIdsRef.current = ids;
+        refreshDocument(ids);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -439,7 +492,26 @@ export function App() {
     requestAnimationFrame(() => rendererRef.current?.centerOnBounds(source));
   }
 
+  function openCanvasComponentMenu(clientX: number, clientY: number) {
+    if (isolationRootIdRef.current) return;
+    const renderer = rendererRef.current;
+    const engine = engineRef.current;
+    const model = documentModelRef.current;
+    if (!renderer || !engine || !model) return;
+    const world = renderer.worldPointFromClient(clientX, clientY);
+    const hitId = engine.hit_test(world.x, world.y);
+    if (!hitId) return;
+    const sourceRootId = componentSourceRootForNode(
+      hitId,
+      nodesByIdRef.current,
+      model,
+    );
+    if (!sourceRootId) return;
+    setCanvasContextMenu({ x: clientX, y: clientY, sourceRootId });
+  }
+
   function moveSelection(dx: number, dy: number) {
+    if (!selectionCanBeEdited()) return;
     const selection = selectedNodeIdsRef.current;
     if (!engineRef.current || selection.length === 0) return;
     if (engineRef.current.move_nodes(JSON.stringify(selection), dx, dy)) {
@@ -489,6 +561,7 @@ export function App() {
   }
 
   function resizeSelection(handle: ResizeHandle, dx: number, dy: number) {
+    if (!selectionCanBeEdited()) return;
     const selection = selectedNodeIdsRef.current;
     if (!engineRef.current || selection.length !== 1) return;
     const node = documentModel.nodes.find(
@@ -515,6 +588,13 @@ export function App() {
           ? current.filter((selected) => selected !== id)
           : [...current, id],
       );
+  }
+
+  function selectionCanBeEdited() {
+    const isolationId = isolationRootIdRef.current;
+    return selectedNodeIdsRef.current.every(
+      (id) => isolationId || !isComponentMasterNode(id, nodesByIdRef.current),
+    );
   }
 
   function updateNodeStyle(
@@ -616,6 +696,12 @@ export function App() {
     try {
       const bounds = measureTextBounds(node, text);
       engine.begin_transaction();
+      const styleDetached = Boolean(
+        node.text_style_id &&
+        node.text &&
+        !textTypographyEqual(node.text, text) &&
+        engine.bind_node_text_style(node.id, ""),
+      );
       const textChanged = engine.set_node_text(node.id, JSON.stringify(text));
       const boundsChanged = bounds
         ? engine.set_node_bounds(
@@ -627,7 +713,8 @@ export function App() {
           )
         : false;
       engine.end_transaction();
-      if (textChanged || boundsChanged) refreshDocument([node.id]);
+      if (styleDetached || textChanged || boundsChanged)
+        refreshDocument([node.id]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -798,6 +885,60 @@ export function App() {
     );
     const id = engine.add_node_from_asset(assetId, parentId ?? "");
     if (id) refreshDocument([id]);
+  }
+
+  function dropAssetOnCanvas(event: ReactDragEvent<HTMLCanvasElement>) {
+    const payload = event.dataTransfer.getData(
+      "application/x-open-libra-asset",
+    );
+    const engine = engineRef.current;
+    const renderer = rendererRef.current;
+    if (!payload || !engine || !renderer) return;
+    event.preventDefault();
+    try {
+      const item = JSON.parse(payload) as
+        | { kind: "asset"; assetId: string }
+        | { kind: "icon"; name: string; svg: string };
+      const world = renderer.worldPointFromClient(event.clientX, event.clientY);
+      const parent = documentModel.nodes
+        .filter(
+          (node) =>
+            node.kind === "frame" &&
+            !node.parent_id &&
+            world.x >= node.x &&
+            world.x <= node.x + node.width &&
+            world.y >= node.y &&
+            world.y <= node.y + node.height,
+        )
+        .at(-1);
+      const id =
+        item.kind === "asset"
+          ? engine.add_node_from_asset(item.assetId, parent?.id ?? "")
+          : engine.add_media_asset_node(
+              "icon",
+              item.name,
+              "image/svg+xml",
+              item.svg,
+              24,
+              24,
+              parent?.id ?? "",
+            );
+      if (!id) return;
+      const nodeJson = engine.node_json(id);
+      if (nodeJson) {
+        const node = JSON.parse(nodeJson) as NodeSummary;
+        engine.set_node_bounds(
+          id,
+          Math.round(world.x - node.width / 2),
+          Math.round(world.y - node.height / 2),
+          node.width,
+          node.height,
+        );
+      }
+      refreshDocument([id]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   function updateNodeImageFit(
@@ -1035,6 +1176,8 @@ export function App() {
       deleteSelection: deleteSelected,
       undo,
       redo,
+      copySelection,
+      pasteSelection,
       nudgeSelection: moveSelection,
       beginTextEdit: (clientX, clientY) => {
         const renderer = rendererRef.current;
@@ -1045,8 +1188,14 @@ export function App() {
         const node = documentModelRef.current?.nodes.find(
           (item) => item.id === id,
         );
-        if (node?.kind === "text" && !node.locked) {
+        if (node?.kind === "text" && node.text && !node.locked) {
+          if (
+            !isolationRootIdRef.current &&
+            isComponentMasterNode(node.id, nodesByIdRef.current)
+          )
+            return;
           applySelection([node.id]);
+          editingTextInitialValueRef.current = node.text.content;
           setEditingTextId(node.id);
         }
       },
@@ -1354,7 +1503,7 @@ export function App() {
         </div>
       </header>
 
-      {libraryOpen ? (
+      {libraryOpen && (
         <LibraryView
           model={documentModel}
           focusedComponentId={libraryComponentId}
@@ -1363,254 +1512,339 @@ export function App() {
           onEditMain={editMainComponent}
           onAddVariant={duplicateComponentVariant}
         />
-      ) : (
-        <section
-          className="workspace"
-          style={
-            {
-              "--left-panel-width": `${leftPanelWidth}px`,
-              "--right-panel-width": `${rightPanelWidth}px`,
-            } as CSSProperties
-          }
-        >
-          <aside className="left-panel">
-            <Panel
-              mode={mode}
-              stats={stats}
-              model={isolatedModel}
-              selectedNodeIds={selectedNodeIds}
-              onSelectNode={selectNode}
-              onAddPage={addPage}
-              onSelectPage={selectPage}
-              onNavigateNode={(node) =>
-                rendererRef.current?.centerOnBounds(node)
+      )}
+      <section
+        aria-hidden={libraryOpen}
+        className={`workspace ${libraryOpen ? "workspace-hidden" : ""}`}
+        style={
+          {
+            "--left-panel-width": `${leftPanelWidth}px`,
+            "--right-panel-width": `${rightPanelWidth}px`,
+          } as CSSProperties
+        }
+      >
+        <aside className="left-panel">
+          <Panel
+            mode={mode}
+            stats={stats}
+            model={isolatedModel}
+            selectedNodeIds={selectedNodeIds}
+            onSelectNode={selectNode}
+            onAddPage={addPage}
+            onSelectPage={selectPage}
+            onNavigateNode={(node) => rendererRef.current?.centerOnBounds(node)}
+            onReorderNode={(draggedId, targetId, before) => {
+              if (
+                !isolationRootId &&
+                isComponentMasterNode(draggedId, nodesById)
+              )
+                return;
+              if (engineRef.current?.reorder_node(draggedId, targetId, before))
+                refreshDocument();
+            }}
+            onToggleLock={(id, locked) => {
+              if (!isolationRootId && isComponentMasterNode(id, nodesById))
+                return;
+              if (engineRef.current?.set_node_locked(id, locked)) {
+                if (locked && selectedNodeIdsRef.current.includes(id))
+                  refreshDocument(
+                    selectedNodeIdsRef.current.filter(
+                      (selected) => selected !== id,
+                    ),
+                  );
+                else refreshDocument();
               }
-              onBeginTextEdit={(node) => setEditingTextId(node.id)}
-              onReorderNode={(draggedId, targetId, before) => {
-                if (
-                  engineRef.current?.reorder_node(draggedId, targetId, before)
-                )
-                  refreshDocument();
+            }}
+            onRenameNode={(id, name) => {
+              if (!isolationRootId && isComponentMasterNode(id, nodesById))
+                return;
+              if (
+                name.trim() &&
+                engineRef.current?.rename_node(id, name.trim())
+              )
+                refreshDocument();
+            }}
+            onAddNumberVariable={addNumberVariable}
+            onUpdateNumberVariable={updateNumberVariable}
+            onDeleteNumberVariable={deleteNumberVariable}
+            onAddTextStyle={addTextStyle}
+            onUpdateTextStyle={updateTextStyle}
+            onDeleteTextStyle={deleteTextStyle}
+            hasSelectedText={editableSelectedNodes.some(
+              (node) => node.kind === "text",
+            )}
+            onImportImage={importImage}
+            onAddLibraryIcon={addLibraryIcon}
+            onAddNodeFromAsset={addNodeFromAsset}
+            onAddComponentInstance={createComponentInstance}
+            onAddSelectedComponentVariant={addSelectedComponentVariant}
+            onOpenComponentLibrary={(componentId) => {
+              setLibraryComponentId(componentId);
+              setLibraryOpen(true);
+            }}
+            componentWorkspace={
+              componentWorkspace
+                ? {
+                    componentName: componentWorkspace.component.name,
+                    variantName: componentWorkspace.variant.name,
+                  }
+                : undefined
+            }
+          />
+          <PanelResizeHandle
+            side="left"
+            width={leftPanelWidth}
+            onChange={setLeftPanelWidth}
+          />
+        </aside>
+
+        <section
+          className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
+        >
+          <div className="tool-rail" aria-label="Canvas tools">
+            <ToolButton
+              label="Select (V)"
+              icon={<MousePointer2 />}
+              active={canvasTool === "select"}
+              disabled={mode !== "design"}
+              onClick={() => setCanvasTool("select")}
+            />
+            <ToolButton
+              label="Hand (H)"
+              icon={<Hand />}
+              active={canvasTool === "hand"}
+              onClick={() => setCanvasTool("hand")}
+            />
+            <ToolButton
+              label="Artboard"
+              icon={<Frame />}
+              disabled={mode !== "design"}
+              active={artboardMenuOpen}
+              onClick={() => setArtboardMenuOpen((open) => !open)}
+            />
+            <ToolButton
+              label="Rectangle"
+              icon={<Square />}
+              disabled={mode !== "design"}
+              onClick={() => addNode("rectangle")}
+            />
+            <ToolButton
+              label="Text"
+              icon={<Type />}
+              disabled={mode !== "design"}
+              onClick={() => addNode("text")}
+            />
+            <ToolButton
+              label="Comment"
+              icon={<MessageCircle />}
+              disabled={mode === "developer"}
+            />
+          </div>
+
+          {artboardMenuOpen && (
+            <ArtboardMenu
+              onChoose={addArtboard}
+              onClose={() => setArtboardMenuOpen(false)}
+            />
+          )}
+
+          <div className="canvas-wrap">
+            <canvas
+              ref={canvasRef}
+              aria-label="Open Libra WebGPU editor canvas"
+              onContextMenu={(event) => {
+                event.preventDefault();
+                openCanvasComponentMenu(event.clientX, event.clientY);
               }}
-              onToggleLock={(id, locked) => {
-                if (engineRef.current?.set_node_locked(id, locked)) {
-                  if (locked && selectedNodeIdsRef.current.includes(id))
-                    refreshDocument(
-                      selectedNodeIdsRef.current.filter(
-                        (selected) => selected !== id,
-                      ),
-                    );
-                  else refreshDocument();
+              onDragOver={(event) => {
+                if (
+                  event.dataTransfer.types.includes(
+                    "application/x-open-libra-asset",
+                  )
+                ) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "copy";
                 }
               }}
-              onRenameNode={(id, name) => {
-                if (
-                  name.trim() &&
-                  engineRef.current?.rename_node(id, name.trim())
-                )
-                  refreshDocument();
-              }}
-              onAddNumberVariable={addNumberVariable}
-              onUpdateNumberVariable={updateNumberVariable}
-              onDeleteNumberVariable={deleteNumberVariable}
-              onAddTextStyle={addTextStyle}
-              onUpdateTextStyle={updateTextStyle}
-              onDeleteTextStyle={deleteTextStyle}
-              hasSelectedText={selectedNodes.some(
-                (node) => node.kind === "text",
-              )}
-              onImportImage={importImage}
-              onAddLibraryIcon={addLibraryIcon}
-              onAddNodeFromAsset={addNodeFromAsset}
-              onAddComponentInstance={createComponentInstance}
-              onAddSelectedComponentVariant={addSelectedComponentVariant}
-              onOpenComponentLibrary={(componentId) => {
-                setLibraryComponentId(componentId);
-                setLibraryOpen(true);
-              }}
+              onDrop={dropAssetOnCanvas}
             />
-            <PanelResizeHandle
-              side="left"
-              width={leftPanelWidth}
-              onChange={setLeftPanelWidth}
+            {gridVisible && (
+              <CanvasGrid rendererRef={rendererRef} theme={theme} />
+            )}
+            <ArtboardGuides
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
+              artboards={guidedArtboards}
             />
-          </aside>
-
-          <section
-            className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
-          >
-            <div className="tool-rail" aria-label="Canvas tools">
-              <ToolButton
-                label="Select (V)"
-                icon={<MousePointer2 />}
-                active={canvasTool === "select"}
-                disabled={mode !== "design"}
-                onClick={() => setCanvasTool("select")}
-              />
-              <ToolButton
-                label="Hand (H)"
-                icon={<Hand />}
-                active={canvasTool === "hand"}
-                onClick={() => setCanvasTool("hand")}
-              />
-              <ToolButton
-                label="Artboard"
-                icon={<Frame />}
-                disabled={mode !== "design"}
-                active={artboardMenuOpen}
-                onClick={() => setArtboardMenuOpen((open) => !open)}
-              />
-              <ToolButton
-                label="Rectangle"
-                icon={<Square />}
-                disabled={mode !== "design"}
-                onClick={() => addNode("rectangle")}
-              />
-              <ToolButton
-                label="Text"
-                icon={<Type />}
-                disabled={mode !== "design"}
-                onClick={() => addNode("text")}
-              />
-              <ToolButton
-                label="Comment"
-                icon={<MessageCircle />}
-                disabled={mode === "developer"}
-              />
-            </div>
-
-            {artboardMenuOpen && (
-              <ArtboardMenu
-                onChoose={addArtboard}
-                onClose={() => setArtboardMenuOpen(false)}
+            <MediaOverlay
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
+              assets={documentModel.media_assets}
+            />
+            <TextOverlay
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
+              editingTextId={editingTextId}
+            />
+            {isolationRoot && (
+              <IsolationOverlay
+                rendererRef={rendererRef}
+                root={isolationRoot}
+                theme={theme}
               />
             )}
-
-            <div className="canvas-wrap">
-              <canvas
-                ref={canvasRef}
-                aria-label="Open Libra WebGPU editor canvas"
-              />
-              {gridVisible && (
-                <CanvasGrid rendererRef={rendererRef} theme={theme} />
-              )}
-              <ArtboardGuides
-                rendererRef={rendererRef}
-                nodes={documentModel.nodes}
-                artboards={guidedArtboards}
-              />
-              <MediaOverlay
-                rendererRef={rendererRef}
-                nodes={documentModel.nodes}
-                assets={documentModel.media_assets}
-              />
-              <TextOverlay
-                rendererRef={rendererRef}
-                nodes={documentModel.nodes}
-                editingTextId={editingTextId}
-              />
-              {isolationRoot && (
-                <IsolationOverlay
-                  rendererRef={rendererRef}
-                  root={isolationRoot}
-                  theme={theme}
-                />
-              )}
-              <SelectionOverlay
-                rendererRef={rendererRef}
-                selected={selectedNodes}
-              />
-              {isolationRoot && (
-                <div
-                  className="component-isolation-bar"
-                  data-testid="component-isolation"
+            <SelectionOverlay
+              rendererRef={rendererRef}
+              selected={selectedNodes}
+            />
+            {isolationRoot && (
+              <div
+                className="component-isolation-bar"
+                data-testid="component-isolation"
+              >
+                <Component aria-hidden="true" />
+                <button
+                  className="component-breadcrumb-link"
+                  onClick={() => {
+                    setLibraryComponentId(componentWorkspace?.component.id);
+                    setLibraryOpen(true);
+                  }}
                 >
-                  <Component aria-hidden="true" />
-                  <span>Editing component</span>
-                  <strong>{isolationRoot.name}</strong>
-                  <button onClick={() => setIsolationRootId(undefined)}>
-                    <Check aria-hidden="true" />
-                    Done
-                  </button>
-                </div>
-              )}
-              <SpacingOverlay
-                rendererRef={rendererRef}
-                interactionCanvasRef={canvasRef}
-                nodes={documentModel.nodes}
-                selected={selectedNodes}
-              />
-              {editingTextNode?.text && (
-                <textarea
-                  className="text-editor-overlay"
-                  defaultValue={editingTextNode.text.content}
-                  autoFocus
-                  wrap={
-                    editingTextNode.text.sizing === "auto_width"
-                      ? "off"
-                      : "soft"
-                  }
-                  style={textEditorStyle(editingTextNode, rendererRef.current)}
-                  onBlur={(event) => {
+                  Components
+                </button>
+                <ChevronRight aria-hidden="true" />
+                <strong>
+                  {componentWorkspace?.component.name ?? isolationRoot.name}
+                </strong>
+                <ChevronRight aria-hidden="true" />
+                <span>{componentWorkspace?.variant.name ?? "Default"}</span>
+                <button
+                  className="component-workspace-done"
+                  onClick={() => setIsolationRootId(undefined)}
+                >
+                  <Check aria-hidden="true" />
+                  Done
+                </button>
+              </div>
+            )}
+            <SpacingOverlay
+              rendererRef={rendererRef}
+              interactionCanvasRef={canvasRef}
+              nodes={documentModel.nodes}
+              selected={selectedNodes}
+            />
+            {editingTextNode?.text && (
+              <textarea
+                className="text-editor-overlay"
+                defaultValue={editingTextNode.text.content}
+                autoFocus
+                wrap={
+                  editingTextNode.text.sizing === "auto_width" ? "off" : "soft"
+                }
+                style={textEditorStyle(editingTextNode, rendererRef.current)}
+                onBlur={(event) => {
+                  if (
+                    event.currentTarget.value !==
+                    editingTextInitialValueRef.current
+                  )
                     updateNodeText(editingTextNode, {
                       ...editingTextNode.text!,
                       content: event.currentTarget.value,
                     });
-                    setEditingTextId(undefined);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") setEditingTextId(undefined);
-                  }}
-                  aria-label="Edit text content"
-                />
-              )}
-              {error && (
-                <div className="error-card">
-                  <strong>Renderer unavailable</strong>
-                  <span>{error}</span>
-                </div>
-              )}
-            </div>
-
-            {rulersVisible && (
-              <Rulers rendererRef={rendererRef} theme={theme} />
+                  setEditingTextId(undefined);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setEditingTextId(undefined);
+                }}
+                aria-label="Edit text content"
+              />
             )}
+            {error && (
+              <div className="error-card">
+                <strong>Renderer unavailable</strong>
+                <span>{error}</span>
+              </div>
+            )}
+            {canvasContextMenu && (
+              <div
+                className="canvas-context-menu"
+                role="menu"
+                style={{
+                  left: canvasContextMenu.x,
+                  top: canvasContextMenu.y,
+                }}
+              >
+                <button
+                  role="menuitem"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={() => {
+                    editMainComponent(canvasContextMenu.sourceRootId);
+                    setCanvasContextMenu(undefined);
+                  }}
+                >
+                  <Component aria-hidden="true" />
+                  Edit component
+                </button>
+              </div>
+            )}
+          </div>
 
-            <div className="zoom-controls">
-              <button
-                onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
-                aria-label="Zoom out"
-              >
-                −
-              </button>
-              <button onClick={() => rendererRef.current?.resetView()}>
-                {Math.round(stats.zoom * 100)}%
-              </button>
-              <button
-                onClick={() => rendererRef.current?.zoomBy(1.2)}
-                aria-label="Zoom in"
-              >
-                +
-              </button>
-              <button
-                onClick={() => rendererRef.current?.zoomToFit()}
-                title="Zoom to fit (F)"
-              >
-                Fit
-              </button>
-            </div>
-          </section>
+          {rulersVisible && <Rulers rendererRef={rendererRef} theme={theme} />}
 
-          <aside className="right-panel">
-            <PanelResizeHandle
-              side="right"
-              width={rightPanelWidth}
-              onChange={setRightPanelWidth}
-            />
-            <p className="eyebrow">{mode}</p>
-            {mode === "design" && (
+          <div className="zoom-controls">
+            <button
+              onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+            <button onClick={() => rendererRef.current?.resetView()}>
+              {Math.round(stats.zoom * 100)}%
+            </button>
+            <button
+              onClick={() => rendererRef.current?.zoomBy(1.2)}
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+            <button
+              onClick={() => rendererRef.current?.zoomToFit()}
+              title="Zoom to fit (F)"
+            >
+              Fit
+            </button>
+          </div>
+        </section>
+
+        <aside className="right-panel">
+          <PanelResizeHandle
+            side="right"
+            width={rightPanelWidth}
+            onChange={setRightPanelWidth}
+          />
+          <p className="eyebrow">{mode}</p>
+          {mode === "design" &&
+            (selectedComponentMaster &&
+            !isolationRootId &&
+            selectedMasterRoot ? (
+              <div
+                className="component-master-readonly"
+                data-testid="component-master-readonly"
+              >
+                <Component aria-hidden="true" />
+                <strong>Component master</strong>
+                <span>
+                  Open this component workspace before editing its layers.
+                </span>
+                <button
+                  onClick={() => editMainComponent(selectedMasterRoot.id)}
+                >
+                  Edit component
+                </button>
+              </div>
+            ) : (
               <Properties
-                selected={selectedNodes}
+                selected={editableSelectedNodes}
                 documentColors={documentColors}
                 numberVariables={documentModel.number_variables}
                 textStyles={documentModel.text_styles}
@@ -1638,12 +1872,11 @@ export function App() {
                 onWidthSizingChange={updateNodeWidthSizing}
                 onArtboardGuideChange={updateArtboardGuide}
               />
-            )}
-            {mode === "developer" && <Inspect />}
-            {mode === "review" && <Review />}
-          </aside>
-        </section>
-      )}
+            ))}
+          {mode === "developer" && <Inspect />}
+          {mode === "review" && <Review />}
+        </aside>
+      </section>
     </main>
   );
 }
@@ -1765,6 +1998,20 @@ function textStylesEqual(left: TextStyleSummary, right: TextStyleSummary) {
   );
 }
 
+function textTypographyEqual(left: TextStyleSummary, right: TextStyleSummary) {
+  return (
+    left.font_family === right.font_family &&
+    left.font_weight === right.font_weight &&
+    left.font_size === right.font_size &&
+    left.line_height === right.line_height &&
+    left.letter_spacing === right.letter_spacing &&
+    left.horizontal_align === right.horizontal_align &&
+    left.vertical_align === right.vertical_align &&
+    left.font_style === right.font_style &&
+    left.sizing === right.sizing
+  );
+}
+
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -1797,4 +2044,46 @@ function isNodeWithinRoot(
     current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
   }
   return false;
+}
+
+function findComponentMasterRoot(
+  nodeId: string,
+  nodesById: Map<string, NodeSummary>,
+) {
+  let current = nodesById.get(nodeId);
+  const visited = new Set<string>();
+  while (current && !visited.has(current.id)) {
+    if (current.component_id && !current.instance_root_id) return current;
+    visited.add(current.id);
+    current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
+  }
+  return undefined;
+}
+
+function isComponentMasterNode(
+  nodeId: string,
+  nodesById: Map<string, NodeSummary>,
+) {
+  return Boolean(findComponentMasterRoot(nodeId, nodesById));
+}
+
+function componentSourceRootForNode(
+  nodeId: string,
+  nodesById: Map<string, NodeSummary>,
+  model: DocumentReadModel,
+) {
+  let current = nodesById.get(nodeId);
+  const visited = new Set<string>();
+  while (current && !visited.has(current.id)) {
+    const componentId = current.component_id;
+    const variantId = current.component_variant_id;
+    if (componentId && variantId) {
+      return model.components
+        .find((component) => component.id === componentId)
+        ?.variants.find((variant) => variant.id === variantId)?.source_root_id;
+    }
+    visited.add(current.id);
+    current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
+  }
+  return undefined;
 }

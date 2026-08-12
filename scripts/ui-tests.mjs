@@ -206,23 +206,20 @@ try {
 
   const cornerInputs = page.locator(".corner-grid input");
   assert.equal(await cornerInputs.count(), 4);
-  const cornerValues = await cornerInputs.evaluateAll((inputs) =>
-    inputs.map((input) => input.value),
-  );
   await cornerInputs.first().click();
   await cornerInputs
     .first()
     .press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await cornerInputs.first().pressSequentially("20");
   assert.equal(await cornerInputs.first().inputValue(), "20");
+  await cornerInputs.first().press("Enter");
   assert.deepEqual(
     await cornerInputs.evaluateAll((inputs) =>
-      inputs.slice(1).map((input) => input.value),
+      inputs.map((input) => input.value),
     ),
-    cornerValues.slice(1),
+    ["20", "20", "20", "20"],
   );
-  await cornerInputs.first().press("Enter");
-  assert.equal(await cornerInputs.first().inputValue(), "20");
+  await page.getByRole("button", { name: "Unlink radius values" }).click();
 
   const alignment = page.getByRole("group", { name: "Alignment" });
   await alignment.getByRole("button", { name: "Outside border" }).click();
@@ -242,24 +239,22 @@ try {
   );
 
   await page.getByRole("button", { name: "Row", exact: true }).click();
+  await page.getByRole("button", { name: "Unlink padding values" }).waitFor();
   const paddingInputs = page.locator(".padding-grid input");
-  const paddingBefore = await paddingInputs.evaluateAll((inputs) =>
-    inputs.map((input) => input.value),
-  );
   await paddingInputs.first().click();
   await paddingInputs
     .first()
     .press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await paddingInputs.first().pressSequentially("20");
   assert.equal(await paddingInputs.first().inputValue(), "20");
+  await paddingInputs.first().press("Enter");
   assert.deepEqual(
     await paddingInputs.evaluateAll((inputs) =>
-      inputs.slice(1).map((input) => input.value),
+      inputs.map((input) => input.value),
     ),
-    paddingBefore.slice(1),
+    ["20", "20", "20", "20"],
   );
-  await paddingInputs.first().press("Enter");
-  assert.equal(await paddingInputs.first().inputValue(), "20");
+  await page.getByRole("button", { name: "Unlink padding values" }).click();
 
   await firstLayer.getByRole("button", { name: /^Rename / }).click();
   const nameInput = firstLayer.locator("input.layer-name-input");
@@ -282,6 +277,15 @@ try {
   assert.equal(await rectangles.count(), rectangleCount + 1);
   const createdRectangle = rectangles.nth(rectangleCount);
   assert.equal(await createdRectangle.getAttribute("data-selected"), "true");
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+C" : "Control+C",
+  );
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+V" : "Control+V",
+  );
+  assert.equal(await rectangles.count(), rectangleCount + 2);
+  await page.getByRole("button", { name: "Delete layer" }).click();
+  await createdRectangle.locator(".layer-main").click();
   await page.getByRole("button", { name: "Delete layer" }).click();
   assert.equal(await rectangles.count(), rectangleCount);
 
@@ -309,7 +313,11 @@ try {
     height: await page.getByRole("spinbutton", { name: "H" }).inputValue(),
   };
   await textLayer.locator(".layer-main").dblclick();
-  await page.getByRole("textbox", { name: "Edit text content" }).press("Tab");
+  assert.equal(await textEditor.count(), 0);
+  assert.equal(
+    await page.getByRole("textbox", { name: "Text content" }).inputValue(),
+    "Typography works",
+  );
   assert.equal(
     await page.getByRole("spinbutton", { name: "W" }).inputValue(),
     unchangedTextBounds.width,
@@ -412,6 +420,17 @@ try {
       .textContent(),
     /style$/,
   );
+  await horizontal.getByRole("button", { name: "Align left" }).click();
+  assert.equal(
+    await horizontal
+      .getByRole("button", { name: "Align left" })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    await page.getByRole("combobox", { name: "Text style" }).inputValue(),
+    "",
+  );
 
   await page.getByRole("button", { name: "Assets" }).click();
   await page.getByTestId("document-vault").waitFor();
@@ -501,6 +520,8 @@ try {
     .first();
   await componentSource.locator(".layer-main").click();
   await page.getByRole("button", { name: "Create component" }).click();
+  await page.getByTestId("component-master-readonly").waitFor();
+  assert.equal(await page.getByText("Properties", { exact: true }).count(), 0);
   await page.getByRole("button", { name: "Assets" }).click();
   await page
     .locator(".component-asset-card")
@@ -520,18 +541,32 @@ try {
     "true",
   );
   await componentInstance.first().click({ button: "right" });
-  await page.getByRole("menuitem", { name: "View in library" }).click();
-  await page.getByTestId("component-library-view").waitFor();
   await page
+    .getByLabel("Open Libra WebGPU editor canvas")
+    .evaluate((canvas) => (canvas.dataset.rendererPersistence = "mounted"));
+  await page.getByRole("menuitem", { name: "View in library" }).click();
+  const componentLibrary = page.getByTestId("component-library-view");
+  await componentLibrary.waitFor();
+  await componentLibrary
     .getByText("Wallet content · Auto layout", { exact: true })
     .waitFor();
-  await page.getByRole("button", { name: "Add variant" }).click();
-  await page.getByText("Variant 2", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "Edit main" }).click();
+  await componentLibrary.getByRole("button", { name: "Add variant" }).click();
+  await componentLibrary.getByText("Variant 2", { exact: true }).waitFor();
+  await componentLibrary.getByRole("button", { name: "Edit main" }).click();
   await page.getByTestId("component-isolation").waitFor();
   await page.getByTestId("component-isolation-mask").waitFor();
+  assert.equal(
+    await page
+      .getByLabel("Open Libra WebGPU editor canvas")
+      .getAttribute("data-renderer-persistence"),
+    "mounted",
+  );
+  await page.getByLabel("Canvas tools").waitFor();
+  await page.getByTestId("component-tree-heading").waitFor();
+  assert.equal(await page.getByTestId(/^page-node-/).count(), 0);
+  assert.equal(await page.getByText("Diagnostics", { exact: true }).count(), 0);
   assert.equal(await componentSource.getAttribute("data-selected"), "true");
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Done" }).click();
   await page.getByTestId("component-isolation").waitFor({ state: "detached" });
   await componentInstance.first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "View in library" }).click();

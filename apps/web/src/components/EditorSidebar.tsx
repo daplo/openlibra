@@ -31,7 +31,6 @@ export function Panel({
   onAddPage,
   onSelectPage,
   onNavigateNode,
-  onBeginTextEdit,
   onReorderNode,
   onToggleLock,
   onRenameNode,
@@ -48,6 +47,7 @@ export function Panel({
   onAddComponentInstance,
   onAddSelectedComponentVariant,
   onOpenComponentLibrary,
+  componentWorkspace,
 }: {
   mode: Mode;
   stats: RenderStats;
@@ -57,7 +57,6 @@ export function Panel({
   onAddPage: () => void;
   onSelectPage: (id: string) => void;
   onNavigateNode: (node: NodeSummary) => void;
-  onBeginTextEdit: (node: NodeSummary) => void;
   onReorderNode: (draggedId: string, targetId: string, before: boolean) => void;
   onToggleLock: (id: string, locked: boolean) => void;
   onRenameNode: (id: string, name: string) => void;
@@ -78,6 +77,7 @@ export function Panel({
   onAddComponentInstance: (componentId: string, variantId: string) => void;
   onAddSelectedComponentVariant: (componentId: string) => void;
   onOpenComponentLibrary: (componentId: string) => void;
+  componentWorkspace?: { componentName: string; variantName: string };
 }) {
   const [panelTab, setPanelTab] = useState<"layers" | "assets">("layers");
   const [editingNodeId, setEditingNodeId] = useState<string>();
@@ -272,8 +272,7 @@ export function Panel({
             }
             onDoubleClick={() => {
               onSelectNode(node.id, false);
-              if (node.kind === "text" && !node.locked) onBeginTextEdit(node);
-              else onNavigateNode(node);
+              onNavigateNode(node);
             }}
             onKeyDown={(event) => {
               if (
@@ -387,28 +386,41 @@ export function Panel({
   return (
     <>
       <PanelTabs active={panelTab} onChange={setPanelTab} />
-      <div className="page-list">
-        {model.pages.map((page) => (
-          <button
-            key={page.id}
-            data-testid={`page-node-${page.id}`}
-            data-page-id={page.id}
-            data-active={page.id === model.active_page_id}
-            className={`page-row ${page.id === model.active_page_id ? "active" : ""}`}
-            onClick={() => onSelectPage(page.id)}
-            title={page.description || page.name}
-          >
-            <span>▾</span>
-            <span className="page-copy">
-              <strong>{page.name}</strong>
-              {page.description && <small>{page.description}</small>}
-            </span>
+      {componentWorkspace ? (
+        <div
+          className="component-tree-heading"
+          data-testid="component-tree-heading"
+        >
+          <Component aria-hidden="true" />
+          <span>
+            <strong>{componentWorkspace.componentName}</strong>
+            <small>{componentWorkspace.variantName}</small>
+          </span>
+        </div>
+      ) : (
+        <div className="page-list">
+          {model.pages.map((page) => (
+            <button
+              key={page.id}
+              data-testid={`page-node-${page.id}`}
+              data-page-id={page.id}
+              data-active={page.id === model.active_page_id}
+              className={`page-row ${page.id === model.active_page_id ? "active" : ""}`}
+              onClick={() => onSelectPage(page.id)}
+              title={page.description || page.name}
+            >
+              <span>▾</span>
+              <span className="page-copy">
+                <strong>{page.name}</strong>
+                {page.description && <small>{page.description}</small>}
+              </span>
+            </button>
+          ))}
+          <button className="add-page" onClick={onAddPage}>
+            + Add page
           </button>
-        ))}
-        <button className="add-page" onClick={onAddPage}>
-          + Add page
-        </button>
-      </div>
+        </div>
+      )}
       <div className="layer-list">
         {visibleRootNodes.map((node) => renderLayer(node, 0))}
         {rootNodes.length > LAYER_DISPLAY_LIMIT && (
@@ -438,18 +450,31 @@ export function Panel({
           </button>
         </div>
       )}
-      <p className="eyebrow diagnostics-title">Diagnostics</p>
-      <dl className="metrics">
-        <Metric label="Objects" value={stats.objects.toLocaleString()} />
-        <Metric label="Visible" value={stats.visibleObjects.toLocaleString()} />
-        <Metric label="FPS" value={stats.fps.toFixed(0)} />
-        <Metric label="CPU frame" value={`${stats.frameMs.toFixed(2)} ms`} />
-        <Metric
-          label="Rust scene"
-          value={`${stats.sceneBuildMs.toFixed(2)} ms`}
-        />
-        <Metric label="GPU upload" value={`${stats.uploadMs.toFixed(2)} ms`} />
-      </dl>
+      {!componentWorkspace && (
+        <>
+          <p className="eyebrow diagnostics-title">Diagnostics</p>
+          <dl className="metrics">
+            <Metric label="Objects" value={stats.objects.toLocaleString()} />
+            <Metric
+              label="Visible"
+              value={stats.visibleObjects.toLocaleString()}
+            />
+            <Metric label="FPS" value={stats.fps.toFixed(0)} />
+            <Metric
+              label="CPU frame"
+              value={`${stats.frameMs.toFixed(2)} ms`}
+            />
+            <Metric
+              label="Rust scene"
+              value={`${stats.sceneBuildMs.toFixed(2)} ms`}
+            />
+            <Metric
+              label="GPU upload"
+              value={`${stats.uploadMs.toFixed(2)} ms`}
+            />
+          </dl>
+        </>
+      )}
     </>
   );
 }
@@ -570,6 +595,14 @@ function VaultPanel({
                 key={asset.id}
                 className="media-asset-card"
                 title={`Insert ${asset.name}`}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "copy";
+                  event.dataTransfer.setData(
+                    "application/x-open-libra-asset",
+                    JSON.stringify({ kind: "asset", assetId: asset.id }),
+                  );
+                }}
                 onClick={() => onAddNodeFromAsset(asset.id)}
               >
                 <img src={asset.source} alt="" />
@@ -857,6 +890,14 @@ function IconLibraryButton({
       data-testid={`icon-library-${icon.name}`}
       aria-label={`Insert ${icon.name}`}
       title={`Insert ${icon.name}`}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "copy";
+        event.dataTransfer.setData(
+          "application/x-open-libra-asset",
+          JSON.stringify({ kind: "icon", name: icon.name, svg: icon.svg }),
+        );
+      }}
       onClick={onClick}
     >
       <span dangerouslySetInnerHTML={{ __html: icon.svg }} />

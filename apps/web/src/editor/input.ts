@@ -26,6 +26,8 @@ export type EditorInputHandlers = {
   deleteSelection: () => void;
   undo: () => void;
   redo: () => void;
+  copySelection: () => void;
+  pasteSelection: () => void;
   nudgeSelection: (dx: number, dy: number) => void;
   beginTextEdit: (clientX: number, clientY: number) => void;
 };
@@ -142,6 +144,14 @@ export class EditorInputController {
       event.preventDefault();
       if (event.shiftKey) this.handlers.redo();
       else this.handlers.undo();
+    }
+    if ((event.metaKey || event.ctrlKey) && key === "c") {
+      event.preventDefault();
+      this.handlers.copySelection();
+    }
+    if ((event.metaKey || event.ctrlKey) && key === "v") {
+      event.preventDefault();
+      this.handlers.pasteSelection();
     }
     const distance = event.shiftKey ? 10 : 1;
     const nudges: Record<string, [number, number]> = {

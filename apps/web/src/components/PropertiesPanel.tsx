@@ -11,6 +11,7 @@ import {
   AlignLeft,
   AlignRight,
   Baseline,
+  Link,
   Columns3,
   FlipHorizontal2,
   FlipVertical2,
@@ -20,6 +21,7 @@ import {
   RotateCw,
   Rows3,
   Square,
+  Unlink,
 } from "lucide-react";
 import { hexToRgb, rgbaToHex } from "../editor/model-utils";
 import {
@@ -204,6 +206,7 @@ export function Properties(props: {
             {(node.kind === "frame" || node.kind === "group") && (
               <PropertySection title="Auto layout">
                 <AutoLayoutControls
+                  key={node.id}
                   node={node}
                   onChange={(change) => props.onLayoutChange(node, change)}
                 />
@@ -248,6 +251,7 @@ export function Properties(props: {
               </PropertySection>
             )}
             <StyleControls
+              key={node.id}
               node={node}
               documentColors={props.documentColors}
               onAddDocumentColor={props.onAddDocumentColor}
@@ -445,6 +449,7 @@ function TypographyControls({
             value={text.font_size}
             min={1}
             max={512}
+            live
             onChange={(font_size) => onChange({ font_size })}
           />
           <label className="select-control compact">
@@ -469,6 +474,7 @@ function TypographyControls({
             min={0.5}
             max={5}
             step={0.1}
+            live
             onChange={(line_height) => onChange({ line_height })}
           />
           <NumberControl
@@ -477,6 +483,7 @@ function TypographyControls({
             min={-20}
             max={100}
             step={0.1}
+            live
             onChange={(letter_spacing) => onChange({ letter_spacing })}
           />
         </div>
@@ -693,6 +700,7 @@ function StyleControls({
   onOpacityChange: (opacity: number) => void;
   onShadowsChange: (shadows: ShadowSummary[]) => void;
 }) {
+  const [cornersLinked, setCornersLinked] = useState(true);
   return (
     <>
       <PropertySection title="Fill">
@@ -754,6 +762,11 @@ function StyleControls({
       </PropertySection>
       {node.kind !== "text" && (
         <PropertySection title="Corners">
+          <FourValueHeading
+            label="Radius"
+            linked={cornersLinked}
+            onToggle={() => setCornersLinked((linked) => !linked)}
+          />
           <div className="geometry-grid corner-grid">
             {["TL", "TR", "BR", "BL"].map((label, index) => (
               <GeometryInput
@@ -763,9 +776,11 @@ function StyleControls({
                 min={0}
                 onChange={(radius) =>
                   onChange({
-                    cornerRadii: node.corner_radii.map((value, position) =>
-                      position === index ? radius : value,
-                    ),
+                    cornerRadii: cornersLinked
+                      ? [radius, radius, radius, radius]
+                      : node.corner_radii.map((value, position) =>
+                          position === index ? radius : value,
+                        ),
                   })
                 }
               />
@@ -1037,11 +1052,14 @@ function AutoLayoutControls({
   ) => void;
 }) {
   const padding = node.layout_padding;
+  const [paddingLinked, setPaddingLinked] = useState(true);
   const setPadding = (index: number, value: number) =>
     onChange({
-      layout_padding: padding.map((current, position) =>
-        position === index ? value : current,
-      ),
+      layout_padding: paddingLinked
+        ? [value, value, value, value]
+        : padding.map((current, position) =>
+            position === index ? value : current,
+          ),
     });
   return (
     <div className="auto-layout-controls">
@@ -1097,7 +1115,11 @@ function AutoLayoutControls({
             value={node.layout_gap}
             onChange={(layout_gap) => onChange({ layout_gap })}
           />
-          <span className="layout-subheading">Padding</span>
+          <FourValueHeading
+            label="Padding"
+            linked={paddingLinked}
+            onToggle={() => setPaddingLinked((linked) => !linked)}
+          />
           <div className="geometry-grid padding-grid">
             <GeometryInput
               label="T"
@@ -1263,6 +1285,31 @@ function ArtboardGuideControls({
           />
         </>
       )}
+    </div>
+  );
+}
+
+function FourValueHeading({
+  label,
+  linked,
+  onToggle,
+}: {
+  label: string;
+  linked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="four-value-heading">
+      <span>{label}</span>
+      <button
+        type="button"
+        className={linked ? "active" : ""}
+        aria-label={`${linked ? "Unlink" : "Link"} ${label.toLowerCase()} values`}
+        title={linked ? "Edit separately" : "Edit all together"}
+        onClick={onToggle}
+      >
+        {linked ? <Link aria-hidden="true" /> : <Unlink aria-hidden="true" />}
+      </button>
     </div>
   );
 }
@@ -1544,6 +1591,7 @@ function NumberControl({
   min = 0,
   max,
   step = 1,
+  live = false,
   onChange,
 }: {
   label: string;
@@ -1551,10 +1599,14 @@ function NumberControl({
   min?: number;
   max: number;
   step?: number;
+  live?: boolean;
   onChange: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(() => String(value));
-  useEffect(() => setDraft(String(value)), [value]);
+  const editingRef = useRef(false);
+  useEffect(() => {
+    if (!editingRef.current) setDraft(String(value));
+  }, [value]);
 
   function clamp(next: number) {
     return Math.min(max, Math.max(min, next));
@@ -1569,6 +1621,16 @@ function NumberControl({
     const normalized = clamp(parsed);
     setDraft(String(normalized));
     if (normalized !== value) onChange(normalized);
+  }
+
+  function updateDraft(next: string) {
+    setDraft(next);
+    if (!live || next.trim() === "") return;
+    const parsed = Number(next);
+    if (Number.isFinite(parsed)) {
+      const normalized = clamp(parsed);
+      if (normalized !== value) onChange(normalized);
+    }
   }
 
   const numericDraft = Number(draft);
@@ -1586,7 +1648,10 @@ function NumberControl({
         step={step}
         value={sliderValue}
         aria-label={`${label} slider`}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => {
+          updateDraft(event.target.value);
+          if (live) commit(Number(event.target.value));
+        }}
         onPointerUp={(event) => commit(Number(event.currentTarget.value))}
         onPointerCancel={() => setDraft(String(value))}
         onKeyUp={(event) => {
@@ -1601,8 +1666,14 @@ function NumberControl({
         step={step}
         value={draft}
         aria-label={label}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => commit()}
+        onFocus={() => {
+          editingRef.current = true;
+        }}
+        onChange={(event) => updateDraft(event.target.value)}
+        onBlur={() => {
+          editingRef.current = false;
+          commit();
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter") commit(Number(event.currentTarget.value));
           if (event.key === "Escape") setDraft(String(value));

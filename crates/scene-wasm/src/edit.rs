@@ -3,67 +3,118 @@ use crate::*;
 use std::collections::HashSet;
 
 impl Document {
-    pub(crate) fn sync_component_instances(&mut self) {
-        let source_by_slot: std::collections::HashMap<_, _> = self
+    pub(crate) fn duplicate_nodes(&mut self, root_ids: &[EntityId]) -> Vec<EntityId> {
+        let selected: HashSet<_> = root_ids.iter().copied().collect();
+        let roots: Vec<_> = self
             .active_page()
             .nodes
             .iter()
+            .filter(|node| selected.contains(&node.id) && !node.locked)
+            .cloned()
+            .collect();
+        if roots.is_empty() {
+            return Vec::new();
+        }
+        let mut source_ids = HashSet::new();
+        for root in &roots {
+            source_ids.extend(self.descendant_ids_including(root.id));
+        }
+        let sources: Vec<_> = self
+            .active_page()
+            .nodes
+            .iter()
+            .filter(|node| source_ids.contains(&node.id))
+            .cloned()
+            .collect();
+        let id_map: std::collections::HashMap<_, _> = sources
+            .iter()
+            .map(|node| (node.id, self.allocate_id()))
+            .collect();
+        let new_root_ids = roots.iter().map(|root| id_map[&root.id]).collect();
+        let clones = sources.into_iter().map(|mut node| {
+            let source_id = node.id;
+            node.id = id_map[&source_id];
+            node.name = if selected.contains(&source_id) {
+                format!("{} copy", node.name)
+            } else {
+                node.name
+            };
+            node.parent_id = node
+                .parent_id
+                .map(|parent| id_map.get(&parent).copied().unwrap_or(parent));
+            node.instance_root_id = node
+                .instance_root_id
+                .map(|root| id_map.get(&root).copied().unwrap_or(root));
+            node.x += 16.0;
+            node.y += 16.0;
+            node
+        });
+        self.active_page_mut().nodes.extend(clones);
+        new_root_ids
+    }
+
+    pub(crate) fn sync_component_instances(&mut self) {
+        let source_by_slot: std::collections::HashMap<_, _> = self
+            .pages
+            .iter()
+            .flat_map(|page| &page.nodes)
             .filter(|node| node.instance_root_id.is_none())
             .filter_map(|node| node.component_slot_id.map(|slot| (slot, node.clone())))
             .collect();
-        let instance_roots: Vec<_> = self
-            .active_page()
-            .nodes
-            .iter()
-            .filter(|node| node.instance_root_id == Some(node.id))
-            .filter_map(|node| {
-                let source = source_by_slot.get(&node.component_slot_id?)?;
-                Some((node.id, node.x - source.x, node.y - source.y))
-            })
-            .collect();
-        for (root_id, dx, dy) in instance_roots {
-            for node in &mut self.active_page_mut().nodes {
-                if node.instance_root_id != Some(root_id) {
-                    continue;
-                }
-                let Some(source) = node
-                    .component_slot_id
-                    .and_then(|slot| source_by_slot.get(&slot))
-                else {
-                    continue;
-                };
-                let text = node.text.clone();
-                let asset_id = node.asset_id;
-                let text_override = node.text_override;
-                let asset_override = node.asset_override;
-                node.name = source.name.clone();
-                node.width = source.width;
-                node.height = source.height;
-                node.x = source.x + dx;
-                node.y = source.y + dy;
-                node.fill = source.fill;
-                node.stroke = source.stroke;
-                node.stroke_width = source.stroke_width;
-                node.corner_radii = source.corner_radii;
-                node.layout_mode = source.layout_mode;
-                node.layout_align = source.layout_align;
-                node.layout_justify = source.layout_justify;
-                node.layout_gap = source.layout_gap;
-                node.layout_padding = source.layout_padding;
-                if text_override {
-                    let overridden_content = text.as_ref().map(|value| value.content.clone());
-                    node.text = source.text.clone();
-                    if let (Some(text), Some(content)) = (&mut node.text, overridden_content) {
-                        text.content = content;
+        for page in &mut self.pages {
+            let instance_roots: Vec<_> = page
+                .nodes
+                .iter()
+                .filter(|node| node.instance_root_id == Some(node.id))
+                .filter_map(|node| {
+                    let source = source_by_slot.get(&node.component_slot_id?)?;
+                    Some((node.id, node.x - source.x, node.y - source.y))
+                })
+                .collect();
+            for (root_id, dx, dy) in instance_roots {
+                for node in &mut page.nodes {
+                    if node.instance_root_id != Some(root_id) {
+                        continue;
                     }
-                } else {
-                    node.text = source.text.clone();
+                    let Some(source) = node
+                        .component_slot_id
+                        .and_then(|slot| source_by_slot.get(&slot))
+                    else {
+                        continue;
+                    };
+                    let text = node.text.clone();
+                    let asset_id = node.asset_id;
+                    let text_override = node.text_override;
+                    let asset_override = node.asset_override;
+                    node.name = source.name.clone();
+                    node.width = source.width;
+                    node.height = source.height;
+                    node.x = source.x + dx;
+                    node.y = source.y + dy;
+                    node.fill = source.fill;
+                    node.stroke = source.stroke;
+                    node.stroke_width = source.stroke_width;
+                    node.corner_radii = source.corner_radii;
+                    node.layout_mode = source.layout_mode;
+                    node.layout_align = source.layout_align;
+                    node.layout_justify = source.layout_justify;
+                    node.layout_gap = source.layout_gap;
+                    node.layout_padding = source.layout_padding;
+                    if text_override {
+                        let overridden_content = text.as_ref().map(|value| value.content.clone());
+                        node.text = source.text.clone();
+                        if let (Some(text), Some(content)) = (&mut node.text, overridden_content) {
+                            text.content = content;
+                        }
+                    } else {
+                        node.text = source.text.clone();
+                    }
+                    node.asset_id = if asset_override {
+                        asset_id
+                    } else {
+                        source.asset_id
+                    };
                 }
-                node.asset_id = if asset_override {
-                    asset_id
-                } else {
-                    source.asset_id
-                };
             }
         }
     }

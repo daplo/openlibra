@@ -414,6 +414,14 @@ impl DocumentEngine {
             })
     }
 
+    pub fn duplicate_nodes(&mut self, node_ids_json: &str) -> Result<String, JsValue> {
+        let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
+        let ids = self.mutate(|document| document.duplicate_nodes(&node_ids));
+        serde_json::to_string(&ids)
+            .map_err(|error| JsValue::from_str(&format!("Could not serialize duplicates: {error}")))
+    }
+
     pub fn create_component(&mut self, root_id: String, name: String) -> String {
         let root_id = parse_entity_id(&root_id);
         self.mutate(|document| document.create_component(root_id, name))
@@ -555,6 +563,12 @@ impl DocumentEngine {
             stroke_join,
         );
         if changed {
+            let is_component_source = self.document.active_node(node_id).is_some_and(|node| {
+                node.instance_root_id.is_none() && node.component_slot_id == Some(node.id)
+            });
+            if is_component_source {
+                self.document.sync_component_instances();
+            }
             if let Some(style) = before {
                 self.push_undo(HistoryEntry::NodeStyle {
                     page_id,
@@ -865,11 +879,14 @@ impl DocumentEngine {
     }
 
     pub fn end_transaction(&mut self) {
-        if let Some(before) = self.transaction_start.take()
-            && before != self.document
-        {
-            self.push_undo(HistoryEntry::Document(before));
-            self.redo_stack.clear();
+        if let Some(before) = self.transaction_start.take() {
+            if component_source_changed(&before, &self.document) {
+                self.document.sync_component_instances();
+            }
+            if before != self.document {
+                self.push_undo(HistoryEntry::Document(before));
+                self.redo_stack.clear();
+            }
         }
         if let Some(entry @ HistoryEntry::Geometry { .. }) = self.geometry_transaction_start.take()
         {
@@ -910,6 +927,7 @@ impl DocumentEngine {
             return false;
         };
         self.redo_stack.push(previous.apply(&mut self.document));
+        self.document.sync_component_instances();
         true
     }
 
@@ -919,6 +937,7 @@ impl DocumentEngine {
             return false;
         };
         let inverse = next.apply(&mut self.document);
+        self.document.sync_component_instances();
         self.push_undo(inverse);
         true
     }
@@ -968,23 +987,7 @@ impl DocumentEngine {
         }
         let before = self.document.clone();
         let result = operation(&mut self.document);
-        let source_changed =
-            before
-                .pages
-                .iter()
-                .zip(&self.document.pages)
-                .any(|(before_page, after_page)| {
-                    before_page.nodes.iter().any(|before_node| {
-                        before_node.instance_root_id.is_none()
-                            && before_node.component_slot_id == Some(before_node.id)
-                            && after_page
-                                .nodes
-                                .iter()
-                                .find(|node| node.id == before_node.id)
-                                .is_some_and(|node| node != before_node)
-                    })
-                });
-        if source_changed {
+        if component_source_changed(&before, &self.document) {
             self.document.sync_component_instances();
         }
         if before != self.document {
@@ -1003,6 +1006,24 @@ impl DocumentEngine {
         }
         self.undo_stack.push(entry);
     }
+}
+
+fn component_source_changed(before: &Document, after: &Document) -> bool {
+    before
+        .pages
+        .iter()
+        .zip(&after.pages)
+        .any(|(before_page, after_page)| {
+            before_page.nodes.iter().any(|before_node| {
+                before_node.instance_root_id.is_none()
+                    && before_node.component_slot_id == Some(before_node.id)
+                    && after_page
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == before_node.id)
+                        .is_some_and(|node| node != before_node)
+            })
+        })
 }
 
 impl Default for DocumentEngine {

@@ -276,6 +276,35 @@ fn text_style_updates_every_linked_text_node() {
 }
 
 #[test]
+fn direct_typography_edit_can_override_a_linked_text_style_after_unbinding() {
+    let mut document = Document::demo();
+    let node_id = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Greeting")
+        .unwrap()
+        .id;
+    assert!(
+        document
+            .active_node(node_id)
+            .unwrap()
+            .text_style_id
+            .is_some()
+    );
+    assert!(document.bind_node_text_style(node_id, None));
+    let mut text = document.active_node(node_id).unwrap().text.clone().unwrap();
+    text.horizontal_align = TextAlign::Center;
+    assert!(document.set_node_text(node_id, text));
+    let node = document.active_node(node_id).unwrap();
+    assert_eq!(node.text_style_id, None);
+    assert_eq!(
+        node.text.as_ref().unwrap().horizontal_align,
+        TextAlign::Center
+    );
+}
+
+#[test]
 fn component_instances_sync_source_and_preserve_text_overrides() {
     let mut engine = DocumentEngine::new();
     let root_id = engine
@@ -341,6 +370,98 @@ fn component_instances_sync_source_and_preserve_text_overrides() {
     let instance = engine.document.active_node(instance_greeting.id).unwrap();
     assert_eq!(instance.text.as_ref().unwrap().content, "Hi, Maya");
     assert!(instance.text_override);
+}
+
+#[test]
+fn component_instances_sync_when_source_edit_commits_a_transaction() {
+    let mut engine = DocumentEngine::new();
+    let component = engine
+        .document
+        .components
+        .iter()
+        .find(|component| component.name == "Button / Primary")
+        .unwrap()
+        .clone();
+    let source_id = component.variants[0].source_root_id;
+    let instance_id = parse_entity_id(&engine.create_component_instance(
+        component.id.to_string(),
+        component.variants[0].id.to_string(),
+        String::new(),
+    ));
+    let source = engine.document.active_node(source_id).unwrap().clone();
+    engine.begin_transaction();
+    assert!(engine.set_node_bounds(
+        source_id.to_string(),
+        source.x,
+        source.y,
+        source.width + 24.0,
+        source.height,
+    ));
+    engine.end_transaction();
+    assert_eq!(
+        engine.document.active_node(instance_id).unwrap().width,
+        source.width + 24.0
+    );
+}
+
+#[test]
+fn component_instance_background_syncs_through_compact_style_history() {
+    let mut engine = DocumentEngine::new();
+    let component = engine
+        .document
+        .components
+        .iter()
+        .find(|component| component.name == "Button / Primary")
+        .unwrap()
+        .clone();
+    let source_id = component.variants[0].source_root_id;
+    let instance_id = parse_entity_id(&engine.create_component_instance(
+        component.id.to_string(),
+        component.variants[0].id.to_string(),
+        String::new(),
+    ));
+    assert!(
+        engine
+            .set_node_style(
+                source_id.to_string(),
+                "#CC3366".into(),
+                "#000000".into(),
+                0.0,
+                22.0,
+                22.0,
+                22.0,
+                22.0,
+                "inside".into(),
+                "round".into(),
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        engine.document.active_node(instance_id).unwrap().fill,
+        [0.8, 0.2, 0.4, 1.0]
+    );
+    assert!(engine.undo());
+    assert_eq!(
+        engine.document.active_node(instance_id).unwrap().fill,
+        engine.document.active_node(source_id).unwrap().fill
+    );
+}
+
+#[test]
+fn duplicate_nodes_clones_groups_and_component_instances() {
+    let mut document = Document::demo();
+    let component = document.components[0].clone();
+    let instance = document
+        .create_component_instance(component.id, component.variants[0].id, None)
+        .unwrap();
+    let before = document.active_page().nodes.len();
+    let duplicates = document.duplicate_nodes(&[instance]);
+    assert_eq!(duplicates.len(), 1);
+    let duplicate = document.active_node(duplicates[0]).unwrap();
+    assert_eq!(duplicate.component_id, Some(component.id));
+    assert_eq!(duplicate.instance_root_id, Some(duplicate.id));
+    assert!(document.active_page().nodes.len() > before + 1);
+    document.validate().unwrap();
 }
 
 #[test]
