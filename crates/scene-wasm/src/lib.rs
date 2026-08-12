@@ -59,6 +59,8 @@ struct FigmaImportNode {
     layout_gap: f32,
     layout_padding: [f32; 4],
     #[serde(default)]
+    shadows: Vec<Shadow>,
+    #[serde(default)]
     text: Option<TextStyle>,
     #[serde(default)]
     asset_source_id: Option<String>,
@@ -511,6 +513,7 @@ impl DocumentEngine {
                         node.layout_mode = imported.layout_mode;
                         node.layout_gap = imported.layout_gap.max(0.0);
                         node.layout_padding = imported.layout_padding.map(|value| value.max(0.0));
+                        node.shadows = imported.shadows;
                         node.text = imported.text;
                         node.asset_id = imported
                             .asset_source_id

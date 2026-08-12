@@ -1,4 +1,11 @@
-import { nodeId, parseFig, type FigNode, type FigPaint } from "openfig-core";
+import {
+  nodeId,
+  parseFig,
+  resolveVectorNodePaths,
+  type FigDocument,
+  type FigNode,
+  type FigPaint,
+} from "openfig-core";
 
 export type FigmaImportPayload = {
   name: string;
@@ -17,7 +24,7 @@ type FigmaImportNode = {
   source_id: string;
   parent_source_id?: string;
   name: string;
-  kind: "frame" | "group" | "rectangle" | "text";
+  kind: "frame" | "group" | "rectangle" | "text" | "image";
   x: number;
   y: number;
   width: number;
@@ -32,6 +39,15 @@ type FigmaImportNode = {
   layout_mode: "none" | "row" | "column";
   layout_gap: number;
   layout_padding: number[];
+  shadows: Array<{
+    kind: "outer" | "inner";
+    color: number[];
+    offset_x: number;
+    offset_y: number;
+    blur: number;
+    spread: number;
+    enabled: boolean;
+  }>;
   text?: {
     content: string;
     font_family: string;
@@ -118,7 +134,11 @@ function fontWeight(style = ""): number {
   return 400;
 }
 
-function nodeKind(node: FigNode): FigmaImportNode["kind"] {
+function nodeKind(
+  node: FigNode,
+  assetSourceId?: string,
+): FigmaImportNode["kind"] {
+  if (assetSourceId) return "image";
   if (node.type === "TEXT") return "text";
   if (node.type === "FRAME") return "frame";
   if (["SYMBOL", "INSTANCE", "GROUP"].includes(node.type)) return "group";
@@ -135,6 +155,7 @@ function align(value: unknown): "left" | "center" | "right" | "justify" {
 function convertNode(
   node: FigNode,
   worldTransform: NonNullable<FigNode["transform"]>,
+  assetSourceId?: string,
 ): FigmaImportNode {
   const sourceId = nodeId(node)!;
   const parentSourceId = guidString(node.parentIndex);
@@ -153,17 +174,17 @@ function convertNode(
     (node as FigNode & { lineHeightPx?: number }).lineHeightPx,
     finite(node.fontSize, 16) * 1.2,
   );
-  const hash = imageHash(node);
+  const hash = assetSourceId ?? imageHash(node);
   return {
     source_id: sourceId,
     ...(parentSourceId ? { parent_source_id: parentSourceId } : {}),
     name: node.name?.trim() || node.type.toLowerCase(),
-    kind: nodeKind(node),
+    kind: nodeKind(node, hash),
     x: finite(worldTransform.m02),
     y: finite(worldTransform.m12),
     width,
     height,
-    fill: rgba(node.fillPaints),
+    fill: hash ? [0, 0, 0, 0] : rgba(node.fillPaints),
     stroke: rgba(node.strokePaints),
     stroke_width: finite(node.strokeWeight),
     corner_radii:
@@ -189,6 +210,26 @@ function convertNode(
       stackPadding?.length === 4
         ? stackPadding.map((value) => finite(value))
         : [0, 0, 0, 0],
+    shadows: (node.effects ?? [])
+      .filter(
+        (effect) =>
+          effect.visible !== false &&
+          (effect.type === "DROP_SHADOW" || effect.type === "INNER_SHADOW"),
+      )
+      .map((effect) => ({
+        kind: effect.type === "INNER_SHADOW" ? "inner" : "outer",
+        color: [
+          finite(effect.color?.r),
+          finite(effect.color?.g),
+          finite(effect.color?.b),
+          finite(effect.color?.a, 1) * finite(effect.opacity, 1),
+        ],
+        offset_x: finite(effect.offset?.x),
+        offset_y: finite(effect.offset?.y),
+        blur: finite(effect.radius),
+        spread: finite(effect.spread),
+        enabled: true,
+      })),
     ...(node.type === "TEXT"
       ? {
           text: {
@@ -216,6 +257,111 @@ function convertNode(
         }
       : {}),
     ...(hash ? { asset_source_id: hash } : {}),
+  };
+}
+
+function colorCss(
+  paints: FigPaint[] | undefined,
+  fallback = "#000000",
+): string {
+  const paint = paints?.find(
+    (candidate) => candidate.visible !== false && candidate.type === "SOLID",
+  );
+  if (!paint?.color) return fallback;
+  const channel = (value: number | undefined) =>
+    Math.round(Math.min(1, Math.max(0, finite(value))) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  const alpha = finite(paint.color.a, 1) * finite(paint.opacity, 1);
+  return `#${channel(paint.color.r)}${channel(paint.color.g)}${channel(paint.color.b)}${channel(alpha)}`;
+}
+
+function vectorAsset(
+  document: FigDocument,
+  node: FigNode,
+): FigmaImportAsset | undefined {
+  if (node.type !== "VECTOR" && node.type !== "BOOLEAN_OPERATION") return;
+  try {
+    const geometry = resolveVectorNodePaths(document, node);
+    const paths = [
+      ...geometry.fill.map((path) => ({
+        ...path,
+        color: colorCss(path.paints, colorCss(node.fillPaints)),
+      })),
+      ...geometry.stroke.map((path) => ({
+        ...path,
+        color: colorCss(path.paints, colorCss(node.strokePaints)),
+      })),
+    ];
+    if (!paths.length) return;
+    const width = Math.max(1, finite(node.size?.x, 1));
+    const height = Math.max(1, finite(node.size?.y, 1));
+    const body = paths
+      .map(
+        (path) =>
+          `<path d="${path.svgPath.replaceAll('"', "&quot;")}" fill="${path.color}" fill-rule="${path.windingRule === "ODD" ? "evenodd" : "nonzero"}"/>`,
+      )
+      .join("");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${body}</svg>`;
+    const bytes = new TextEncoder().encode(svg);
+    return {
+      source_id: `figma-vector:${nodeId(node)}`,
+      name: node.name || "Figma vector",
+      mime_type: "image/svg+xml",
+      source: dataUrl(bytes, "image/svg+xml"),
+    };
+  } catch {
+    return;
+  }
+}
+
+function instanceAsset(
+  document: FigDocument,
+  node: FigNode,
+): FigmaImportAsset | undefined {
+  if (node.type !== "INSTANCE") return;
+  const symbolGuid = (node.symbolData as { symbolID?: unknown } | undefined)
+    ?.symbolID;
+  const symbolId = guidString({ guid: symbolGuid });
+  const symbol = symbolId ? document.nodeMap.get(symbolId) : undefined;
+  if (!symbol) return;
+  const parts: string[] = [];
+  const visit = (parentId: string, transform: Transform) => {
+    for (const child of document.childrenMap.get(parentId) ?? []) {
+      if (child.visible === false) continue;
+      const childTransform = multiplyTransforms(
+        transform,
+        child.transform ?? identityTransform(),
+      );
+      if (child.type === "VECTOR" || child.type === "BOOLEAN_OPERATION") {
+        try {
+          const geometry = resolveVectorNodePaths(document, child);
+          for (const path of [...geometry.fill, ...geometry.stroke]) {
+            const color = colorCss(
+              path.paints,
+              colorCss(child.fillPaints, colorCss(node.fillPaints)),
+            );
+            parts.push(
+              `<path transform="matrix(${childTransform.m00} ${childTransform.m10} ${childTransform.m01} ${childTransform.m11} ${childTransform.m02} ${childTransform.m12})" d="${path.svgPath.replaceAll('"', "&quot;")}" fill="${color}" fill-rule="${path.windingRule === "ODD" ? "evenodd" : "nonzero"}"/>`,
+            );
+          }
+        } catch {
+          // Keep expanding any nested geometry that can be resolved.
+        }
+      }
+      visit(nodeId(child)!, childTransform);
+    }
+  };
+  visit(symbolId!, identityTransform());
+  if (!parts.length) return;
+  const width = Math.max(1, finite(symbol.size?.x, finite(node.size?.x, 1)));
+  const height = Math.max(1, finite(symbol.size?.y, finite(node.size?.y, 1)));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${parts.join("")}</svg>`;
+  return {
+    source_id: `figma-instance:${nodeId(node)}`,
+    name: node.name || "Figma instance",
+    mime_type: "image/svg+xml",
+    source: dataUrl(new TextEncoder().encode(svg), "image/svg+xml"),
   };
 }
 
@@ -247,6 +393,7 @@ export async function figmaFileToImport(
   if (!file.name.toLowerCase().endsWith(".fig"))
     throw new Error("Choose a Figma .fig file.");
   const document = parseFig(new Uint8Array(await file.arrayBuffer()));
+  const generatedAssets = new Map<string, FigmaImportAsset>();
   const byParent = new Map<string, FigNode[]>();
   for (const node of document.nodes) {
     const parent = guidString(node.parentIndex);
@@ -297,10 +444,22 @@ export async function figmaFileToImport(
           ),
         );
       }
+      const assetIds = new Map<string, string>();
+      for (const node of included) {
+        const asset =
+          vectorAsset(document, node) ?? instanceAsset(document, node);
+        if (!asset) continue;
+        generatedAssets.set(asset.source_id, asset);
+        assetIds.set(nodeId(node)!, asset.source_id);
+      }
       return {
         name: page.name || "Imported page",
         nodes: included.map((node) =>
-          convertNode(node, worldTransforms.get(nodeId(node)!)!),
+          convertNode(
+            node,
+            worldTransforms.get(nodeId(node)!)!,
+            assetIds.get(nodeId(node)!),
+          ),
         ),
       };
     });
@@ -321,6 +480,7 @@ export async function figmaFileToImport(
       source: dataUrl(bytes, mime),
     });
   }
+  assets.push(...generatedAssets.values());
   if (!pages.length)
     throw new Error("This Figma file has no visible pages to import.");
   return {

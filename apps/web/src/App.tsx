@@ -7,6 +7,11 @@ import {
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import "@fontsource/lexend-deca/300.css";
+import "@fontsource/lexend-deca/400.css";
+import "@fontsource/lexend-deca/500.css";
+import "@fontsource/lexend-deca/600.css";
+import "@fontsource/lexend-deca/700.css";
 import {
   Check,
   ChevronRight,
