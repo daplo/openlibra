@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
+  Component,
+  Copy,
   ImagePlus,
   Layers3,
   Plus,
@@ -29,6 +31,7 @@ export function Panel({
   onAddPage,
   onSelectPage,
   onNavigateNode,
+  onBeginTextEdit,
   onReorderNode,
   onToggleLock,
   onRenameNode,
@@ -42,6 +45,9 @@ export function Panel({
   onImportImage,
   onAddLibraryIcon,
   onAddNodeFromAsset,
+  onAddComponentInstance,
+  onAddSelectedComponentVariant,
+  onOpenComponentLibrary,
 }: {
   mode: Mode;
   stats: RenderStats;
@@ -51,6 +57,7 @@ export function Panel({
   onAddPage: () => void;
   onSelectPage: (id: string) => void;
   onNavigateNode: (node: NodeSummary) => void;
+  onBeginTextEdit: (node: NodeSummary) => void;
   onReorderNode: (draggedId: string, targetId: string, before: boolean) => void;
   onToggleLock: (id: string, locked: boolean) => void;
   onRenameNode: (id: string, name: string) => void;
@@ -68,6 +75,9 @@ export function Panel({
   onImportImage: (file: File) => void;
   onAddLibraryIcon: (name: string, svg: string) => void;
   onAddNodeFromAsset: (assetId: string) => void;
+  onAddComponentInstance: (componentId: string, variantId: string) => void;
+  onAddSelectedComponentVariant: (componentId: string) => void;
+  onOpenComponentLibrary: (componentId: string) => void;
 }) {
   const [panelTab, setPanelTab] = useState<"layers" | "assets">("layers");
   const [editingNodeId, setEditingNodeId] = useState<string>();
@@ -76,6 +86,11 @@ export function Panel({
   const [dropTarget, setDropTarget] = useState<{
     id: string;
     before: boolean;
+  }>();
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    componentId: string;
   }>();
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(
     () => new Set(),
@@ -188,9 +203,17 @@ export function Panel({
           data-testid={`layer-node-${node.id}`}
           data-node-id={node.id}
           data-node-kind={node.kind}
+          data-component-id={node.component_id ?? ""}
+          data-instance-root-id={node.instance_root_id ?? ""}
           data-selected={selectedNodeIds.includes(node.id)}
           data-locked={node.locked}
           className={`layer-row ${selectedNodeIds.includes(node.id) ? "selected" : ""} ${node.locked ? "locked" : ""} ${dropTarget?.id === node.id ? (dropTarget.before ? "drop-before" : "drop-after") : ""}`}
+          onContextMenu={(event) => {
+            const componentId = componentIdForNode(node, model.nodes);
+            if (!componentId) return;
+            event.preventDefault();
+            setContextMenu({ x: event.clientX, y: event.clientY, componentId });
+          }}
           style={{ paddingLeft: 5 + depth * 14 }}
           draggable={!node.locked && editingNodeId !== node.id}
           onDragStart={(event) => {
@@ -249,7 +272,8 @@ export function Panel({
             }
             onDoubleClick={() => {
               onSelectNode(node.id, false);
-              onNavigateNode(node);
+              if (node.kind === "text" && !node.locked) onBeginTextEdit(node);
+              else onNavigateNode(node);
             }}
             onKeyDown={(event) => {
               if (
@@ -265,8 +289,20 @@ export function Panel({
                 );
             }}
           >
-            <span>
-              {node.kind === "frame" ? "▣" : node.kind === "group" ? "◇" : "□"}
+            <span className="layer-kind-icon">
+              {node.component_id ? (
+                node.instance_root_id === node.id ? (
+                  <Copy aria-hidden="true" />
+                ) : (
+                  <Component aria-hidden="true" />
+                )
+              ) : node.kind === "frame" ? (
+                "▣"
+              ) : node.kind === "group" ? (
+                "◇"
+              ) : (
+                "□"
+              )}
             </span>
             {editingNodeId === node.id ? (
               <input
@@ -332,6 +368,7 @@ export function Panel({
         <PanelTabs active={panelTab} onChange={setPanelTab} />
         <VaultPanel
           model={model}
+          selectedNodeIds={selectedNodeIds}
           hasSelectedText={hasSelectedText}
           onAddNumberVariable={onAddNumberVariable}
           onUpdateNumberVariable={onUpdateNumberVariable}
@@ -342,6 +379,8 @@ export function Panel({
           onImportImage={onImportImage}
           onAddLibraryIcon={onAddLibraryIcon}
           onAddNodeFromAsset={onAddNodeFromAsset}
+          onAddComponentInstance={onAddComponentInstance}
+          onAddSelectedComponentVariant={onAddSelectedComponentVariant}
         />
       </>
     );
@@ -381,6 +420,24 @@ export function Panel({
           <EmptyState text="This page is empty. Add a frame or rectangle." />
         )}
       </div>
+      {contextMenu && (
+        <div
+          className="layer-context-menu"
+          role="menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              onOpenComponentLibrary(contextMenu.componentId);
+              setContextMenu(undefined);
+            }}
+          >
+            <Component aria-hidden="true" />
+            View in library
+          </button>
+        </div>
+      )}
       <p className="eyebrow diagnostics-title">Diagnostics</p>
       <dl className="metrics">
         <Metric label="Objects" value={stats.objects.toLocaleString()} />
@@ -395,6 +452,12 @@ export function Panel({
       </dl>
     </>
   );
+}
+
+function componentIdForNode(node: NodeSummary, nodes: NodeSummary[]) {
+  if (node.component_id) return node.component_id;
+  if (!node.instance_root_id) return undefined;
+  return nodes.find((item) => item.id === node.instance_root_id)?.component_id;
 }
 
 function PanelTabs({
@@ -426,6 +489,7 @@ function PanelTabs({
 
 function VaultPanel({
   model,
+  selectedNodeIds,
   hasSelectedText,
   onAddNumberVariable,
   onUpdateNumberVariable,
@@ -436,8 +500,11 @@ function VaultPanel({
   onImportImage,
   onAddLibraryIcon,
   onAddNodeFromAsset,
+  onAddComponentInstance,
+  onAddSelectedComponentVariant,
 }: {
   model: DocumentReadModel;
+  selectedNodeIds: string[];
   hasSelectedText: boolean;
   onAddNumberVariable: (name: string, value: number) => void;
   onUpdateNumberVariable: (id: string, name: string, value: number) => void;
@@ -452,6 +519,8 @@ function VaultPanel({
   onImportImage: (file: File) => void;
   onAddLibraryIcon: (name: string, svg: string) => void;
   onAddNodeFromAsset: (assetId: string) => void;
+  onAddComponentInstance: (componentId: string, variantId: string) => void;
+  onAddSelectedComponentVariant: (componentId: string) => void;
 }) {
   const [variableName, setVariableName] = useState("Spacing / 16");
   const [variableValue, setVariableValue] = useState("16");
@@ -532,6 +601,39 @@ function VaultPanel({
               onClick={() => onAddLibraryIcon(icon.name, icon.svg)}
             />
           ))}
+        </div>
+      </section>
+
+      <section className="vault-section">
+        <h3>Components</h3>
+        <div className="vault-list">
+          {model.components.map((component) => (
+            <div className="component-asset-card" key={component.id}>
+              <strong>{component.name}</strong>
+              <small>{component.variants.length} variant(s)</small>
+              {component.variants.map((variant) => (
+                <button
+                  key={variant.id}
+                  onClick={() =>
+                    onAddComponentInstance(component.id, variant.id)
+                  }
+                >
+                  Insert {variant.name}
+                </button>
+              ))}
+              <button
+                disabled={
+                  !hasSelectedComponentCandidate(model, selectedNodeIds)
+                }
+                onClick={() => onAddSelectedComponentVariant(component.id)}
+              >
+                Add selection as variant
+              </button>
+            </div>
+          ))}
+          {model.components.length === 0 && (
+            <p className="empty-state">No components yet.</p>
+          )}
         </div>
       </section>
 
@@ -709,6 +811,19 @@ function VaultPanel({
         </div>
       </section>
     </div>
+  );
+}
+
+function hasSelectedComponentCandidate(
+  model: DocumentReadModel,
+  selectedNodeIds: string[],
+) {
+  if (selectedNodeIds.length !== 1) return false;
+  const node = model.nodes.find((item) => item.id === selectedNodeIds[0]);
+  return Boolean(
+    node &&
+    (node.kind === "frame" || node.kind === "group") &&
+    !node.component_id,
   );
 }
 

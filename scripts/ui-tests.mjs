@@ -111,6 +111,34 @@ try {
   await waitForTool("hand");
   await page.keyboard.up("Space");
   await waitForTool("select");
+  const requestAction = page
+    .locator('[data-testid^="layer-node-"][data-node-kind="group"]')
+    .filter({ hasText: "↙ Request" })
+    .first();
+  const sendAction = page
+    .locator('[data-testid^="layer-node-"][data-node-kind="group"]')
+    .filter({ hasText: "↗ Send" })
+    .first();
+  await requestAction.locator(".layer-main").dblclick();
+  await page.waitForTimeout(350);
+  await sendAction.locator(".layer-main").click();
+  const spacingCanvasBounds = await canvas.boundingBox();
+  assert.ok(spacingCanvasBounds);
+  await page.keyboard.down("Alt");
+  await page.mouse.move(
+    spacingCanvasBounds.x + spacingCanvasBounds.width / 2,
+    spacingCanvasBounds.y + spacingCanvasBounds.height / 2,
+  );
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".spacing-overlay")?.dataset.visible === "true",
+  );
+  await page.keyboard.up("Alt");
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".spacing-overlay")?.dataset.visible === "false",
+  );
+  await page.getByTitle("Zoom to fit (F)").click();
   await page.keyboard.press("2");
   assert.match(
     (await page
@@ -275,6 +303,20 @@ try {
   assert.equal(
     await page.getByRole("textbox", { name: "Text content" }).inputValue(),
     "Typography works",
+  );
+  const unchangedTextBounds = {
+    width: await page.getByRole("spinbutton", { name: "W" }).inputValue(),
+    height: await page.getByRole("spinbutton", { name: "H" }).inputValue(),
+  };
+  await textLayer.locator(".layer-main").dblclick();
+  await page.getByRole("textbox", { name: "Edit text content" }).press("Tab");
+  assert.equal(
+    await page.getByRole("spinbutton", { name: "W" }).inputValue(),
+    unchangedTextBounds.width,
+  );
+  assert.equal(
+    await page.getByRole("spinbutton", { name: "H" }).inputValue(),
+    unchangedTextBounds.height,
   );
   const fontFamily = page.getByRole("combobox", { name: "Font family" });
   await fontFamily.selectOption("Roboto");
@@ -452,6 +494,48 @@ try {
       .textContent(),
     "Body / Test",
   );
+
+  const componentSource = page
+    .locator('[data-testid^="layer-node-"]')
+    .filter({ hasText: "Wallet content · Auto layout" })
+    .first();
+  await componentSource.locator(".layer-main").click();
+  await page.getByRole("button", { name: "Create component" }).click();
+  await page.getByRole("button", { name: "Assets" }).click();
+  await page
+    .locator(".component-asset-card")
+    .filter({ hasText: "Wallet content · Auto layout" })
+    .getByRole("button", { name: "Insert Default" })
+    .click();
+  await page.getByRole("button", { name: "Layers" }).click();
+  const componentInstance = page.locator(
+    '[data-testid^="layer-node-"][data-instance-root-id]:not([data-instance-root-id=""])',
+  );
+  await componentInstance.first().waitFor();
+  await componentInstance.first().locator(".layer-main").click();
+  assert.equal(
+    await page
+      .locator(".selection-overlay")
+      .getAttribute("data-component-selection"),
+    "true",
+  );
+  await componentInstance.first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "View in library" }).click();
+  await page.getByTestId("component-library-view").waitFor();
+  await page
+    .getByText("Wallet content · Auto layout", { exact: true })
+    .waitFor();
+  await page.getByRole("button", { name: "Add variant" }).click();
+  await page.getByText("Variant 2", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Edit main" }).click();
+  await page.getByTestId("component-isolation").waitFor();
+  await page.getByTestId("component-isolation-mask").waitFor();
+  assert.equal(await componentSource.getAttribute("data-selected"), "true");
+  await page.keyboard.press("Escape");
+  await page.getByTestId("component-isolation").waitFor({ state: "detached" });
+  await componentInstance.first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "View in library" }).click();
+  await page.getByRole("button", { name: "Editor" }).click();
 
   const pages = page.getByTestId(/^page-node-/);
   const pageCount = await pages.count();

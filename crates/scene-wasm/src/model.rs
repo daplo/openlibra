@@ -16,6 +16,22 @@ pub struct Document {
     pub(crate) text_styles: Vec<TextStyleAsset>,
     #[serde(default)]
     pub(crate) media_assets: Vec<MediaAsset>,
+    #[serde(default)]
+    pub(crate) components: Vec<ComponentDefinition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ComponentDefinition {
+    pub(crate) id: EntityId,
+    pub(crate) name: String,
+    pub(crate) variants: Vec<ComponentVariant>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ComponentVariant {
+    pub(crate) id: EntityId,
+    pub(crate) name: String,
+    pub(crate) source_root_id: EntityId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -135,6 +151,18 @@ pub struct Node {
     pub(crate) asset_id: Option<EntityId>,
     #[serde(default)]
     pub(crate) image_fit: ImageFit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) component_id: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) component_variant_id: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) component_slot_id: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) instance_root_id: Option<EntityId>,
+    #[serde(default)]
+    pub(crate) text_override: bool,
+    #[serde(default)]
+    pub(crate) asset_override: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -396,6 +424,7 @@ pub(crate) struct DocumentReadModel<'a> {
     pub(crate) number_variables: &'a [NumberVariable],
     pub(crate) text_styles: &'a [TextStyleAsset],
     pub(crate) media_assets: &'a [MediaAsset],
+    pub(crate) components: &'a [ComponentDefinition],
 }
 
 #[derive(Serialize)]

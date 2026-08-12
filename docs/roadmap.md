@@ -231,13 +231,13 @@ Goal: let teams build reusable UI systems while keeping instances traceable and 
 
 ### Todos
 
-- [ ] Add component definitions and instances with separate stable IDs
+- [x] Add component definitions and instances with separate stable IDs
 - [ ] Store instance-to-definition references without copying the entire subtree
 - [ ] Add typed overrides for text, visibility, asset, token, and nested instance properties
 - [ ] Add reset, detach, swap, and go-to-main-component actions
 - [ ] Add component properties and a minimal variant model
 - [ ] Prevent component and library dependency cycles
-- [ ] Create a local Vault for images, icons, components, and token collections
+- [x] Create a local Vault for images, icons, components, and token collections
 - [ ] Add Vault search, tags, previews, grouping, rename, duplicate, archive, and usage inspection
 - [ ] Define document-local, workspace, and published-library scopes
 - [ ] Publish immutable library versions with semantic metadata and release notes

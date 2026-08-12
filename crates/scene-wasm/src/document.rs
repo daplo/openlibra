@@ -21,6 +21,7 @@ impl Document {
             number_variables: Vec::new(),
             text_styles: Vec::new(),
             media_assets: Vec::new(),
+            components: Vec::new(),
         };
 
         let mobile = document.insert_node(
@@ -663,6 +664,9 @@ impl Document {
             824.0,
             [home_icon, chart_icon, scan_icon, card_icon, user_icon],
         );
+
+        self.create_component(cta, "Button / Primary".into());
+        self.create_component(spending, "Card / Spending summary".into());
     }
 
     fn finance_frame(&mut self, name: &str, x: f32, fill: [f32; 4]) -> EntityId {
@@ -1555,6 +1559,12 @@ impl Document {
             text_style_id: None,
             asset_id: None,
             image_fit: ImageFit::Cover,
+            component_id: None,
+            component_variant_id: None,
+            component_slot_id: None,
+            instance_root_id: None,
+            text_override: false,
+            asset_override: false,
         });
         id
     }
@@ -1843,7 +1853,7 @@ impl Document {
     }
 
     pub(crate) fn delete_node(&mut self, node_id: EntityId) -> bool {
-        let page = self.active_page_mut();
+        let page = self.active_page();
         if page
             .nodes
             .iter()
@@ -1851,7 +1861,6 @@ impl Document {
         {
             return false;
         }
-        let before = page.nodes.len();
         let mut removed = HashSet::from([node_id]);
         loop {
             let descendants: Vec<_> = page
@@ -1869,6 +1878,16 @@ impl Document {
                 break;
             }
         }
+        if self
+            .components
+            .iter()
+            .flat_map(|component| &component.variants)
+            .any(|variant| removed.contains(&variant.source_root_id))
+        {
+            return false;
+        }
+        let page = self.active_page_mut();
+        let before = page.nodes.len();
         page.nodes.retain(|node| !removed.contains(&node.id));
         page.nodes.len() != before
     }
@@ -1908,6 +1927,7 @@ impl Document {
             number_variables: &self.number_variables,
             text_styles: &self.text_styles,
             media_assets: &self.media_assets,
+            components: &self.components,
         }
     }
 
@@ -1928,6 +1948,12 @@ impl Document {
         let variable_ids: HashSet<_> = self.number_variables.iter().map(|item| item.id).collect();
         let text_style_ids: HashSet<_> = self.text_styles.iter().map(|item| item.id).collect();
         let media_asset_ids: HashSet<_> = self.media_assets.iter().map(|item| item.id).collect();
+        let component_ids: HashSet<_> = self.components.iter().map(|item| item.id).collect();
+        let all_node_ids: HashSet<_> = self
+            .pages
+            .iter()
+            .flat_map(|page| page.nodes.iter().map(|node| node.id))
+            .collect();
         for page in &self.pages {
             if !owned_ids.insert(page.id) {
                 return Err(format!("Duplicate page or object ID {}", page.id));
@@ -1999,6 +2025,14 @@ impl Document {
                         node.id, asset_id
                     ));
                 }
+                if let Some(component_id) = node.component_id
+                    && !component_ids.contains(&component_id)
+                {
+                    return Err(format!(
+                        "Node {} references missing component {}",
+                        node.id, component_id
+                    ));
+                }
             }
         }
         for color in &self.color_library {
@@ -2019,6 +2053,22 @@ impl Document {
         for asset in &self.media_assets {
             if !owned_ids.insert(asset.id) {
                 return Err(format!("Duplicate page or object ID {}", asset.id));
+            }
+        }
+        for component in &self.components {
+            if !owned_ids.insert(component.id) {
+                return Err(format!("Duplicate page or object ID {}", component.id));
+            }
+            for variant in &component.variants {
+                if !owned_ids.insert(variant.id) {
+                    return Err(format!("Duplicate page or object ID {}", variant.id));
+                }
+                if !all_node_ids.contains(&variant.source_root_id) {
+                    return Err(format!(
+                        "Component variant {} references missing source {}",
+                        variant.id, variant.source_root_id
+                    ));
+                }
             }
         }
         Ok(())
@@ -2066,5 +2116,11 @@ fn benchmark_node(id: EntityId, index: usize, columns: usize) -> Node {
         text_style_id: None,
         asset_id: None,
         image_fit: ImageFit::Cover,
+        component_id: None,
+        component_variant_id: None,
+        component_slot_id: None,
+        instance_root_id: None,
+        text_override: false,
+        asset_override: false,
     }
 }

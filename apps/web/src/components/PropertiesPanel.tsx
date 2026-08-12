@@ -30,6 +30,7 @@ import {
 import type {
   NodeSummary,
   MediaAsset,
+  ComponentDefinition,
   NumberVariable,
   ShadowSummary,
   TextStyleAsset,
@@ -42,10 +43,13 @@ export function Properties(props: {
   numberVariables: NumberVariable[];
   textStyles: TextStyleAsset[];
   mediaAssets: MediaAsset[];
+  components: ComponentDefinition[];
   onAddDocumentColor: (color: string) => void;
   onAlign: (alignment: string) => void;
   onDelete: () => void;
   onGroup: () => void;
+  onCreateComponent: (node: NodeSummary) => void;
+  onInstanceVariantChange: (node: NodeSummary, variantId: string) => void;
   onStyleChange: (
     node: NodeSummary,
     change: Partial<{
@@ -163,6 +167,28 @@ export function Properties(props: {
                 />
               )}
             </PropertySection>
+            {node.component_id && node.instance_root_id === node.id && (
+              <PropertySection title="Component">
+                <label className="select-control">
+                  <span>Variant</span>
+                  <select
+                    aria-label="Component variant"
+                    value={node.component_variant_id}
+                    onChange={(event) =>
+                      props.onInstanceVariantChange(node, event.target.value)
+                    }
+                  >
+                    {props.components
+                      .find((component) => component.id === node.component_id)
+                      ?.variants.map((variant) => (
+                        <option key={variant.id} value={variant.id}>
+                          {variant.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </PropertySection>
+            )}
             <PropertySection title="Variables">
               <VariableBindingControls
                 node={node}
@@ -236,6 +262,16 @@ export function Properties(props: {
           </>
         )}
         <PropertySection title="Actions">
+          {selected.length === 1 &&
+            (node.kind === "frame" || node.kind === "group") &&
+            !node.component_id && (
+              <button
+                className="primary-button"
+                onClick={() => props.onCreateComponent(node)}
+              >
+                Create component
+              </button>
+            )}
           <button className="danger-button" onClick={props.onDelete}>
             Delete {selected.length > 1 ? "layers" : "layer"}
           </button>

@@ -7,6 +7,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  Check,
+  Component,
   Frame,
   Hand,
   MessageCircle,
@@ -21,15 +23,18 @@ import {
 import {
   ArtboardGuides,
   CanvasGrid,
+  IsolationOverlay,
   MediaOverlay,
   Rulers,
   SelectionOverlay,
+  SpacingOverlay,
   TextOverlay,
 } from "./components/CanvasOverlays";
 import { ArtboardMenu } from "./components/ArtboardMenu";
 import { Inspect, Review, ToolButton } from "./components/EditorChrome";
 import { Panel } from "./components/EditorSidebar";
 import { Properties } from "./components/PropertiesPanel";
+import { LibraryView } from "./components/LibraryView";
 import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
 import {
   EditorInputController,
@@ -77,6 +82,10 @@ export function App() {
   const [mode, setMode] = useState<Mode>("design");
   const [leftPanelWidth, setLeftPanelWidth] = useState(240);
   const [rightPanelWidth, setRightPanelWidth] = useState(250);
+  const [libraryComponentId, setLibraryComponentId] = useState<string>();
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [isolationRootId, setIsolationRootId] = useState<string>();
+  const isolationRootIdRef = useRef<string | undefined>(undefined);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>("select");
   const [theme, setTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem("open-libra-theme");
@@ -98,6 +107,7 @@ export function App() {
     number_variables: [],
     text_styles: [],
     media_assets: [],
+    components: [],
   });
   const [, setModelPatchVersion] = useState(0);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -134,6 +144,21 @@ export function App() {
   const editingTextNode = editingTextId
     ? nodesById.get(editingTextId)
     : undefined;
+  const isolationRoot = isolationRootId
+    ? nodesById.get(isolationRootId)
+    : undefined;
+  const isolatedModel = useMemo(() => {
+    if (!isolationRootId) return documentModel;
+    const visibleNodes = documentModel.nodes
+      .filter((node) => isNodeWithinRoot(node.id, isolationRootId, nodesById))
+      .map((node) => {
+        if (node.id !== isolationRootId) return node;
+        const isolatedRoot = { ...node };
+        delete isolatedRoot.parent_id;
+        return isolatedRoot;
+      });
+    return { ...documentModel, nodes: visibleNodes };
+  }, [documentModel, isolationRootId, nodesById]);
   const documentColors = useMemo(
     () => collectDocumentColors(documentModel),
     [documentModel],
@@ -148,6 +173,27 @@ export function App() {
   canvasToolRef.current = canvasTool;
   themeRef.current = theme;
   documentModelRef.current = documentModel;
+  isolationRootIdRef.current = isolationRootId;
+
+  useEffect(() => {
+    if (isolationRootId && !nodesById.has(isolationRootId))
+      setIsolationRootId(undefined);
+  }, [isolationRootId, nodesById]);
+
+  useEffect(() => {
+    if (!isolationRootId) return;
+    const exitOnEscape = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        event.key !== "Escape" ||
+        target?.matches("input, textarea, select, [contenteditable='true']")
+      )
+        return;
+      setIsolationRootId(undefined);
+    };
+    window.addEventListener("keydown", exitOnEscape);
+    return () => window.removeEventListener("keydown", exitOnEscape);
+  }, [isolationRootId]);
 
   function refreshDocument(selection = selectedNodeIdsRef.current) {
     const engine = engineRef.current;
@@ -338,6 +384,61 @@ export function App() {
     }
   }
 
+  function createComponent(node: NodeSummary) {
+    const id = engineRef.current?.create_component(node.id, node.name);
+    if (id) refreshDocument([node.id]);
+  }
+
+  function createComponentInstance(componentId: string, variantId: string) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const parentId = preferredArtboardId(documentModel.nodes, []);
+    const id = engine.create_component_instance(
+      componentId,
+      variantId,
+      parentId ?? "",
+    );
+    if (id) refreshDocument([id]);
+  }
+
+  function changeInstanceVariant(node: NodeSummary, variantId: string) {
+    const id = engineRef.current?.set_instance_variant(node.id, variantId);
+    if (id) refreshDocument([id]);
+  }
+
+  function addSelectedComponentVariant(componentId: string) {
+    const node = selectedNodes[0];
+    if (!node || (node.kind !== "frame" && node.kind !== "group")) return;
+    const id = engineRef.current?.add_component_variant(
+      componentId,
+      node.id,
+      node.name,
+    );
+    if (id) refreshDocument([node.id]);
+  }
+
+  function duplicateComponentVariant(
+    componentId: string,
+    sourceVariantId: string,
+    name: string,
+  ) {
+    const id = engineRef.current?.duplicate_component_variant(
+      componentId,
+      sourceVariantId,
+      name,
+    );
+    if (id) refreshDocument([id]);
+  }
+
+  function editMainComponent(sourceRootId: string) {
+    const source = nodesByIdRef.current.get(sourceRootId);
+    if (!source) return;
+    setLibraryOpen(false);
+    setIsolationRootId(sourceRootId);
+    applySelection([sourceRootId]);
+    requestAnimationFrame(() => rendererRef.current?.centerOnBounds(source));
+  }
+
   function moveSelection(dx: number, dy: number) {
     const selection = selectedNodeIdsRef.current;
     if (!engineRef.current || selection.length === 0) return;
@@ -403,6 +504,9 @@ export function App() {
   }
 
   function selectNode(id: string, additive: boolean) {
+    const isolationId = isolationRootIdRef.current;
+    if (isolationId && !isNodeWithinRoot(id, isolationId, nodesByIdRef.current))
+      return;
     const current = selectedNodeIdsRef.current;
     if (!additive) applySelection([id]);
     else
@@ -508,6 +612,7 @@ export function App() {
   function updateNodeText(node: NodeSummary, text: TextStyleSummary) {
     const engine = engineRef.current;
     if (!engine) return;
+    if (node.text && textStylesEqual(node.text, text)) return;
     try {
       const bounds = measureTextBounds(node, text);
       engine.begin_transaction();
@@ -901,6 +1006,12 @@ export function App() {
       if (!additive) applySelection([]);
       return;
     }
+    const isolationId = isolationRootIdRef.current;
+    if (
+      isolationId &&
+      !isNodeWithinRoot(hitId, isolationId, nodesByIdRef.current)
+    )
+      return;
     const selectedAncestor = findSelectedAncestor(
       hitId,
       selectedNodeIdsRef.current,
@@ -1221,6 +1332,15 @@ export function App() {
         </nav>
         <div className="topbar-actions">
           <button
+            className={`library-trigger ${libraryOpen ? "active" : ""}`}
+            onClick={() => {
+              setLibraryComponentId(undefined);
+              setLibraryOpen((open) => !open);
+            }}
+          >
+            Library
+          </button>
+          <button
             className="theme-toggle"
             onClick={() =>
               setTheme((current) => (current === "dark" ? "light" : "dark"))
@@ -1234,238 +1354,296 @@ export function App() {
         </div>
       </header>
 
-      <section
-        className="workspace"
-        style={
-          {
-            "--left-panel-width": `${leftPanelWidth}px`,
-            "--right-panel-width": `${rightPanelWidth}px`,
-          } as CSSProperties
-        }
-      >
-        <aside className="left-panel">
-          <Panel
-            mode={mode}
-            stats={stats}
-            model={documentModel}
-            selectedNodeIds={selectedNodeIds}
-            onSelectNode={selectNode}
-            onAddPage={addPage}
-            onSelectPage={selectPage}
-            onNavigateNode={(node) => rendererRef.current?.centerOnBounds(node)}
-            onReorderNode={(draggedId, targetId, before) => {
-              if (engineRef.current?.reorder_node(draggedId, targetId, before))
-                refreshDocument();
-            }}
-            onToggleLock={(id, locked) => {
-              if (engineRef.current?.set_node_locked(id, locked)) {
-                if (locked && selectedNodeIdsRef.current.includes(id))
-                  refreshDocument(
-                    selectedNodeIdsRef.current.filter(
-                      (selected) => selected !== id,
-                    ),
-                  );
-                else refreshDocument();
-              }
-            }}
-            onRenameNode={(id, name) => {
-              if (
-                name.trim() &&
-                engineRef.current?.rename_node(id, name.trim())
-              )
-                refreshDocument();
-            }}
-            onAddNumberVariable={addNumberVariable}
-            onUpdateNumberVariable={updateNumberVariable}
-            onDeleteNumberVariable={deleteNumberVariable}
-            onAddTextStyle={addTextStyle}
-            onUpdateTextStyle={updateTextStyle}
-            onDeleteTextStyle={deleteTextStyle}
-            hasSelectedText={selectedNodes.some((node) => node.kind === "text")}
-            onImportImage={importImage}
-            onAddLibraryIcon={addLibraryIcon}
-            onAddNodeFromAsset={addNodeFromAsset}
-          />
-          <PanelResizeHandle
-            side="left"
-            width={leftPanelWidth}
-            onChange={setLeftPanelWidth}
-          />
-        </aside>
-
+      {libraryOpen ? (
+        <LibraryView
+          model={documentModel}
+          focusedComponentId={libraryComponentId}
+          onBack={() => setLibraryOpen(false)}
+          onInsert={createComponentInstance}
+          onEditMain={editMainComponent}
+          onAddVariant={duplicateComponentVariant}
+        />
+      ) : (
         <section
-          className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
+          className="workspace"
+          style={
+            {
+              "--left-panel-width": `${leftPanelWidth}px`,
+              "--right-panel-width": `${rightPanelWidth}px`,
+            } as CSSProperties
+          }
         >
-          <div className="tool-rail" aria-label="Canvas tools">
-            <ToolButton
-              label="Select (V)"
-              icon={<MousePointer2 />}
-              active={canvasTool === "select"}
-              disabled={mode !== "design"}
-              onClick={() => setCanvasTool("select")}
-            />
-            <ToolButton
-              label="Hand (H)"
-              icon={<Hand />}
-              active={canvasTool === "hand"}
-              onClick={() => setCanvasTool("hand")}
-            />
-            <ToolButton
-              label="Artboard"
-              icon={<Frame />}
-              disabled={mode !== "design"}
-              active={artboardMenuOpen}
-              onClick={() => setArtboardMenuOpen((open) => !open)}
-            />
-            <ToolButton
-              label="Rectangle"
-              icon={<Square />}
-              disabled={mode !== "design"}
-              onClick={() => addNode("rectangle")}
-            />
-            <ToolButton
-              label="Text"
-              icon={<Type />}
-              disabled={mode !== "design"}
-              onClick={() => addNode("text")}
-            />
-            <ToolButton
-              label="Comment"
-              icon={<MessageCircle />}
-              disabled={mode === "developer"}
-            />
-          </div>
-
-          {artboardMenuOpen && (
-            <ArtboardMenu
-              onChoose={addArtboard}
-              onClose={() => setArtboardMenuOpen(false)}
-            />
-          )}
-
-          <div className="canvas-wrap">
-            <canvas
-              ref={canvasRef}
-              aria-label="Open Libra WebGPU editor canvas"
-            />
-            {gridVisible && (
-              <CanvasGrid rendererRef={rendererRef} theme={theme} />
-            )}
-            <ArtboardGuides
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              artboards={guidedArtboards}
-            />
-            <MediaOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              assets={documentModel.media_assets}
-            />
-            <TextOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              editingTextId={editingTextId}
-            />
-            <SelectionOverlay
-              rendererRef={rendererRef}
-              selected={selectedNodes}
-            />
-            {editingTextNode?.text && (
-              <textarea
-                className="text-editor-overlay"
-                defaultValue={editingTextNode.text.content}
-                autoFocus
-                wrap={
-                  editingTextNode.text.sizing === "auto_width" ? "off" : "soft"
+          <aside className="left-panel">
+            <Panel
+              mode={mode}
+              stats={stats}
+              model={isolatedModel}
+              selectedNodeIds={selectedNodeIds}
+              onSelectNode={selectNode}
+              onAddPage={addPage}
+              onSelectPage={selectPage}
+              onNavigateNode={(node) =>
+                rendererRef.current?.centerOnBounds(node)
+              }
+              onBeginTextEdit={(node) => setEditingTextId(node.id)}
+              onReorderNode={(draggedId, targetId, before) => {
+                if (
+                  engineRef.current?.reorder_node(draggedId, targetId, before)
+                )
+                  refreshDocument();
+              }}
+              onToggleLock={(id, locked) => {
+                if (engineRef.current?.set_node_locked(id, locked)) {
+                  if (locked && selectedNodeIdsRef.current.includes(id))
+                    refreshDocument(
+                      selectedNodeIdsRef.current.filter(
+                        (selected) => selected !== id,
+                      ),
+                    );
+                  else refreshDocument();
                 }
-                style={textEditorStyle(editingTextNode, rendererRef.current)}
-                onBlur={(event) => {
-                  updateNodeText(editingTextNode, {
-                    ...editingTextNode.text!,
-                    content: event.currentTarget.value,
-                  });
-                  setEditingTextId(undefined);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") setEditingTextId(undefined);
-                }}
-                aria-label="Edit text content"
+              }}
+              onRenameNode={(id, name) => {
+                if (
+                  name.trim() &&
+                  engineRef.current?.rename_node(id, name.trim())
+                )
+                  refreshDocument();
+              }}
+              onAddNumberVariable={addNumberVariable}
+              onUpdateNumberVariable={updateNumberVariable}
+              onDeleteNumberVariable={deleteNumberVariable}
+              onAddTextStyle={addTextStyle}
+              onUpdateTextStyle={updateTextStyle}
+              onDeleteTextStyle={deleteTextStyle}
+              hasSelectedText={selectedNodes.some(
+                (node) => node.kind === "text",
+              )}
+              onImportImage={importImage}
+              onAddLibraryIcon={addLibraryIcon}
+              onAddNodeFromAsset={addNodeFromAsset}
+              onAddComponentInstance={createComponentInstance}
+              onAddSelectedComponentVariant={addSelectedComponentVariant}
+              onOpenComponentLibrary={(componentId) => {
+                setLibraryComponentId(componentId);
+                setLibraryOpen(true);
+              }}
+            />
+            <PanelResizeHandle
+              side="left"
+              width={leftPanelWidth}
+              onChange={setLeftPanelWidth}
+            />
+          </aside>
+
+          <section
+            className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
+          >
+            <div className="tool-rail" aria-label="Canvas tools">
+              <ToolButton
+                label="Select (V)"
+                icon={<MousePointer2 />}
+                active={canvasTool === "select"}
+                disabled={mode !== "design"}
+                onClick={() => setCanvasTool("select")}
+              />
+              <ToolButton
+                label="Hand (H)"
+                icon={<Hand />}
+                active={canvasTool === "hand"}
+                onClick={() => setCanvasTool("hand")}
+              />
+              <ToolButton
+                label="Artboard"
+                icon={<Frame />}
+                disabled={mode !== "design"}
+                active={artboardMenuOpen}
+                onClick={() => setArtboardMenuOpen((open) => !open)}
+              />
+              <ToolButton
+                label="Rectangle"
+                icon={<Square />}
+                disabled={mode !== "design"}
+                onClick={() => addNode("rectangle")}
+              />
+              <ToolButton
+                label="Text"
+                icon={<Type />}
+                disabled={mode !== "design"}
+                onClick={() => addNode("text")}
+              />
+              <ToolButton
+                label="Comment"
+                icon={<MessageCircle />}
+                disabled={mode === "developer"}
+              />
+            </div>
+
+            {artboardMenuOpen && (
+              <ArtboardMenu
+                onChoose={addArtboard}
+                onClose={() => setArtboardMenuOpen(false)}
               />
             )}
-            {error && (
-              <div className="error-card">
-                <strong>Renderer unavailable</strong>
-                <span>{error}</span>
-              </div>
+
+            <div className="canvas-wrap">
+              <canvas
+                ref={canvasRef}
+                aria-label="Open Libra WebGPU editor canvas"
+              />
+              {gridVisible && (
+                <CanvasGrid rendererRef={rendererRef} theme={theme} />
+              )}
+              <ArtboardGuides
+                rendererRef={rendererRef}
+                nodes={documentModel.nodes}
+                artboards={guidedArtboards}
+              />
+              <MediaOverlay
+                rendererRef={rendererRef}
+                nodes={documentModel.nodes}
+                assets={documentModel.media_assets}
+              />
+              <TextOverlay
+                rendererRef={rendererRef}
+                nodes={documentModel.nodes}
+                editingTextId={editingTextId}
+              />
+              {isolationRoot && (
+                <IsolationOverlay
+                  rendererRef={rendererRef}
+                  root={isolationRoot}
+                  theme={theme}
+                />
+              )}
+              <SelectionOverlay
+                rendererRef={rendererRef}
+                selected={selectedNodes}
+              />
+              {isolationRoot && (
+                <div
+                  className="component-isolation-bar"
+                  data-testid="component-isolation"
+                >
+                  <Component aria-hidden="true" />
+                  <span>Editing component</span>
+                  <strong>{isolationRoot.name}</strong>
+                  <button onClick={() => setIsolationRootId(undefined)}>
+                    <Check aria-hidden="true" />
+                    Done
+                  </button>
+                </div>
+              )}
+              <SpacingOverlay
+                rendererRef={rendererRef}
+                interactionCanvasRef={canvasRef}
+                nodes={documentModel.nodes}
+                selected={selectedNodes}
+              />
+              {editingTextNode?.text && (
+                <textarea
+                  className="text-editor-overlay"
+                  defaultValue={editingTextNode.text.content}
+                  autoFocus
+                  wrap={
+                    editingTextNode.text.sizing === "auto_width"
+                      ? "off"
+                      : "soft"
+                  }
+                  style={textEditorStyle(editingTextNode, rendererRef.current)}
+                  onBlur={(event) => {
+                    updateNodeText(editingTextNode, {
+                      ...editingTextNode.text!,
+                      content: event.currentTarget.value,
+                    });
+                    setEditingTextId(undefined);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setEditingTextId(undefined);
+                  }}
+                  aria-label="Edit text content"
+                />
+              )}
+              {error && (
+                <div className="error-card">
+                  <strong>Renderer unavailable</strong>
+                  <span>{error}</span>
+                </div>
+              )}
+            </div>
+
+            {rulersVisible && (
+              <Rulers rendererRef={rendererRef} theme={theme} />
             )}
-          </div>
 
-          {rulersVisible && <Rulers rendererRef={rendererRef} theme={theme} />}
+            <div className="zoom-controls">
+              <button
+                onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button onClick={() => rendererRef.current?.resetView()}>
+                {Math.round(stats.zoom * 100)}%
+              </button>
+              <button
+                onClick={() => rendererRef.current?.zoomBy(1.2)}
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+              <button
+                onClick={() => rendererRef.current?.zoomToFit()}
+                title="Zoom to fit (F)"
+              >
+                Fit
+              </button>
+            </div>
+          </section>
 
-          <div className="zoom-controls">
-            <button
-              onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
-              aria-label="Zoom out"
-            >
-              −
-            </button>
-            <button onClick={() => rendererRef.current?.resetView()}>
-              {Math.round(stats.zoom * 100)}%
-            </button>
-            <button
-              onClick={() => rendererRef.current?.zoomBy(1.2)}
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-            <button
-              onClick={() => rendererRef.current?.zoomToFit()}
-              title="Zoom to fit (F)"
-            >
-              Fit
-            </button>
-          </div>
-        </section>
-
-        <aside className="right-panel">
-          <PanelResizeHandle
-            side="right"
-            width={rightPanelWidth}
-            onChange={setRightPanelWidth}
-          />
-          <p className="eyebrow">{mode}</p>
-          {mode === "design" && (
-            <Properties
-              selected={selectedNodes}
-              documentColors={documentColors}
-              numberVariables={documentModel.number_variables}
-              textStyles={documentModel.text_styles}
-              mediaAssets={documentModel.media_assets}
-              onAddDocumentColor={addDocumentColor}
-              onAlign={alignSelected}
-              onDelete={deleteSelected}
-              onGroup={groupSelected}
-              onStyleChange={updateNodeStyle}
-              onBoundsChange={updateNodeBounds}
-              onOpacityChange={updateNodeOpacity}
-              onShadowsChange={updateNodeShadows}
-              onTextChange={updateNodeText}
-              onVariableBind={bindNodeVariable}
-              onTextStyleBind={bindNodeTextStyle}
-              onCreateVariable={createAndBindVariable}
-              onCreateTextStyle={createAndBindTextStyle}
-              onImageFitChange={updateNodeImageFit}
-              onAssetChange={updateNodeAsset}
-              onTransformChange={updateNodeTransform}
-              onLayoutChange={updateNodeLayout}
-              onWidthSizingChange={updateNodeWidthSizing}
-              onArtboardGuideChange={updateArtboardGuide}
+          <aside className="right-panel">
+            <PanelResizeHandle
+              side="right"
+              width={rightPanelWidth}
+              onChange={setRightPanelWidth}
             />
-          )}
-          {mode === "developer" && <Inspect />}
-          {mode === "review" && <Review />}
-        </aside>
-      </section>
+            <p className="eyebrow">{mode}</p>
+            {mode === "design" && (
+              <Properties
+                selected={selectedNodes}
+                documentColors={documentColors}
+                numberVariables={documentModel.number_variables}
+                textStyles={documentModel.text_styles}
+                mediaAssets={documentModel.media_assets}
+                components={documentModel.components}
+                onAddDocumentColor={addDocumentColor}
+                onAlign={alignSelected}
+                onDelete={deleteSelected}
+                onGroup={groupSelected}
+                onCreateComponent={createComponent}
+                onInstanceVariantChange={changeInstanceVariant}
+                onStyleChange={updateNodeStyle}
+                onBoundsChange={updateNodeBounds}
+                onOpacityChange={updateNodeOpacity}
+                onShadowsChange={updateNodeShadows}
+                onTextChange={updateNodeText}
+                onVariableBind={bindNodeVariable}
+                onTextStyleBind={bindNodeTextStyle}
+                onCreateVariable={createAndBindVariable}
+                onCreateTextStyle={createAndBindTextStyle}
+                onImageFitChange={updateNodeImageFit}
+                onAssetChange={updateNodeAsset}
+                onTransformChange={updateNodeTransform}
+                onLayoutChange={updateNodeLayout}
+                onWidthSizingChange={updateNodeWidthSizing}
+                onArtboardGuideChange={updateArtboardGuide}
+              />
+            )}
+            {mode === "developer" && <Inspect />}
+            {mode === "review" && <Review />}
+          </aside>
+        </section>
+      )}
     </main>
   );
 }
@@ -1572,6 +1750,21 @@ function measureTextBounds(node: NodeSummary, text: TextStyleSummary) {
   };
 }
 
+function textStylesEqual(left: TextStyleSummary, right: TextStyleSummary) {
+  return (
+    left.content === right.content &&
+    left.font_family === right.font_family &&
+    left.font_weight === right.font_weight &&
+    left.font_size === right.font_size &&
+    left.line_height === right.line_height &&
+    left.letter_spacing === right.letter_spacing &&
+    left.horizontal_align === right.horizontal_align &&
+    left.vertical_align === right.vertical_align &&
+    left.font_style === right.font_style &&
+    left.sizing === right.sizing
+  );
+}
+
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -1589,4 +1782,19 @@ function readImageDimensions(source: string) {
     image.onerror = () => reject(new Error("The selected image is invalid."));
     image.src = source;
   });
+}
+
+function isNodeWithinRoot(
+  nodeId: string,
+  rootId: string,
+  nodesById: Map<string, NodeSummary>,
+) {
+  let current = nodesById.get(nodeId);
+  const visited = new Set<string>();
+  while (current && !visited.has(current.id)) {
+    if (current.id === rootId) return true;
+    visited.add(current.id);
+    current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
+  }
+  return false;
 }

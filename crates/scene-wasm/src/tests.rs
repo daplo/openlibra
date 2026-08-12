@@ -23,6 +23,16 @@ fn demo_document_has_stable_renderable_nodes() {
     }
     assert_eq!(engine.document.text_styles.len(), 4);
     assert_eq!(engine.document.media_assets.len(), 5);
+    assert_eq!(engine.document.components.len(), 2);
+    for name in ["Button / Primary", "Card / Spending summary"] {
+        assert!(
+            engine
+                .document
+                .components
+                .iter()
+                .any(|component| component.name == name)
+        );
+    }
     assert!(engine.document.active_page().nodes.iter().any(|node| {
         node.text_style_id.is_some()
             && node.text.is_some()
@@ -263,6 +273,109 @@ fn text_style_updates_every_linked_text_node() {
             .content,
         original_content
     );
+}
+
+#[test]
+fn component_instances_sync_source_and_preserve_text_overrides() {
+    let mut engine = DocumentEngine::new();
+    let root_id = engine
+        .document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Wallet content · Auto layout")
+        .unwrap()
+        .id;
+    let component_id = engine.create_component(root_id.to_string(), "Wallet content".into());
+    let component_id = parse_entity_id(&component_id);
+    let variant_id = engine
+        .document
+        .components
+        .iter()
+        .find(|component| component.id == component_id)
+        .unwrap()
+        .variants[0]
+        .id;
+    let instance_id = engine.create_component_instance(
+        component_id.to_string(),
+        variant_id.to_string(),
+        String::new(),
+    );
+    let instance_id = parse_entity_id(&instance_id);
+    let source_greeting = engine
+        .document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Greeting" && node.instance_root_id.is_none())
+        .unwrap()
+        .clone();
+    let instance_greeting = engine
+        .document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| {
+            node.instance_root_id == Some(instance_id)
+                && node.component_slot_id == Some(source_greeting.id)
+        })
+        .unwrap()
+        .clone();
+    let mut override_text = instance_greeting.text.clone().unwrap();
+    override_text.content = "Hi, Maya".into();
+    engine
+        .set_node_text(
+            instance_greeting.id.to_string(),
+            &serde_json::to_string(&override_text).unwrap(),
+        )
+        .unwrap();
+    let mut source_text = source_greeting.text.clone().unwrap();
+    source_text.content = "Hi, updated source".into();
+    source_text.font_size = 22.0;
+    engine
+        .set_node_text(
+            source_greeting.id.to_string(),
+            &serde_json::to_string(&source_text).unwrap(),
+        )
+        .unwrap();
+    let instance = engine.document.active_node(instance_greeting.id).unwrap();
+    assert_eq!(instance.text.as_ref().unwrap().content, "Hi, Maya");
+    assert!(instance.text_override);
+}
+
+#[test]
+fn component_variant_can_be_duplicated_for_editing() {
+    let mut document = Document::demo();
+    let root_id = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Wallet content · Auto layout")
+        .unwrap()
+        .id;
+    let component_id = document.create_component(root_id, "Button".into()).unwrap();
+    let default_variant_id = document
+        .components
+        .iter()
+        .find(|component| component.id == component_id)
+        .unwrap()
+        .variants[0]
+        .id;
+    let variant_root_id = document
+        .duplicate_component_variant(component_id, default_variant_id, "Secondary".into())
+        .unwrap();
+    let component = document
+        .components
+        .iter()
+        .find(|component| component.id == component_id)
+        .unwrap();
+    assert_eq!(component.variants.len(), 2);
+    assert_eq!(component.variants[1].name, "Secondary");
+    assert_eq!(component.variants[1].source_root_id, variant_root_id);
+    let variant_root = document.active_node(variant_root_id).unwrap();
+    assert_eq!(variant_root.component_id, Some(component_id));
+    assert_ne!(variant_root.x, document.active_node(root_id).unwrap().x);
+    document.validate().unwrap();
 }
 
 #[test]
@@ -534,7 +647,13 @@ fn document_round_trip_is_lossless() {
 #[test]
 fn deleting_a_frame_removes_its_direct_children() {
     let mut document = Document::demo();
-    let frame = document.active_page().nodes[0].id;
+    let frame = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Finance · Wallet")
+        .unwrap()
+        .id;
     assert!(document.delete_node(frame));
     assert!(
         !document
@@ -548,7 +667,13 @@ fn deleting_a_frame_removes_its_direct_children() {
 #[test]
 fn deleting_a_container_removes_its_full_descendant_subtree() {
     let mut document = Document::demo();
-    let frame = document.active_page().nodes[0].id;
+    let frame = document
+        .active_page()
+        .nodes
+        .iter()
+        .find(|node| node.name == "Finance · Wallet")
+        .unwrap()
+        .id;
     let group = document
         .active_page()
         .nodes

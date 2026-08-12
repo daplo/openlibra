@@ -19,6 +19,16 @@ export type MediaAsset = {
   height: number;
   tags: string[];
 };
+export type ComponentVariant = {
+  id: EntityId;
+  name: string;
+  source_root_id: EntityId;
+};
+export type ComponentDefinition = {
+  id: EntityId;
+  name: string;
+  variants: ComponentVariant[];
+};
 export type VariableBindings = {
   width?: EntityId;
   height?: EntityId;
@@ -84,6 +94,12 @@ export type NodeSummary = {
   text_style_id?: EntityId;
   asset_id?: EntityId;
   image_fit: "cover" | "contain" | "fill";
+  component_id?: EntityId;
+  component_variant_id?: EntityId;
+  component_slot_id?: EntityId;
+  instance_root_id?: EntityId;
+  text_override: boolean;
+  asset_override: boolean;
 };
 export type DocumentReadModel = {
   schema_version: number;
@@ -94,4 +110,5 @@ export type DocumentReadModel = {
   number_variables: NumberVariable[];
   text_styles: TextStyleAsset[];
   media_assets: MediaAsset[];
+  components: ComponentDefinition[];
 };

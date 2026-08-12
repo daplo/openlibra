@@ -13,7 +13,7 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 const FLOATS_PER_RECT: usize = 24;
 
 fn parse_entity_id(value: &str) -> EntityId {
@@ -412,6 +412,64 @@ impl DocumentEngine {
             .ok_or_else(|| {
                 JsValue::from_str("At least two existing nodes are required to create a group")
             })
+    }
+
+    pub fn create_component(&mut self, root_id: String, name: String) -> String {
+        let root_id = parse_entity_id(&root_id);
+        self.mutate(|document| document.create_component(root_id, name))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn add_component_variant(
+        &mut self,
+        component_id: String,
+        root_id: String,
+        name: String,
+    ) -> String {
+        let component_id = parse_entity_id(&component_id);
+        let root_id = parse_entity_id(&root_id);
+        self.mutate(|document| document.add_component_variant(component_id, root_id, name))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn duplicate_component_variant(
+        &mut self,
+        component_id: String,
+        source_variant_id: String,
+        name: String,
+    ) -> String {
+        let component_id = parse_entity_id(&component_id);
+        let source_variant_id = parse_entity_id(&source_variant_id);
+        self.mutate(|document| {
+            document.duplicate_component_variant(component_id, source_variant_id, name)
+        })
+        .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn create_component_instance(
+        &mut self,
+        component_id: String,
+        variant_id: String,
+        parent_id: String,
+    ) -> String {
+        let component_id = parse_entity_id(&component_id);
+        let variant_id = parse_entity_id(&variant_id);
+        let parent_id = parse_entity_id(&parent_id);
+        self.mutate(|document| {
+            document.create_component_instance(
+                component_id,
+                variant_id,
+                (!parent_id.is_nil()).then_some(parent_id),
+            )
+        })
+        .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn set_instance_variant(&mut self, instance_id: String, variant_id: String) -> String {
+        let instance_id = parse_entity_id(&instance_id);
+        let variant_id = parse_entity_id(&variant_id);
+        self.mutate(|document| document.set_instance_variant(instance_id, variant_id))
+            .map_or_else(String::new, |id| id.to_string())
     }
 
     pub fn move_nodes(&mut self, node_ids_json: &str, dx: f32, dy: f32) -> Result<bool, JsValue> {
@@ -910,6 +968,25 @@ impl DocumentEngine {
         }
         let before = self.document.clone();
         let result = operation(&mut self.document);
+        let source_changed =
+            before
+                .pages
+                .iter()
+                .zip(&self.document.pages)
+                .any(|(before_page, after_page)| {
+                    before_page.nodes.iter().any(|before_node| {
+                        before_node.instance_root_id.is_none()
+                            && before_node.component_slot_id == Some(before_node.id)
+                            && after_page
+                                .nodes
+                                .iter()
+                                .find(|node| node.id == before_node.id)
+                                .is_some_and(|node| node != before_node)
+                    })
+                });
+        if source_changed {
+            self.document.sync_component_instances();
+        }
         if before != self.document {
             if self.transaction_start.is_none() {
                 self.push_undo(HistoryEntry::Document(before));
