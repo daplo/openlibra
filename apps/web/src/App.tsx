@@ -17,12 +17,16 @@ import {
   ChevronRight,
   Component,
   FileArchive,
+  FilePlus2,
+  FolderClock,
+  FolderOpen,
   Frame,
   Hand,
   MessageCircle,
   Moon,
   MousePointer2,
   Redo2,
+  Save,
   Square,
   Sun,
   Type,
@@ -45,6 +49,7 @@ import { Properties } from "./components/PropertiesPanel";
 import { LibraryView } from "./components/LibraryView";
 import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
 import { figmaFileToImport } from "./editor/figma-import";
+import { exportFramePng } from "./editor/export-frame";
 import {
   EditorInputController,
   type EditorInputHandlers,
@@ -56,6 +61,24 @@ import {
   preferredArtboardId,
   rgbaToHex,
 } from "./editor/model-utils";
+import {
+  createProjectPreview,
+  getLastDocumentId,
+  getRecentDocument,
+  listArchivedDocuments,
+  listRecoverySnapshots,
+  listRecentDocuments,
+  removeRecentDocument,
+  storeRecentDocument,
+  storeRecoverySnapshot,
+  setLastDocumentId,
+  type RecentDocument,
+} from "./editor/recent-documents";
+import {
+  OPEN_LIBRA_PROJECT_MIME,
+  parseProject,
+  serializeProject,
+} from "./editor/project-format";
 import type {
   DocumentReadModel,
   Mode,
@@ -88,6 +111,8 @@ export function App() {
   const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
   const nodesByIdRef = useRef<Map<string, NodeSummary>>(new Map());
   const fileMenuRef = useRef<HTMLDivElement>(null);
+  const documentSwitcherRef = useRef<HTMLDivElement>(null);
+  const documentFileInputRef = useRef<HTMLInputElement>(null);
   const figmaFileInputRef = useRef<HTMLInputElement>(null);
   const editMenuRef = useRef<HTMLDivElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
@@ -96,11 +121,27 @@ export function App() {
   const [rightPanelWidth, setRightPanelWidth] = useState(250);
   const [libraryComponentId, setLibraryComponentId] = useState<string>();
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [librarySection, setLibrarySection] = useState<
+    "projects" | "components"
+  >("projects");
+  const [recentDocuments, setRecentDocuments] = useState<RecentDocument[]>([]);
+  const [archivedDocuments, setArchivedDocuments] = useState<RecentDocument[]>(
+    [],
+  );
+  const [currentRecentDocumentId, setCurrentRecentDocumentId] =
+    useState<string>();
   const [canvasContextMenu, setCanvasContextMenu] = useState<{
     x: number;
     y: number;
     sourceRootId: string;
   }>();
+  const [marqueeRect, setMarqueeRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }>();
+  const [snapGuides, setSnapGuides] = useState<{ x?: number; y?: number }>({});
   const [isolationRootId, setIsolationRootId] = useState<string>();
   const isolationRootIdRef = useRef<string | undefined>(undefined);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>("select");
@@ -113,6 +154,13 @@ export function App() {
   });
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
+  const [documentName, setDocumentName] = useState("Engine study.libra");
+  const [isDocumentDirty, setIsDocumentDirty] = useState(false);
+  const savedDocumentJsonRef = useRef<string | undefined>(undefined);
+  const lastRecoverySnapshotAtRef = useRef(new Map<string, number>());
+  const [autosaveState, setAutosaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   const [editingTextId, setEditingTextId] = useState<string>();
   const editingTextInitialValueRef = useRef("");
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
@@ -134,6 +182,7 @@ export function App() {
     canRedo: false,
   });
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [documentSwitcherOpen, setDocumentSwitcherOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [rulersVisible, setRulersVisible] = useState(
@@ -228,6 +277,27 @@ export function App() {
     };
   }, [canvasContextMenu]);
 
+  useEffect(() => {
+    void refreshRecentDocuments();
+  }, []);
+
+  useEffect(() => {
+    if (!isDocumentDirty || !engineRef.current) return;
+    const timeout = window.setTimeout(() => void autosaveDocument(), 800);
+    return () => window.clearTimeout(timeout);
+    // documentModel changes after every committed engine mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentModel, isDocumentDirty, documentName, currentRecentDocumentId]);
+
+  useEffect(() => {
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDocumentDirty) return;
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [isDocumentDirty]);
+
   function refreshDocument(selection = selectedNodeIdsRef.current) {
     const engine = engineRef.current;
     if (!engine) return;
@@ -244,6 +314,10 @@ export function App() {
       setSelectedNodeIds(validSelection);
     }
     setDocumentModel(model);
+    if (savedDocumentJsonRef.current !== undefined)
+      setIsDocumentDirty(
+        engine.document_json() !== savedDocumentJsonRef.current,
+      );
     setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
     const selected = model.nodes.filter((node) =>
       validSelection.includes(node.id),
@@ -326,6 +400,358 @@ export function App() {
         : undefined,
     );
     setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
+    setIsDocumentDirty(true);
+  }
+
+  function replaceDocumentEngine(
+    engine: DocumentEngine,
+    name: string,
+    recentDocumentId?: string,
+  ) {
+    flushPendingSceneRefresh();
+    const previous = engineRef.current;
+    engineRef.current = engine;
+    savedDocumentJsonRef.current = engine.document_json();
+    setDocumentName(name);
+    setCurrentRecentDocumentId(recentDocumentId);
+    setLastDocumentId(recentDocumentId);
+    setAutosaveState("saved");
+    setIsDocumentDirty(false);
+    setIsolationRootId(undefined);
+    setEditingTextId(undefined);
+    setLibraryOpen(false);
+    setLibraryComponentId(undefined);
+    copiedNodeIdsRef.current = [];
+    setError(undefined);
+    refreshDocument([]);
+    rendererRef.current?.resetView();
+    previous?.free();
+  }
+
+  async function preserveCurrentDocument() {
+    const engine = engineRef.current;
+    if (!engine) return true;
+    const id = currentRecentDocumentId ?? crypto.randomUUID();
+    const stored = await rememberDocument(engine, documentName, id);
+    return (
+      stored ||
+      window.confirm(
+        "This document could not be stored locally. Continue and discard it?",
+      )
+    );
+  }
+
+  async function newDocument() {
+    setFileMenuOpen(false);
+    setDocumentSwitcherOpen(false);
+    if (!(await preserveCurrentDocument())) return;
+    const id = crypto.randomUUID();
+    const name = nextUntitledDocumentName();
+    const engine = DocumentEngine.new_blank();
+    replaceDocumentEngine(engine, name, id);
+    void rememberDocument(engine, name, id);
+  }
+
+  async function requestOpenDocument() {
+    setFileMenuOpen(false);
+    setDocumentSwitcherOpen(false);
+    if (!(await preserveCurrentDocument())) return;
+    documentFileInputRef.current?.click();
+  }
+
+  async function openDocument(file: File) {
+    if (file.size > 250 * 1024 * 1024) {
+      setError("Open Libra documents must be 250 MB or smaller.");
+      return;
+    }
+    try {
+      const engine = DocumentEngine.load_json(parseProject(await file.text()));
+      const recentDocumentId = crypto.randomUUID();
+      replaceDocumentEngine(engine, file.name, recentDocumentId);
+      void rememberDocument(engine, file.name, recentDocumentId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : `Could not open document: ${String(cause)}`,
+      );
+    }
+  }
+
+  function saveDocument() {
+    const engine = engineRef.current;
+    if (!engine) return;
+    setFileMenuOpen(false);
+    const json = engine.document_json();
+    const blob = new Blob([serializeProject(json)], {
+      type: OPEN_LIBRA_PROJECT_MIME,
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = /\.(libra|olibra|json)$/i.test(documentName)
+      ? documentName
+      : `${documentName}.libra`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    savedDocumentJsonRef.current = json;
+    setIsDocumentDirty(false);
+    void rememberDocument(
+      engine,
+      documentName,
+      currentRecentDocumentId ?? crypto.randomUUID(),
+    );
+  }
+
+  async function refreshRecentDocuments() {
+    try {
+      const [recent, archived] = await Promise.all([
+        listRecentDocuments(),
+        listArchivedDocuments(),
+      ]);
+      setRecentDocuments(recent);
+      setArchivedDocuments(archived);
+    } catch {
+      // IndexedDB may be unavailable in hardened/private browser contexts.
+      setRecentDocuments([]);
+      setArchivedDocuments([]);
+    }
+  }
+
+  async function rememberDocument(
+    engine: DocumentEngine,
+    name: string,
+    id: string,
+  ) {
+    const json = engine.document_json();
+    const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+    try {
+      const existing = await getRecentDocument(id);
+      if (engineRef.current !== engine) return false;
+      await storeRecentDocument({
+        id,
+        name,
+        json,
+        updatedAt: Date.now(),
+        pageCount: model.pages.length,
+        objectCount: model.nodes.length,
+        preview:
+          !existing || existing.coverPageId === model.active_page_id
+            ? createProjectPreview(model)
+            : existing.preview,
+        pages: model.pages,
+        coverPageId: existing?.coverPageId ?? model.active_page_id,
+        archivedAt: existing?.archivedAt,
+      });
+      if (engineRef.current === engine) {
+        setCurrentRecentDocumentId(id);
+        setLastDocumentId(id);
+      }
+      await refreshRecentDocuments();
+      return true;
+    } catch {
+      setError(
+        "The document is available, but its recent-project preview could not be stored.",
+      );
+      return false;
+    }
+  }
+
+  async function autosaveDocument() {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const id = currentRecentDocumentId ?? crypto.randomUUID();
+    const name = documentName;
+    const snapshotJson = engine.document_json();
+    setAutosaveState("saving");
+    const stored = await rememberDocument(engine, name, id);
+    if (engineRef.current !== engine) return;
+    if (!stored) {
+      setAutosaveState("error");
+      return;
+    }
+    const now = Date.now();
+    const lastSnapshotAt = lastRecoverySnapshotAtRef.current.get(id) ?? 0;
+    if (now - lastSnapshotAt >= 5 * 60 * 1000) {
+      try {
+        await storeRecoverySnapshot({
+          id: crypto.randomUUID(),
+          documentId: id,
+          name,
+          json: snapshotJson,
+          createdAt: now,
+        });
+        lastRecoverySnapshotAtRef.current.set(id, now);
+      } catch {
+        // The primary autosave succeeded, so snapshot failure is non-fatal.
+      }
+    }
+    if (engineRef.current !== engine) return;
+    setAutosaveState("saved");
+  }
+
+  function nextUntitledDocumentName() {
+    const names = new Set([
+      documentName,
+      ...recentDocuments.map((document) => document.name),
+    ]);
+    let number = 1;
+    while (
+      names.has(number === 1 ? "Untitled.libra" : `Untitled ${number}.libra`)
+    )
+      number += 1;
+    return number === 1 ? "Untitled.libra" : `Untitled ${number}.libra`;
+  }
+
+  async function openRecentDocument(document: RecentDocument) {
+    setDocumentSwitcherOpen(false);
+    if (document.id === currentRecentDocumentId) {
+      setLibraryOpen(false);
+      return;
+    }
+    if (!(await preserveCurrentDocument())) return;
+    try {
+      const engine = DocumentEngine.load_json(document.json);
+      replaceDocumentEngine(engine, document.name, document.id);
+      void touchRecentDocument(document);
+      setLibraryOpen(false);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : `Could not open recent document: ${String(cause)}`,
+      );
+    }
+  }
+
+  async function touchRecentDocument(document: RecentDocument) {
+    try {
+      await storeRecentDocument({ ...document, updatedAt: Date.now() });
+      await refreshRecentDocuments();
+    } catch {
+      // Opening the stored project succeeded; a recency update is optional.
+    }
+  }
+
+  async function removeRecentProject(id: string) {
+    try {
+      await removeRecentDocument(id);
+      if (currentRecentDocumentId === id) {
+        setCurrentRecentDocumentId(undefined);
+        setLastDocumentId(undefined);
+      }
+      await refreshRecentDocuments();
+    } catch {
+      setError("Could not remove the project from recent documents.");
+    }
+  }
+
+  async function renameRecentProject(document: RecentDocument) {
+    const name = window.prompt("Project name", document.name)?.trim();
+    if (!name || name === document.name) return;
+    const renamed = { ...document, name, updatedAt: Date.now() };
+    await storeRecentDocument(renamed);
+    if (currentRecentDocumentId === document.id) setDocumentName(name);
+    await refreshRecentDocuments();
+  }
+
+  async function duplicateRecentProject(document: RecentDocument) {
+    const stem = document.name.replace(/\.(libra|olibra|json)$/i, "");
+    const copy: RecentDocument = {
+      ...document,
+      id: crypto.randomUUID(),
+      name: `${stem} copy.libra`,
+      updatedAt: Date.now(),
+      archivedAt: undefined,
+    };
+    await storeRecentDocument(copy);
+    await refreshRecentDocuments();
+  }
+
+  async function archiveRecentProject(document: RecentDocument) {
+    if (currentRecentDocumentId === document.id) {
+      const currentEngine = engineRef.current;
+      if (
+        currentEngine &&
+        !(await rememberDocument(currentEngine, documentName, document.id))
+      )
+        return;
+      const currentDocument =
+        (await getRecentDocument(document.id)) ?? document;
+      await storeRecentDocument({
+        ...currentDocument,
+        archivedAt: Date.now(),
+      });
+      const id = crypto.randomUUID();
+      const name = nextUntitledDocumentName();
+      const engine = DocumentEngine.new_blank();
+      replaceDocumentEngine(engine, name, id);
+      await rememberDocument(engine, name, id);
+    } else {
+      await storeRecentDocument({ ...document, archivedAt: Date.now() });
+    }
+    await refreshRecentDocuments();
+  }
+
+  async function restoreRecentProject(document: RecentDocument) {
+    await storeRecentDocument({
+      ...document,
+      archivedAt: undefined,
+      updatedAt: Date.now(),
+    });
+    await refreshRecentDocuments();
+  }
+
+  async function setProjectCover(document: RecentDocument, pageId: string) {
+    let engine: DocumentEngine | undefined;
+    try {
+      engine = DocumentEngine.load_json(document.json);
+      if (!engine.set_active_page(pageId)) return;
+      const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+      await storeRecentDocument({
+        ...document,
+        coverPageId: pageId,
+        preview: createProjectPreview(model),
+      });
+      await refreshRecentDocuments();
+    } catch {
+      setError("Could not generate the selected project cover.");
+    } finally {
+      engine?.free();
+    }
+  }
+
+  async function recoverRecentProject(document: RecentDocument) {
+    try {
+      const snapshots = await listRecoverySnapshots(document.id);
+      if (snapshots.length === 0) {
+        setError("No recovery snapshots are available for this project yet.");
+        return;
+      }
+      const choices = snapshots
+        .map(
+          (snapshot, index) =>
+            `${index + 1}. ${new Date(snapshot.createdAt).toLocaleString()}`,
+        )
+        .join("\n");
+      const choice = window.prompt(
+        `Choose a recovery snapshot (1-${snapshots.length}):\n${choices}`,
+        "1",
+      );
+      if (!choice) return;
+      const snapshot = snapshots[Number.parseInt(choice, 10) - 1];
+      if (!snapshot) {
+        setError("That recovery snapshot does not exist.");
+        return;
+      }
+      if (!(await preserveCurrentDocument())) return;
+      const engine = DocumentEngine.load_json(snapshot.json);
+      replaceDocumentEngine(engine, document.name, document.id);
+      setLibraryOpen(false);
+      setIsDocumentDirty(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   function flushPendingSceneRefresh() {
@@ -335,6 +761,7 @@ export function App() {
   }
 
   function applySelection(ids: string[]) {
+    const nodesById = nodesByIdRef.current;
     const validSelection = ids.filter((id) => nodesById.has(id));
     selectedNodeIdsRef.current = validSelection;
     setSelectedNodeIds(validSelection);
@@ -401,6 +828,26 @@ export function App() {
     rendererRef.current?.resetView();
   }
 
+  function renamePage(id: string, name: string) {
+    const trimmedName = name.trim();
+    if (!trimmedName || !engineRef.current?.rename_page(id, trimmedName))
+      return;
+    refreshDocument();
+  }
+
+  function deletePage(id: string) {
+    if (!engineRef.current?.delete_page(id)) {
+      setError(
+        documentModel.pages.length <= 1
+          ? "A document must contain at least one page."
+          : "Pages containing component masters cannot be deleted.",
+      );
+      return;
+    }
+    refreshDocument([]);
+    rendererRef.current?.resetView();
+  }
+
   function deleteSelected() {
     if (!selectionCanBeEdited()) return;
     const engine = engineRef.current;
@@ -423,6 +870,15 @@ export function App() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
+  }
+
+  function ungroupSelected(node: NodeSummary) {
+    if (!selectionCanBeEdited()) return;
+    if (!engineRef.current?.ungroup_nodes(node.id)) return;
+    const childIds = documentModel.nodes
+      .filter((candidate) => candidate.parent_id === node.id)
+      .map((candidate) => candidate.id);
+    refreshDocument(childIds);
   }
 
   function copySelection() {
@@ -467,6 +923,38 @@ export function App() {
   function changeInstanceVariant(node: NodeSummary, variantId: string) {
     const id = engineRef.current?.set_instance_variant(node.id, variantId);
     if (id) refreshDocument([id]);
+  }
+
+  function resetComponentInstance(node: NodeSummary) {
+    const id = engineRef.current?.reset_component_instance(node.id);
+    if (id) refreshDocument([id]);
+  }
+
+  function detachComponentInstance(node: NodeSummary) {
+    if (engineRef.current?.detach_component_instance(node.id))
+      refreshDocument([node.id]);
+  }
+
+  function swapComponentInstance(node: NodeSummary, componentId: string) {
+    const variantId = documentModel.components.find(
+      (component) => component.id === componentId,
+    )?.variants[0]?.id;
+    if (!variantId) return;
+    const id = engineRef.current?.swap_component_instance(
+      node.id,
+      componentId,
+      variantId,
+    );
+    if (id) refreshDocument([id]);
+  }
+
+  function goToMainComponent(node: NodeSummary) {
+    const sourceRootId = documentModel.components
+      .find((component) => component.id === node.component_id)
+      ?.variants.find(
+        (variant) => variant.id === node.component_variant_id,
+      )?.source_root_id;
+    if (sourceRootId) editMainComponent(sourceRootId);
   }
 
   function addSelectedComponentVariant(componentId: string) {
@@ -525,11 +1013,88 @@ export function App() {
     if (!selectionCanBeEdited()) return;
     const selection = selectedNodeIdsRef.current;
     if (!engineRef.current || selection.length === 0) return;
-    if (engineRef.current.move_nodes(JSON.stringify(selection), dx, dy)) {
-      patchMovedNodesInModel(selection, dx, dy);
+    const snapped = snapMove(selection, dx, dy);
+    if (
+      engineRef.current.move_nodes(
+        JSON.stringify(selection),
+        snapped.dx,
+        snapped.dy,
+      )
+    ) {
+      patchMovedNodesInModel(selection, snapped.dx, snapped.dy);
       refreshLiveSelectionBounds();
       refreshVisibleScene();
     }
+  }
+
+  function snapMove(rootIds: string[], dx: number, dy: number) {
+    const model = documentModelRef.current;
+    const renderer = rendererRef.current;
+    if (!model || !renderer) return { dx, dy };
+    const movingIds = new Set(rootIds);
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const node of model.nodes) {
+        if (
+          node.parent_id &&
+          movingIds.has(node.parent_id) &&
+          !movingIds.has(node.id)
+        ) {
+          movingIds.add(node.id);
+          expanded = true;
+        }
+      }
+    }
+    const roots = rootIds.flatMap((id) => {
+      const node = nodesByIdRef.current.get(id);
+      return node ? [node] : [];
+    });
+    if (roots.length === 0) return { dx, dy };
+    const bounds = {
+      left: Math.min(...roots.map((node) => node.x)),
+      top: Math.min(...roots.map((node) => node.y)),
+      right: Math.max(...roots.map((node) => node.x + node.width)),
+      bottom: Math.max(...roots.map((node) => node.y + node.height)),
+    };
+    const movingX = [
+      bounds.left + dx,
+      (bounds.left + bounds.right) / 2 + dx,
+      bounds.right + dx,
+    ];
+    const movingY = [
+      bounds.top + dy,
+      (bounds.top + bounds.bottom) / 2 + dy,
+      bounds.bottom + dy,
+    ];
+    const targets = model.nodes.filter(
+      (node) => !movingIds.has(node.id) && !node.locked,
+    );
+    const targetX = targets.flatMap((node) => [
+      node.x,
+      node.x + node.width / 2,
+      node.x + node.width,
+    ]);
+    const targetY = targets.flatMap((node) => [
+      node.y,
+      node.y + node.height / 2,
+      node.y + node.height,
+    ]);
+    const threshold = 6 / renderer.getViewState().zoom;
+    const xSnap = nearestSnap(movingX, targetX, threshold);
+    const ySnap = nearestSnap(movingY, targetY, threshold);
+    const point = renderer.clientPointFromWorld(
+      xSnap?.target ?? 0,
+      ySnap?.target ?? 0,
+    );
+    setSnapGuides({
+      x: xSnap ? point.x : undefined,
+      y: ySnap ? point.y : undefined,
+    });
+    return {
+      dx: dx + (xSnap?.offset ?? 0),
+      dy: dy + (ySnap?.offset ?? 0),
+    };
   }
 
   function patchMovedNodesInModel(rootIds: string[], dx: number, dy: number) {
@@ -1202,6 +1767,19 @@ export function App() {
       refreshDocument(selection);
   }
 
+  async function exportSelectedFrame(node: NodeSummary, scale: number) {
+    try {
+      await exportFramePng(
+        node,
+        documentModel.nodes,
+        documentModel.media_assets,
+        scale,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   function selectCanvasPoint(
     clientX: number,
     clientY: number,
@@ -1243,6 +1821,9 @@ export function App() {
       zoomToFit: () => rendererRef.current?.zoomToFit(),
       toggleRulers: () => setRulersVisible((visible) => !visible),
       toggleGrid: () => setGridVisible((visible) => !visible),
+      newDocument,
+      openDocument: requestOpenDocument,
+      saveDocument,
       deleteSelection: deleteSelected,
       undo,
       redo,
@@ -1276,7 +1857,6 @@ export function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let disposed = false;
-    let localEngine: DocumentEngine | undefined;
     let localRenderer: OpenLibraRenderer | undefined;
     let localInputController: EditorInputController | undefined;
 
@@ -1289,9 +1869,26 @@ export function App() {
       await init();
       if (disposed) return;
       const startedAt = performance.now();
-      const engine = new DocumentEngine();
-      localEngine = engine;
+      const lastDocumentId = getLastDocumentId();
+      const storedDocument = lastDocumentId
+        ? await getRecentDocument(lastDocumentId).catch(() => undefined)
+        : undefined;
+      let engine: DocumentEngine;
+      try {
+        engine = storedDocument
+          ? DocumentEngine.load_json(storedDocument.json)
+          : new DocumentEngine();
+      } catch {
+        engine = new DocumentEngine();
+      }
       engineRef.current = engine;
+      savedDocumentJsonRef.current = engine.document_json();
+      const initialDocumentId = storedDocument?.id ?? crypto.randomUUID();
+      const initialDocumentName = storedDocument?.name ?? "Engine study.libra";
+      setCurrentRecentDocumentId(initialDocumentId);
+      setLastDocumentId(initialDocumentId);
+      setDocumentName(initialDocumentName);
+      setAutosaveState("saved");
       setDocumentModel(
         JSON.parse(engine.read_model_json()) as DocumentReadModel,
       );
@@ -1309,7 +1906,6 @@ export function App() {
       if (disposed) {
         renderer.dispose();
         engine.free();
-        localEngine = undefined;
         return;
       }
       rendererRef.current = renderer;
@@ -1317,33 +1913,72 @@ export function App() {
       renderer.setTheme(themeRef.current);
       renderer.setInteractionHandlers({
         hitTest: (x, y) => {
-          const id = engine.hit_test(x, y);
+          const id = engineRef.current?.hit_test(x, y) ?? "";
           return id || undefined;
         },
         select: () => {},
         moveSelection: (dx, dy) => moveSelection(dx, dy),
         resizeSelection: (handle, dx, dy) => resizeSelection(handle, dx, dy),
         beginEdit: () => {
-          engine.begin_geometry_transaction(
+          engineRef.current?.begin_geometry_transaction(
             JSON.stringify(selectedNodeIdsRef.current),
           );
         },
         endEdit: () => {
+          setSnapGuides({});
           flushPendingSceneRefresh();
           const isBenchmark =
             (documentModelRef.current?.nodes.length ?? 0) >= 1_000;
           if (!isBenchmark) {
-            engine.reparent_nodes_to_artboards(
+            engineRef.current?.reparent_nodes_to_artboards(
               JSON.stringify(selectedNodeIdsRef.current),
             );
           }
-          engine.end_transaction();
+          engineRef.current?.end_transaction();
           if (isBenchmark) {
             patchSelectedNodesFromEngine();
             scheduleSceneRefresh();
           } else {
             refreshDocument();
           }
+        },
+        updateMarquee: (start, end) => {
+          setMarqueeRect({
+            left: Math.min(start.x, end.x),
+            top: Math.min(start.y, end.y),
+            width: Math.abs(end.x - start.x),
+            height: Math.abs(end.y - start.y),
+          });
+        },
+        endMarquee: (bounds, additive) => {
+          setMarqueeRect(undefined);
+          const model = documentModelRef.current;
+          if (!model) return;
+          const enclosed = model.nodes.filter(
+            (node) =>
+              !node.locked &&
+              node.x >= bounds.left &&
+              node.y >= bounds.top &&
+              node.x + node.width <= bounds.right &&
+              node.y + node.height <= bounds.bottom,
+          );
+          const enclosedIds = new Set(enclosed.map((node) => node.id));
+          const roots = enclosed.filter((node) => {
+            let parentId = node.parent_id;
+            while (parentId) {
+              if (enclosedIds.has(parentId)) return false;
+              parentId = model.nodes.find(
+                (item) => item.id === parentId,
+              )?.parent_id;
+            }
+            return true;
+          });
+          const next = roots.map((node) => node.id);
+          applySelection(
+            additive
+              ? [...new Set([...selectedNodeIdsRef.current, ...next])]
+              : next,
+          );
         },
       });
       const inputController = new EditorInputController(
@@ -1354,6 +1989,8 @@ export function App() {
       localInputController = inputController;
       inputControllerRef.current = inputController;
       renderer.start();
+      if (!storedDocument)
+        void rememberDocument(engine, initialDocumentName, initialDocumentId);
     }
 
     start().catch((cause: unknown) =>
@@ -1363,12 +2000,12 @@ export function App() {
       disposed = true;
       localInputController?.dispose();
       localRenderer?.dispose();
-      localEngine?.free();
+      engineRef.current?.free();
       if (rendererRef.current === localRenderer)
         rendererRef.current = undefined;
       if (inputControllerRef.current === localInputController)
         inputControllerRef.current = undefined;
-      if (engineRef.current === localEngine) engineRef.current = undefined;
+      engineRef.current = undefined;
     };
     // Renderer ownership is intentionally tied to the canvas mount lifecycle.
     // Interaction callbacks read mutable engine and selection refs.
@@ -1393,6 +2030,21 @@ export function App() {
     return () =>
       document.removeEventListener("pointerdown", closeFileMenu, true);
   }, [fileMenuOpen]);
+
+  useEffect(() => {
+    if (!documentSwitcherOpen) return;
+    function closeDocumentSwitcher(event: PointerEvent) {
+      if (
+        event.target instanceof Node &&
+        documentSwitcherRef.current?.contains(event.target)
+      )
+        return;
+      setDocumentSwitcherOpen(false);
+    }
+    document.addEventListener("pointerdown", closeDocumentSwitcher, true);
+    return () =>
+      document.removeEventListener("pointerdown", closeDocumentSwitcher, true);
+  }, [documentSwitcherOpen]);
 
   useEffect(() => {
     if (!editMenuOpen) return;
@@ -1463,7 +2115,86 @@ export function App() {
         <div className="brand">
           <span className="mark">OL</span>
           <strong>Open Libra</strong>
-          <span className="file-name">Engine study</span>
+          <div className="document-switcher" ref={documentSwitcherRef}>
+            <button
+              className={`file-name ${documentSwitcherOpen ? "active" : ""}`}
+              aria-haspopup="menu"
+              aria-expanded={documentSwitcherOpen}
+              onClick={() => {
+                setFileMenuOpen(false);
+                setDocumentSwitcherOpen((open) => !open);
+              }}
+            >
+              {documentName}
+              {isDocumentDirty ? " •" : ""}
+              <span
+                className={`autosave-indicator ${autosaveState}`}
+                title={autosaveLabel(autosaveState, isDocumentDirty)}
+              />
+              <ChevronRight aria-hidden="true" />
+            </button>
+            {documentSwitcherOpen && (
+              <div className="document-switcher-menu" role="menu">
+                <div className="document-switcher-heading">Documents</div>
+                <button
+                  className="document-switcher-item current"
+                  role="menuitem"
+                  onClick={() => setDocumentSwitcherOpen(false)}
+                >
+                  <Check aria-hidden="true" />
+                  <span>
+                    <strong>{documentName}</strong>
+                    <small>
+                      {autosaveLabel(autosaveState, isDocumentDirty)}
+                    </small>
+                  </span>
+                </button>
+                {recentDocuments
+                  .filter((document) => document.id !== currentRecentDocumentId)
+                  .slice(0, 6)
+                  .map((document) => (
+                    <button
+                      className="document-switcher-item"
+                      role="menuitem"
+                      key={document.id}
+                      onClick={() => void openRecentDocument(document)}
+                    >
+                      <span className="document-switcher-dot" />
+                      <span>
+                        <strong>{document.name}</strong>
+                        <small>
+                          {document.pageCount} page
+                          {document.pageCount === 1 ? "" : "s"} ·{" "}
+                          {document.objectCount.toLocaleString()} objects
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                <div className="document-switcher-actions">
+                  <button role="menuitem" onClick={() => void newDocument()}>
+                    <FilePlus2 aria-hidden="true" /> New
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => void requestOpenDocument()}
+                  >
+                    <FolderOpen aria-hidden="true" /> Open…
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setDocumentSwitcherOpen(false);
+                      setLibraryComponentId(undefined);
+                      setLibrarySection("projects");
+                      setLibraryOpen(true);
+                    }}
+                  >
+                    <FolderClock aria-hidden="true" /> View all
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <div className="menu-anchor" ref={fileMenuRef}>
             <button
               className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
@@ -1479,6 +2210,35 @@ export function App() {
             </button>
             {fileMenuOpen && (
               <div className="edit-menu file-menu" role="menu">
+                <button role="menuitem" onClick={newDocument}>
+                  <FilePlus2 />
+                  <span>New document</span>
+                  <kbd>⌘N</kbd>
+                </button>
+                <button role="menuitem" onClick={requestOpenDocument}>
+                  <FolderOpen />
+                  <span>Open…</span>
+                  <kbd>⌘O</kbd>
+                </button>
+                <button role="menuitem" onClick={saveDocument}>
+                  <Save />
+                  <span>Save</span>
+                  <kbd>⌘S</kbd>
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    setLibraryComponentId(undefined);
+                    setLibrarySection("projects");
+                    setLibraryOpen(true);
+                  }}
+                >
+                  <FolderClock />
+                  <span>Recent projects…</span>
+                  <kbd />
+                </button>
+                <div className="menu-section-label">Import</div>
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -1492,6 +2252,18 @@ export function App() {
                 </button>
               </div>
             )}
+            <input
+              ref={documentFileInputRef}
+              className="hidden-file-input"
+              data-testid="open-document-input"
+              type="file"
+              accept=".libra,.olibra,.json,application/json,application/vnd.openlibra.project+json,application/vnd.openlibra+json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void openDocument(file);
+                event.currentTarget.value = "";
+              }}
+            />
             <input
               ref={figmaFileInputRef}
               className="hidden-file-input"
@@ -1612,6 +2384,7 @@ export function App() {
             className={`library-trigger ${libraryOpen ? "active" : ""}`}
             onClick={() => {
               setLibraryComponentId(undefined);
+              setLibrarySection("projects");
               setLibraryOpen((open) => !open);
             }}
           >
@@ -1635,7 +2408,25 @@ export function App() {
         <LibraryView
           model={documentModel}
           focusedComponentId={libraryComponentId}
+          section={librarySection}
+          recentDocuments={recentDocuments}
+          archivedDocuments={archivedDocuments}
+          currentRecentDocumentId={currentRecentDocumentId}
           onBack={() => setLibraryOpen(false)}
+          onSectionChange={setLibrarySection}
+          onNewDocument={newDocument}
+          onOpenRecent={openRecentDocument}
+          onRemoveRecent={(id) => void removeRecentProject(id)}
+          onRenameRecent={(document) => void renameRecentProject(document)}
+          onDuplicateRecent={(document) =>
+            void duplicateRecentProject(document)
+          }
+          onArchiveRecent={(document) => void archiveRecentProject(document)}
+          onRestoreRecent={(document) => void restoreRecentProject(document)}
+          onSetProjectCover={(document, pageId) =>
+            void setProjectCover(document, pageId)
+          }
+          onRecoverRecent={(document) => void recoverRecentProject(document)}
           onInsert={createComponentInstance}
           onEditMain={editMainComponent}
           onAddVariant={duplicateComponentVariant}
@@ -1660,6 +2451,8 @@ export function App() {
             onSelectNode={selectNode}
             onAddPage={addPage}
             onSelectPage={selectPage}
+            onRenamePage={renamePage}
+            onDeletePage={deletePage}
             onNavigateNode={(node) => rendererRef.current?.centerOnBounds(node)}
             onReorderNode={(draggedId, targetId, before) => {
               if (
@@ -1709,6 +2502,7 @@ export function App() {
             onAddSelectedComponentVariant={addSelectedComponentVariant}
             onOpenComponentLibrary={(componentId) => {
               setLibraryComponentId(componentId);
+              setLibrarySection("components");
               setLibraryOpen(true);
             }}
             componentWorkspace={
@@ -1827,6 +2621,21 @@ export function App() {
               rendererRef={rendererRef}
               selected={selectedNodes}
             />
+            {marqueeRect && (
+              <div className="selection-marquee" style={marqueeRect} />
+            )}
+            {snapGuides.x !== undefined && (
+              <div
+                className="snap-guide vertical"
+                style={{ left: snapGuides.x }}
+              />
+            )}
+            {snapGuides.y !== undefined && (
+              <div
+                className="snap-guide horizontal"
+                style={{ top: snapGuides.y }}
+              />
+            )}
             {isolationRoot && (
               <div
                 className="component-isolation-bar"
@@ -1984,8 +2793,16 @@ export function App() {
                 onAlign={alignSelected}
                 onDelete={deleteSelected}
                 onGroup={groupSelected}
+                onUngroup={ungroupSelected}
+                onExportFrame={(node, scale) =>
+                  void exportSelectedFrame(node, scale)
+                }
                 onCreateComponent={createComponent}
                 onInstanceVariantChange={changeInstanceVariant}
+                onInstanceReset={resetComponentInstance}
+                onInstanceDetach={detachComponentInstance}
+                onInstanceSwap={swapComponentInstance}
+                onGoToMainComponent={goToMainComponent}
                 onStyleChange={updateNodeStyle}
                 onBoundsChange={updateNodeBounds}
                 onOpacityChange={updateNodeOpacity}
@@ -2003,7 +2820,13 @@ export function App() {
                 onArtboardGuideChange={updateArtboardGuide}
               />
             ))}
-          {mode === "developer" && <Inspect />}
+          {mode === "developer" && (
+            <Inspect
+              selected={selectedNodes}
+              numberVariables={documentModel.number_variables}
+              textStyles={documentModel.text_styles}
+            />
+          )}
           {mode === "review" && <Review />}
         </aside>
       </section>
@@ -2230,4 +3053,30 @@ function componentSourceRootForNode(
     current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
   }
   return undefined;
+}
+
+function autosaveLabel(
+  state: "idle" | "saving" | "saved" | "error",
+  dirty: boolean,
+) {
+  if (state === "saving") return "Saving locally…";
+  if (state === "error") return "Local save failed";
+  if (state === "saved" && dirty) return "Saved locally · file not downloaded";
+  if (state === "saved") return "Saved locally";
+  return "Current";
+}
+
+function nearestSnap(moving: number[], targets: number[], threshold: number) {
+  let best: { offset: number; target: number } | undefined;
+  for (const source of moving) {
+    for (const target of targets) {
+      const offset = target - source;
+      if (
+        Math.abs(offset) <= threshold &&
+        (!best || Math.abs(offset) < Math.abs(best.offset))
+      )
+        best = { offset, target };
+    }
+  }
+  return best;
 }

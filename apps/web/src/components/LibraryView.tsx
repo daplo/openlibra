@@ -1,22 +1,66 @@
-import { ArrowLeft, Component, CopyPlus, Pencil, Plus } from "lucide-react";
+import {
+  Archive,
+  ArrowLeft,
+  Component,
+  Copy,
+  CopyPlus,
+  FilePlus2,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
+import { useState } from "react";
 import type {
   ComponentDefinition,
   DocumentReadModel,
   NodeSummary,
 } from "../editor/types";
 import { rgbaToHex } from "../editor/model-utils";
+import type {
+  ProjectPreview,
+  RecentDocument,
+} from "../editor/recent-documents";
 
 export function LibraryView({
   model,
   focusedComponentId,
+  section,
+  recentDocuments,
+  archivedDocuments,
+  currentRecentDocumentId,
   onBack,
+  onSectionChange,
+  onNewDocument,
+  onOpenRecent,
+  onRemoveRecent,
+  onRenameRecent,
+  onDuplicateRecent,
+  onArchiveRecent,
+  onRestoreRecent,
+  onSetProjectCover,
+  onRecoverRecent,
   onInsert,
   onEditMain,
   onAddVariant,
 }: {
   model: DocumentReadModel;
   focusedComponentId?: string;
+  section: "projects" | "components";
+  recentDocuments: RecentDocument[];
+  archivedDocuments: RecentDocument[];
+  currentRecentDocumentId?: string;
   onBack: () => void;
+  onSectionChange: (section: "projects" | "components") => void;
+  onNewDocument: () => void;
+  onOpenRecent: (document: RecentDocument) => void;
+  onRemoveRecent: (id: string) => void;
+  onRenameRecent: (document: RecentDocument) => void;
+  onDuplicateRecent: (document: RecentDocument) => void;
+  onArchiveRecent: (document: RecentDocument) => void;
+  onRestoreRecent: (document: RecentDocument) => void;
+  onSetProjectCover: (document: RecentDocument, pageId: string) => void;
+  onRecoverRecent: (document: RecentDocument) => void;
   onInsert: (componentId: string, variantId: string) => void;
   onEditMain: (sourceRootId: string) => void;
   onAddVariant: (
@@ -25,6 +69,7 @@ export function LibraryView({
     name: string,
   ) => void;
 }) {
+  const activeSection = focusedComponentId ? "components" : section;
   const components = focusedComponentId
     ? model.components.filter(
         (component) => component.id === focusedComponentId,
@@ -38,12 +83,49 @@ export function LibraryView({
           Editor
         </button>
         <div>
-          <span className="eyebrow">Document library</span>
-          <h1>Components</h1>
-          <p>Reusable definitions, variants, and live previews.</p>
+          <span className="eyebrow">Library</span>
+          <h1>
+            {activeSection === "projects" ? "Recent projects" : "Components"}
+          </h1>
+          <p>
+            {activeSection === "projects"
+              ? "Continue working from a recent local project."
+              : "Reusable definitions, variants, and live previews."}
+          </p>
         </div>
       </header>
-      {components.length === 0 ? (
+      {!focusedComponentId && (
+        <nav className="library-tabs" aria-label="Library sections">
+          <button
+            className={activeSection === "projects" ? "active" : ""}
+            onClick={() => onSectionChange("projects")}
+          >
+            Projects
+          </button>
+          <button
+            className={activeSection === "components" ? "active" : ""}
+            onClick={() => onSectionChange("components")}
+          >
+            Components
+          </button>
+        </nav>
+      )}
+      {activeSection === "projects" ? (
+        <ProjectLibrary
+          documents={recentDocuments}
+          archivedDocuments={archivedDocuments}
+          currentDocumentId={currentRecentDocumentId}
+          onNewDocument={onNewDocument}
+          onOpen={onOpenRecent}
+          onRemove={onRemoveRecent}
+          onRename={onRenameRecent}
+          onDuplicate={onDuplicateRecent}
+          onArchive={onArchiveRecent}
+          onRestore={onRestoreRecent}
+          onSetCover={onSetProjectCover}
+          onRecover={onRecoverRecent}
+        />
+      ) : components.length === 0 ? (
         <div className="library-empty">
           <Component aria-hidden="true" />
           <strong>No components yet</strong>
@@ -65,6 +147,196 @@ export function LibraryView({
       )}
     </section>
   );
+}
+
+function ProjectLibrary({
+  documents,
+  archivedDocuments,
+  currentDocumentId,
+  onNewDocument,
+  onOpen,
+  onRemove,
+  onRename,
+  onDuplicate,
+  onArchive,
+  onRestore,
+  onSetCover,
+  onRecover,
+}: {
+  documents: RecentDocument[];
+  archivedDocuments: RecentDocument[];
+  currentDocumentId?: string;
+  onNewDocument: () => void;
+  onOpen: (document: RecentDocument) => void;
+  onRemove: (id: string) => void;
+  onRename: (document: RecentDocument) => void;
+  onDuplicate: (document: RecentDocument) => void;
+  onArchive: (document: RecentDocument) => void;
+  onRestore: (document: RecentDocument) => void;
+  onSetCover: (document: RecentDocument, pageId: string) => void;
+  onRecover: (document: RecentDocument) => void;
+}) {
+  const [showArchived, setShowArchived] = useState(false);
+  const visibleDocuments = showArchived ? archivedDocuments : documents;
+  return (
+    <div className="project-library" data-testid="project-library-view">
+      <div className="project-library-toolbar">
+        <button
+          className={!showArchived ? "active" : ""}
+          onClick={() => setShowArchived(false)}
+        >
+          Recent
+        </button>
+        <button
+          className={showArchived ? "active" : ""}
+          onClick={() => setShowArchived(true)}
+        >
+          Archived ({archivedDocuments.length})
+        </button>
+      </div>
+      <div className="project-library-grid">
+        {!showArchived && (
+          <button className="project-new-card" onClick={onNewDocument}>
+            <FilePlus2 aria-hidden="true" />
+            <strong>New document</strong>
+            <span>Start with an empty page</span>
+          </button>
+        )}
+        {visibleDocuments.map((document) => (
+          <article
+            className={`project-card ${document.id === currentDocumentId ? "current" : ""}`}
+            data-testid={`recent-project-${document.id}`}
+            key={document.id}
+          >
+            <button
+              className="project-card-open"
+              onClick={() => onOpen(document)}
+            >
+              <ProjectPreviewImage preview={document.preview} />
+              <span className="project-card-copy">
+                <strong>{document.name}</strong>
+                <small>
+                  {document.pageCount} page{document.pageCount === 1 ? "" : "s"}{" "}
+                  · {document.objectCount.toLocaleString()} objects
+                </small>
+                <small>{formatRecentDate(document.updatedAt)}</small>
+              </span>
+            </button>
+            <button
+              className="project-card-remove"
+              aria-label={`Remove ${document.name} from recent projects`}
+              title="Remove from recent projects"
+              onClick={() => onRemove(document.id)}
+            >
+              <Trash2 aria-hidden="true" />
+            </button>
+            <div className="project-card-actions">
+              {showArchived ? (
+                <button
+                  onClick={() => onRestore(document)}
+                  title="Restore project"
+                >
+                  <RotateCcw aria-hidden="true" /> Restore
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => onRename(document)}>Rename</button>
+                  <button
+                    onClick={() => onDuplicate(document)}
+                    title="Duplicate project"
+                  >
+                    <Copy aria-hidden="true" /> Duplicate
+                  </button>
+                  <button
+                    onClick={() => onArchive(document)}
+                    title="Archive project"
+                  >
+                    <Archive aria-hidden="true" /> Archive
+                  </button>
+                  <button
+                    onClick={() => onRecover(document)}
+                    title="Recovery history"
+                  >
+                    <RotateCcw aria-hidden="true" /> Recover
+                  </button>
+                  {(document.pages?.length ?? 0) > 1 && (
+                    <select
+                      aria-label={`Cover page for ${document.name}`}
+                      value={document.coverPageId ?? document.pages?.[0]?.id}
+                      onChange={(event) =>
+                        onSetCover(document, event.target.value)
+                      }
+                    >
+                      {document.pages?.map((page) => (
+                        <option key={page.id} value={page.id}>
+                          Cover: {page.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </>
+              )}
+            </div>
+          </article>
+        ))}
+        {showArchived && visibleDocuments.length === 0 && (
+          <div className="library-empty project-archive-empty">
+            <Archive aria-hidden="true" />
+            <strong>No archived projects</strong>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProjectPreviewImage({ preview }: { preview: ProjectPreview }) {
+  const scale = Math.min(
+    1,
+    280 / preview.bounds.width,
+    160 / preview.bounds.height,
+  );
+  return (
+    <span className="project-preview">
+      <span
+        className="project-preview-scene"
+        style={{
+          width: preview.bounds.width * scale,
+          height: preview.bounds.height * scale,
+        }}
+      >
+        {preview.nodes.map((node) => (
+          <span
+            className={`project-preview-node ${node.kind}`}
+            key={node.id}
+            style={{
+              left: (node.x - preview.bounds.x) * scale,
+              top: (node.y - preview.bounds.y) * scale,
+              width: Math.max(1, node.width * scale),
+              height: Math.max(1, node.height * scale),
+              borderRadius: node.corner_radii[0] * scale,
+              background: rgba(node.fill),
+              fontSize: Math.max(4, 10 * scale),
+            }}
+          >
+            {node.kind === "text" ? node.text : ""}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+function rgba(color: number[]) {
+  const [red = 0, green = 0, blue = 0, alpha = 1] = color;
+  return `rgba(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)}, ${alpha})`;
+}
+
+function formatRecentDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
 }
 
 function ComponentLibraryCard({

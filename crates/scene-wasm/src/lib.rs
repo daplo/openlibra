@@ -13,7 +13,7 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 const FLOATS_PER_RECT: usize = 24;
 
 #[derive(serde::Deserialize)]
@@ -130,6 +130,40 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
                         && node.get("text").is_none()
                     {
                         node["text"] = serde_json::to_value(TextStyle::default()).unwrap();
+                    }
+                    if schema < 8 {
+                        let node_id = node
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or("missing-node");
+                        let shadow_ids: Vec<_> = node
+                            .get("shadows")
+                            .and_then(|shadows| shadows.as_array())
+                            .map(|shadows| {
+                                shadows
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, _)| {
+                                        Uuid::new_v5(
+                                            &Uuid::NAMESPACE_OID,
+                                            format!("open-libra-shadow:{node_id}:{index}")
+                                                .as_bytes(),
+                                        )
+                                        .to_string()
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if let Some(shadows) = node
+                            .get_mut("shadows")
+                            .and_then(|shadows| shadows.as_array_mut())
+                        {
+                            for (shadow, id) in shadows.iter_mut().zip(shadow_ids) {
+                                if shadow.get("id").is_none() {
+                                    shadow["id"] = serde_json::Value::String(id);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -260,29 +294,40 @@ impl HistoryEntry {
                     .pages
                     .iter_mut()
                     .find(|page| page.id == page_id)
-                    .and_then(|page| page.nodes.iter_mut().find(|node| node.id == node_id))
-                    .expect("history node exists");
-                let inverse = NodeStyleState::capture(node);
-                style.apply(node);
-                Self::NodeStyle {
-                    page_id,
-                    node_id,
-                    style: inverse,
+                    .and_then(|page| page.nodes.iter_mut().find(|node| node.id == node_id));
+                // The node may have been deleted by a later command while this
+                // entry sat on the undo/redo stack; treat that as a no-op
+                // instead of panicking.
+                if let Some(node) = node {
+                    let inverse = NodeStyleState::capture(node);
+                    style.apply(node);
+                    Self::NodeStyle {
+                        page_id,
+                        node_id,
+                        style: inverse,
+                    }
+                } else {
+                    Self::NodeStyle {
+                        page_id,
+                        node_id,
+                        style,
+                    }
                 }
             }
             Self::Geometry { page_id, nodes } => {
-                let page = document
-                    .pages
-                    .iter_mut()
-                    .find(|page| page.id == page_id)
-                    .expect("history page exists");
+                let Some(page) = document.pages.iter_mut().find(|page| page.id == page_id) else {
+                    return Self::Geometry { page_id, nodes };
+                };
                 let mut inverse = Vec::with_capacity(nodes.len());
                 for state in nodes {
-                    let node = page
-                        .nodes
-                        .iter_mut()
-                        .find(|node| node.id == state.id)
-                        .expect("history node exists");
+                    // Nodes captured by an in-flight geometry transaction can
+                    // be deleted before the transaction ends; skip them
+                    // instead of panicking, and keep their captured state so
+                    // a later redo/undo of this entry stays a no-op for them.
+                    let Some(node) = page.nodes.iter_mut().find(|node| node.id == state.id) else {
+                        inverse.push(state);
+                        continue;
+                    };
                     inverse.push(NodeGeometryState::capture(node));
                     state.apply(node);
                 }
@@ -308,8 +353,20 @@ pub struct DocumentEngine {
 impl DocumentEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
+        console_error_panic_hook::set_once();
         Self {
             document: Document::demo(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            transaction_start: None,
+            geometry_transaction_start: None,
+        }
+    }
+
+    pub fn new_blank() -> Self {
+        console_error_panic_hook::set_once();
+        Self {
+            document: Document::blank(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             transaction_start: None,
@@ -334,7 +391,7 @@ impl DocumentEngine {
     }
 
     pub fn document_json(&self) -> String {
-        serde_json::to_string_pretty(&self.document).expect("document is serializable")
+        serde_json::to_string(&self.document).expect("document is serializable")
     }
 
     pub fn node_json(&self, node_id: String) -> String {
@@ -440,6 +497,21 @@ impl DocumentEngine {
         self.mutate(|document| document.add_page(name)).to_string()
     }
 
+    pub fn rename_page(&mut self, page_id: String, name: String) -> bool {
+        let page_id = parse_entity_id(&page_id);
+        self.mutate(|document| document.rename_page(page_id, name))
+    }
+
+    pub fn delete_page(&mut self, page_id: String) -> bool {
+        let page_id = parse_entity_id(&page_id);
+        self.mutate(|document| document.delete_page(page_id))
+    }
+
+    pub fn ungroup_nodes(&mut self, group_id: String) -> bool {
+        let group_id = parse_entity_id(&group_id);
+        self.mutate(|document| document.ungroup_nodes(group_id))
+    }
+
     pub fn import_figma_json(&mut self, json: &str) -> Result<String, JsValue> {
         let payload: FigmaImportPayload = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Figma import: {error}")))?;
@@ -536,6 +608,10 @@ impl DocumentEngine {
 
     pub fn delete_node(&mut self, node_id: String) -> bool {
         let node_id = parse_entity_id(&node_id);
+        // A geometry transaction only records geometry for nodes that still
+        // exist when it ends. Finish it before a structural deletion so the
+        // move and deletion receive independent, complete history entries.
+        self.end_transaction();
         self.mutate(|document| document.delete_node(node_id))
     }
 
@@ -618,6 +694,32 @@ impl DocumentEngine {
         let variant_id = parse_entity_id(&variant_id);
         self.mutate(|document| document.set_instance_variant(instance_id, variant_id))
             .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn reset_component_instance(&mut self, instance_id: String) -> String {
+        let instance_id = parse_entity_id(&instance_id);
+        self.mutate(|document| document.reset_component_instance(instance_id))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn swap_component_instance(
+        &mut self,
+        instance_id: String,
+        component_id: String,
+        variant_id: String,
+    ) -> String {
+        let instance_id = parse_entity_id(&instance_id);
+        let component_id = parse_entity_id(&component_id);
+        let variant_id = parse_entity_id(&variant_id);
+        self.mutate(|document| {
+            document.swap_component_instance(instance_id, component_id, variant_id)
+        })
+        .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn detach_component_instance(&mut self, instance_id: String) -> bool {
+        let instance_id = parse_entity_id(&instance_id);
+        self.mutate(|document| document.detach_component_instance(instance_id))
     }
 
     pub fn move_nodes(&mut self, node_ids_json: &str, dx: f32, dy: f32) -> Result<bool, JsValue> {
@@ -1066,8 +1168,11 @@ impl DocumentEngine {
         let Some(previous) = self.undo_stack.pop() else {
             return false;
         };
+        let before = self.document.clone();
         self.redo_stack.push(previous.apply(&mut self.document));
-        self.document.sync_component_instances();
+        if component_source_changed(&before, &self.document) {
+            self.document.sync_component_instances();
+        }
         true
     }
 
@@ -1076,8 +1181,11 @@ impl DocumentEngine {
         let Some(next) = self.redo_stack.pop() else {
             return false;
         };
+        let before = self.document.clone();
         let inverse = next.apply(&mut self.document);
-        self.document.sync_component_instances();
+        if component_source_changed(&before, &self.document) {
+            self.document.sync_component_instances();
+        }
         self.push_undo(inverse);
         true
     }
@@ -1101,6 +1209,7 @@ impl DocumentEngine {
     }
 
     pub fn load_json(json: &str) -> Result<DocumentEngine, JsValue> {
+        console_error_panic_hook::set_once();
         let mut value: serde_json::Value = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
         migrate_legacy_document_ids(&mut value);

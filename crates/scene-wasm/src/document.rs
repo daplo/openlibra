@@ -4,6 +4,27 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 impl Document {
+    pub(crate) fn blank() -> Self {
+        let page_id = Uuid::now_v7();
+        Self {
+            schema_version: SCHEMA_VERSION,
+            active_page_id: page_id,
+            pages: vec![Page {
+                id: page_id,
+                name: "Page 1".into(),
+                description: String::new(),
+                nodes: Vec::new(),
+                benchmark_node_count: None,
+                benchmark_modified_node_ids: Vec::new(),
+            }],
+            color_library: Vec::new(),
+            number_variables: Vec::new(),
+            text_styles: Vec::new(),
+            media_assets: Vec::new(),
+            components: Vec::new(),
+        }
+    }
+
     pub(crate) fn demo() -> Self {
         let home_id = Uuid::now_v7();
         let mut document = Self {
@@ -273,6 +294,7 @@ impl Document {
         node.stroke_width = stroke_width;
         if shadow {
             node.shadows.push(Shadow {
+                id: Uuid::now_v7(),
                 kind: ShadowKind::Outer,
                 color: [0.04, 0.06, 0.10, 0.16],
                 offset_x: 0.0,
@@ -325,6 +347,14 @@ impl Document {
         let user_icon = self.finance_icon_asset(
             "Profile",
             "<circle cx='12' cy='8' r='4'/><path d='M4 21a8 8 0 0 1 16 0'/>",
+        );
+        let send_icon = self.finance_icon_asset(
+            "Send",
+            "<path d='M21 3 9 15'/><path d='m21 3-7 18-5-6-6-2Z'/>",
+        );
+        let target_icon = self.finance_icon_asset(
+            "Target",
+            "<circle cx='12' cy='12' r='9'/><circle cx='12' cy='12' r='4'/><path d='M12 3v3M21 12h-3'/>",
         );
 
         let welcome = self.finance_frame("Finance · Welcome", 80.0, [0.65, 0.92, 0.40, 1.0]);
@@ -489,7 +519,7 @@ impl Document {
             [0.0; 4],
             0.0,
         );
-        for (index, text) in ["↗  Send", "↙  Request", "••"].iter().enumerate() {
+        for (index, text) in ["Send", "Request", "More"].iter().enumerate() {
             let width = if index == 2 { 44.0 } else { 104.0 };
             let x = 468.0
                 + if index == 0 {
@@ -524,6 +554,22 @@ impl Document {
                     [0.02, 0.25, 0.08, 1.0]
                 },
             );
+            if index < 2
+                && let Some(icon) = self.add_node_from_asset(send_icon, Some(action))
+            {
+                let node = self.active_node_mut(icon).unwrap();
+                node.name = format!("{text} icon");
+                node.x = x + 12.0;
+                node.y = 388.0;
+                node.width = 16.0;
+                node.height = 16.0;
+                node.rotation = if index == 1 { 180.0 } else { 0.0 };
+                node.fill = if index == 0 {
+                    [1.0; 4]
+                } else {
+                    [0.02, 0.25, 0.08, 1.0]
+                };
+            }
         }
         self.finance_text(
             wallet_content,
@@ -665,8 +711,147 @@ impl Document {
             [home_icon, chart_icon, scan_icon, card_icon, user_icon],
         );
 
+        let goals = self.finance_frame("Finance · Goals", 1160.0, [0.97, 0.98, 0.96, 1.0]);
+        self.finance_status_bar(goals, 1184.0, label, false);
+        let goals_header = self.finance_group(
+            goals,
+            "Goals header · Auto layout",
+            [1188.0, 146.0, 272.0, 62.0],
+            LayoutMode::Column,
+            5.0,
+            [0.0; 4],
+            0.0,
+        );
+        self.finance_text(
+            goals_header,
+            "Goals title",
+            "Your goals",
+            [1188.0, 146.0, 210.0, 30.0],
+            title,
+            [0.04, 0.15, 0.08, 1.0],
+        );
+        self.finance_text(
+            goals_header,
+            "Goals subtitle",
+            "Small steps, meaningful progress.",
+            [1188.0, 180.0, 250.0, 18.0],
+            label,
+            [0.42, 0.48, 0.43, 1.0],
+        );
+        let overview = self.finance_group(
+            goals,
+            "Savings overview · Auto layout",
+            [1188.0, 224.0, 272.0, 126.0],
+            LayoutMode::Column,
+            8.0,
+            [0.04, 0.25, 0.11, 1.0],
+            22.0,
+        );
+        self.finance_text(
+            overview,
+            "Saved label",
+            "TOTAL SAVED",
+            [1206.0, 244.0, 160.0, 16.0],
+            label,
+            [0.66, 0.91, 0.72, 1.0],
+        );
+        self.finance_text(
+            overview,
+            "Saved value",
+            "$8,420",
+            [1206.0, 270.0, 180.0, 38.0],
+            display,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        self.finance_text(
+            overview,
+            "Saved trend",
+            "+12.4% this month                 ↗",
+            [1206.0, 318.0, 232.0, 18.0],
+            label,
+            [0.70, 0.96, 0.48, 1.0],
+        );
+        let goals_list = self.finance_group(
+            goals,
+            "Goal cards · Auto layout",
+            [1188.0, 374.0, 272.0, 230.0],
+            LayoutMode::Column,
+            12.0,
+            [0.0; 4],
+            0.0,
+        );
+        let mut first_goal = None;
+        for (index, (name, amount, progress, color)) in [
+            (
+                "Japan trip",
+                "$3,240 of $5,000",
+                "██████░░  65%",
+                [0.72, 0.94, 0.42, 1.0],
+            ),
+            (
+                "Emergency fund",
+                "$4,180 of $8,000",
+                "████░░░░  52%",
+                [0.73, 0.68, 0.98, 1.0],
+            ),
+            (
+                "New workspace",
+                "$1,000 of $2,500",
+                "███░░░░░  40%",
+                [1.0, 0.72, 0.42, 1.0],
+            ),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 374.0 + index as f32 * 76.0;
+            let card = self.finance_group(
+                goals_list,
+                &format!("Goal card / {name}"),
+                [1188.0, y, 272.0, 64.0],
+                LayoutMode::Row,
+                10.0,
+                [1.0, 1.0, 1.0, 1.0],
+                16.0,
+            );
+            self.style_demo_shape(card, 16.0, [0.88, 0.90, 0.87, 1.0], 1.0, true);
+            if let Some(icon) = self.add_node_from_asset(target_icon, Some(card)) {
+                let node = self.active_node_mut(icon).unwrap();
+                node.x = 1202.0;
+                node.y = y + 18.0;
+                node.width = 24.0;
+                node.height = 24.0;
+                node.fill = *color;
+            }
+            self.finance_text(
+                card,
+                "Goal name",
+                name,
+                [1238.0, y + 10.0, 130.0, 18.0],
+                body,
+                [0.04, 0.10, 0.06, 1.0],
+            );
+            self.finance_text(
+                card,
+                "Goal progress",
+                &format!("{amount}   {progress}"),
+                [1238.0, y + 34.0, 206.0, 18.0],
+                label,
+                [0.38, 0.43, 0.39, 1.0],
+            );
+            first_goal.get_or_insert(card);
+        }
+        self.finance_bottom_nav(
+            goals,
+            1184.0,
+            [home_icon, chart_icon, scan_icon, card_icon, user_icon],
+        );
+
         self.create_component(cta, "Button / Primary".into());
         self.create_component(spending, "Card / Spending summary".into());
+        if let Some(goal) = first_goal {
+            self.create_component(goal, "Card / Goal progress".into());
+        }
     }
 
     fn finance_frame(&mut self, name: &str, x: f32, fill: [f32; 4]) -> EntityId {
@@ -1863,6 +2048,40 @@ impl Document {
         } else {
             false
         }
+    }
+
+    pub(crate) fn rename_page(&mut self, page_id: EntityId, name: String) -> bool {
+        let Some(page) = self.pages.iter_mut().find(|page| page.id == page_id) else {
+            return false;
+        };
+        page.name = name;
+        true
+    }
+
+    pub(crate) fn delete_page(&mut self, page_id: EntityId) -> bool {
+        if self.pages.len() <= 1 || !self.pages.iter().any(|page| page.id == page_id) {
+            return false;
+        }
+        let page_node_ids: HashSet<EntityId> = self
+            .pages
+            .iter()
+            .find(|page| page.id == page_id)
+            .map(|page| page.nodes.iter().map(|node| node.id).collect())
+            .unwrap_or_default();
+        if self
+            .components
+            .iter()
+            .flat_map(|component| &component.variants)
+            .any(|variant| page_node_ids.contains(&variant.source_root_id))
+        {
+            return false;
+        }
+        self.pages.retain(|page| page.id != page_id);
+        if self.active_page_id == page_id {
+            self.active_page_id = self.pages[0].id;
+            self.populate_active_benchmark();
+        }
+        true
     }
 
     pub(crate) fn delete_node(&mut self, node_id: EntityId) -> bool {

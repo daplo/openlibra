@@ -1,6 +1,6 @@
 use crate::geometry::{point_in_rotated_node, rotate_around};
 use crate::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl Document {
     pub(crate) fn duplicate_nodes(&mut self, root_ids: &[EntityId]) -> Vec<EntityId> {
@@ -94,6 +94,13 @@ impl Document {
             })
             .collect();
         for page in &mut self.pages {
+            if !page
+                .nodes
+                .iter()
+                .any(|node| node.instance_root_id.is_some())
+            {
+                continue;
+            }
             let instance_roots: Vec<_> = page
                 .nodes
                 .iter()
@@ -396,15 +403,78 @@ impl Document {
     ) -> Option<EntityId> {
         let instance = self.active_node(instance_id)?.clone();
         let component_id = instance.component_id?;
-        if instance.instance_root_id != Some(instance_id) {
+        if instance.instance_root_id != Some(instance_id) || instance.locked {
             return None;
         }
+        let source_root_id = self
+            .components
+            .iter()
+            .find(|component| component.id == component_id)?
+            .variants
+            .iter()
+            .find(|variant| variant.id == variant_id)?
+            .source_root_id;
+        self.active_node(source_root_id)?;
         let (x, y, parent_id) = (instance.x, instance.y, instance.parent_id);
-        self.delete_node(instance_id);
+        if !self.delete_node(instance_id) {
+            return None;
+        }
         let new_id = self.create_component_instance(component_id, variant_id, parent_id)?;
         let new_root = self.active_node(new_id)?.clone();
         self.move_nodes(&[new_id], x - new_root.x, y - new_root.y);
         Some(new_id)
+    }
+
+    pub(crate) fn reset_component_instance(&mut self, instance_id: EntityId) -> Option<EntityId> {
+        let variant_id = self.active_node(instance_id)?.component_variant_id?;
+        self.set_instance_variant(instance_id, variant_id)
+    }
+
+    pub(crate) fn swap_component_instance(
+        &mut self,
+        instance_id: EntityId,
+        component_id: EntityId,
+        variant_id: EntityId,
+    ) -> Option<EntityId> {
+        let instance = self.active_node(instance_id)?.clone();
+        if instance.instance_root_id != Some(instance_id) || instance.locked {
+            return None;
+        }
+        let source_root_id = self
+            .components
+            .iter()
+            .find(|component| component.id == component_id)?
+            .variants
+            .iter()
+            .find(|variant| variant.id == variant_id)?
+            .source_root_id;
+        self.active_node(source_root_id)?;
+        let (x, y, parent_id) = (instance.x, instance.y, instance.parent_id);
+        if !self.delete_node(instance_id) {
+            return None;
+        }
+        let new_id = self.create_component_instance(component_id, variant_id, parent_id)?;
+        let new_root = self.active_node(new_id)?.clone();
+        self.move_nodes(&[new_id], x - new_root.x, y - new_root.y);
+        Some(new_id)
+    }
+
+    pub(crate) fn detach_component_instance(&mut self, instance_id: EntityId) -> bool {
+        if !self
+            .active_node(instance_id)
+            .is_some_and(|node| node.instance_root_id == Some(instance_id))
+        {
+            return false;
+        }
+        for node in &mut self.active_page_mut().nodes {
+            if node.instance_root_id == Some(instance_id) {
+                node.instance_root_id = None;
+                node.component_id = None;
+                node.component_variant_id = None;
+                node.component_slot_id = None;
+            }
+        }
+        true
     }
 
     fn descendant_ids_including(&self, root_id: EntityId) -> HashSet<EntityId> {
@@ -437,6 +507,25 @@ impl Document {
             .collect();
         if selected.len() < 2 || selected.iter().any(|node| node.locked) {
             return None;
+        }
+        // Reject a selection where one selected node is an ancestor of
+        // another: grouping them would silently flatten the ancestor's
+        // subtree instead of preserving it, since their differing parents
+        // fail the common-parent check below.
+        let nodes_by_id: HashMap<EntityId, &Node> = self
+            .active_page()
+            .nodes
+            .iter()
+            .map(|node| (node.id, node))
+            .collect();
+        for node in &selected {
+            let mut ancestor_id = node.parent_id;
+            while let Some(id) = ancestor_id {
+                if unique.contains(&id) {
+                    return None;
+                }
+                ancestor_id = nodes_by_id.get(&id).and_then(|ancestor| ancestor.parent_id);
+            }
         }
         let min_x = selected
             .iter()
@@ -474,6 +563,29 @@ impl Document {
             }
         }
         Some(group_id)
+    }
+
+    pub(crate) fn ungroup_nodes(&mut self, group_id: EntityId) -> bool {
+        let Some(group) = self.active_node(group_id) else {
+            return false;
+        };
+        if group.kind != NodeKind::Group
+            || group.locked
+            || group.component_id.is_some()
+            || group.component_slot_id.is_some()
+            || group.instance_root_id.is_some()
+        {
+            return false;
+        }
+        let parent_id = group.parent_id;
+        let page = self.active_page_mut();
+        for node in &mut page.nodes {
+            if node.parent_id == Some(group_id) {
+                node.parent_id = parent_id;
+            }
+        }
+        page.nodes.retain(|node| node.id != group_id);
+        true
     }
 
     pub(crate) fn move_nodes(&mut self, node_ids: &[EntityId], dx: f32, dy: f32) -> bool {
@@ -779,6 +891,7 @@ impl Document {
         if node.locked || shadows.len() > 16 {
             return false;
         }
+        let mut shadow_ids = HashSet::new();
         for shadow in &mut shadows {
             if !shadow.offset_x.is_finite()
                 || !shadow.offset_y.is_finite()
@@ -794,6 +907,10 @@ impl Document {
             shadow.spread = shadow.spread.clamp(-500.0, 500.0);
             for channel in &mut shadow.color {
                 *channel = channel.clamp(0.0, 1.0);
+            }
+            if shadow.id.is_nil() || !shadow_ids.insert(shadow.id) {
+                shadow.id = Uuid::now_v7();
+                shadow_ids.insert(shadow.id);
             }
         }
         node.shadows = shadows;

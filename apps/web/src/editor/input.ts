@@ -23,6 +23,9 @@ export type EditorInputHandlers = {
   zoomToFit: () => void;
   toggleRulers: () => void;
   toggleGrid: () => void;
+  newDocument: () => void;
+  openDocument: () => void;
+  saveDocument: () => void;
   deleteSelection: () => void;
   undo: () => void;
   redo: () => void;
@@ -36,6 +39,7 @@ type PointerInput = {
   clientX: number;
   clientY: number;
   button: number;
+  additive?: boolean;
 };
 
 type WheelInput = {
@@ -91,7 +95,12 @@ export class EditorInputController {
         event.clientY,
         event.shiftKey || event.metaKey || event.ctrlKey,
       );
-    this.canvasTarget.pointerDown(event);
+    this.canvasTarget.pointerDown({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: event.button,
+      additive: event.shiftKey || event.metaKey || event.ctrlKey,
+    });
     this.canvas.setPointerCapture(event.pointerId);
   };
 
@@ -115,6 +124,21 @@ export class EditorInputController {
   private onKeyDown = (event: KeyboardEvent) => {
     if (isEditableTarget(event.target)) return;
     const key = event.key.toLowerCase();
+    if ((event.metaKey || event.ctrlKey) && key === "n") {
+      event.preventDefault();
+      this.handlers.newDocument();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && key === "o") {
+      event.preventDefault();
+      this.handlers.openDocument();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && key === "s") {
+      event.preventDefault();
+      this.handlers.saveDocument();
+      return;
+    }
     if (key === "v") this.handlers.setTool("select");
     if (key === "h") this.handlers.setTool("hand");
     if (event.code === "Space" && !event.repeat) {

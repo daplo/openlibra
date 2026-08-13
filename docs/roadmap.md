@@ -50,9 +50,9 @@ Goal: make a versioned Rust document the single source of truth.
 - [x] Store parent relationships in deterministic document order
 - [x] Enforce acyclic trees and page-ownership invariants
 - [x] Build a retained render scene from the active page
-- [ ] Add viewport culling and object-level dirty tracking
+- [x] Add viewport culling and object-level dirty tracking
 - [x] Build the Pages and Layers panels from engine read models
-- [ ] Support create, rename, reorder, and delete for pages and layers
+- [x] Support create, rename, reorder, and delete for pages and layers
 - [x] Add deterministic JSON serialization and round-trip tests
 
 Exit criterion: a user can create a multi-page document, organize a visible layer hierarchy, reload a serialized fixture, and receive the same document.
@@ -64,14 +64,14 @@ Goal: make the canvas feel like a real direct-manipulation editor.
 ### Todos
 
 - [ ] Implement spatial indexing and point/area hit testing
-- [ ] Add single, multi, marquee, and layer-panel selection
-- [ ] Draw selection bounds and resize handles
-- [ ] Implement move and resize with canvas transforms
-- [ ] Add grouping, ungrouping, reparenting, and layer reordering
-- [ ] Add delete, duplicate, copy, paste, and keyboard nudging
-- [ ] Add snapping to frame edges, centers, and nearby objects
+- [x] Add single, multi, marquee, and layer-panel selection
+- [x] Draw selection bounds and resize handles
+- [x] Implement move and resize with canvas transforms
+- [x] Add grouping, ungrouping, reparenting, and layer reordering
+- [x] Add delete, duplicate, copy, paste, and keyboard nudging
+- [x] Add snapping to frame edges, centers, and nearby objects
 - [ ] Express every mutation as a typed command
-- [ ] Implement local command transactions and undo/redo
+- [x] Implement local command transactions and undo/redo
 - [ ] Property-test tree invariants and command inversion
 
 Exit criterion: a user can assemble and reorganize a small screen using familiar selection and transform interactions, then undo and redo the work reliably.
@@ -82,15 +82,15 @@ Goal: support structured web and mobile interface composition.
 
 ### Todos
 
-- [ ] Define frame presets for common web and mobile viewport sizes
-- [ ] Add horizontal and vertical stack/flex-style layout
+- [x] Define frame presets for common web and mobile viewport sizes
+- [x] Add horizontal and vertical stack/flex-style layout
 - [ ] Add gap, padding, alignment, distribution, and wrapping controls
 - [ ] Add fixed, content-sized, and fill-available sizing modes
 - [ ] Add responsive constraints for non-layout children
 - [ ] Support absolute positioning inside layout frames
 - [ ] Recompute only affected layout subtrees after edits
-- [ ] Surface layout and constraint controls in Design mode
-- [ ] Show layout spacing and constraint overlays on the canvas
+- [x] Surface layout controls in Design mode
+- [x] Show layout spacing overlays on the canvas
 - [ ] Add deterministic layout fixtures and performance benchmarks
 
 Exit criterion: resizing a frame produces predictable responsive behavior for a realistically structured application screen.
@@ -129,19 +129,19 @@ Goal: make the local project file the durable source of ownership while allowing
 
 ### Todos
 
-- [ ] Define a versioned, documented `.libra` project container with structured document data and bundled or referenced assets
-- [ ] Open, save, duplicate, and recover projects from the local filesystem without an account or network connection
-- [ ] Make local editing and standard export continue to work when cloud access or a subscription is unavailable
+- [x] Define a versioned, documented `.libra` project envelope with structured document data
+- [x] Open, save, duplicate, autosave, and recover projects locally without an account or network connection
+- [x] Make local editing and project download continue to work without cloud access
 - [ ] Define a storage-provider boundary so document persistence is independent of collaboration transport
 - [ ] Create the Rust HTTP/WebSocket backend as a modular monolith
 - [ ] Add development authentication with a clear path to a production provider
 - [ ] Model users, workspaces, memberships, and documents in PostgreSQL
 - [ ] Add opt-in publish, list, rename, open, download, and archive document APIs
 - [ ] Store document snapshots and revision metadata
-- [ ] Add autosave with visible saving, saved, and error states
+- [x] Add autosave with visible saving, saved, and error states
 - [ ] Prevent accidental overwrites with revision checks
-- [ ] Add schema migration on document load
-- [ ] Add recovery from the latest valid snapshot
+- [x] Add schema migration on document load
+- [x] Restore the last autosaved document and retain rolling recovery snapshots
 - [ ] Create local development infrastructure and seed data
 
 Exit criterion: a user can create, close, reopen, and export a local project without an account, then optionally publish it and recover the same project from the server without surrendering the downloadable source file.
@@ -186,9 +186,9 @@ Goal: close the feedback loop around the shared design artifact.
 - [ ] Allow an authorized user to promote a comment thread into a linked repository issue
 - [ ] Include the stable page/node anchor, project revision, review URL, and optional screenshot in a promoted issue
 - [ ] Reflect linked issue status on the comment without making the issue tracker the source of truth for document state
-- [ ] Build Developer mode inspection for bounds, spacing, layout, and constraints
-- [ ] Display resolved token names and values
-- [ ] Produce copyable CSS-like values for the selected node
+- [x] Build Developer mode inspection for bounds, spacing, and layout
+- [x] Display resolved token names and values
+- [x] Produce copyable CSS-like values for the selected node
 - [ ] Add asset metadata and an initial download action where applicable
 - [ ] Verify that modes change tools without creating separate document state
 
@@ -215,8 +215,8 @@ Goal: make imported visual assets durable, editable, and exportable without comp
 - [ ] Make image decode, upload, cancellation, and failure states visible
 - [ ] Define portable asset entries for the `.libra` project container
 - [ ] Define export recipes by format, scale, density, theme, platform, and state
-- [ ] Export a selected node, frame, page, or explicit slice
-- [ ] Implement PNG and JPEG export at 1x, 2x, and custom scale
+- [ ] Export a selected node, page, or explicit slice (selected-frame export is complete)
+- [ ] Implement JPEG export (PNG at 1x, 2x, and custom scale is complete)
 - [ ] Add SVG export for supported vector/text content with documented raster fallbacks
 - [ ] Add PDF export for frames/pages after font and image embedding is deterministic
 - [ ] Preserve transparency, color profile decisions, filenames, and overwrite behavior
@@ -234,7 +234,7 @@ Goal: let teams build reusable UI systems while keeping instances traceable and 
 - [x] Add component definitions and instances with separate stable IDs
 - [ ] Store instance-to-definition references without copying the entire subtree
 - [ ] Add typed overrides for text, visibility, asset, token, and nested instance properties
-- [ ] Add reset, detach, swap, and go-to-main-component actions
+- [x] Add reset, detach, swap, and go-to-main-component actions
 - [ ] Add component properties and a minimal variant model
 - [ ] Prevent component and library dependency cycles
 - [x] Create a local Vault for images, icons, components, and token collections
