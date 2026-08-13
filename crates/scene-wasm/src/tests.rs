@@ -4,13 +4,14 @@ use crate::geometry::rotate_around;
 #[test]
 fn demo_document_has_stable_renderable_nodes() {
     let engine = DocumentEngine::new();
-    assert_eq!(engine.rect_count(), 20);
-    assert_eq!(engine.scene_data().len(), 20 * FLOATS_PER_RECT);
+    assert_eq!(engine.rect_count(), 31);
+    assert_eq!(engine.scene_data().len(), 31 * FLOATS_PER_RECT);
     assert_eq!(engine.document.pages.len(), 5);
     for name in [
         "Finance · Welcome",
         "Finance · Wallet",
         "Finance · Analytics",
+        "Finance · Goals",
     ] {
         assert!(
             engine
@@ -22,9 +23,13 @@ fn demo_document_has_stable_renderable_nodes() {
         );
     }
     assert_eq!(engine.document.text_styles.len(), 4);
-    assert_eq!(engine.document.media_assets.len(), 5);
-    assert_eq!(engine.document.components.len(), 2);
-    for name in ["Button / Primary", "Card / Spending summary"] {
+    assert_eq!(engine.document.media_assets.len(), 7);
+    assert_eq!(engine.document.components.len(), 3);
+    for name in [
+        "Button / Primary",
+        "Card / Spending summary",
+        "Card / Goal progress",
+    ] {
         assert!(
             engine
                 .document
@@ -1246,6 +1251,7 @@ fn multiple_outer_and_inner_shadows_are_serialized_and_rendered() {
     let base_rects = document.scene_data().len() / FLOATS_PER_RECT;
     let shadows = vec![
         Shadow {
+            id: Uuid::now_v7(),
             kind: ShadowKind::Outer,
             color: [0.0, 0.0, 0.0, 0.25],
             offset_x: 0.0,
@@ -1255,6 +1261,7 @@ fn multiple_outer_and_inner_shadows_are_serialized_and_rendered() {
             enabled: true,
         },
         Shadow {
+            id: Uuid::now_v7(),
             kind: ShadowKind::Inner,
             color: [0.0, 0.0, 0.0, 0.4],
             offset_x: 0.0,
@@ -1706,4 +1713,145 @@ fn selected_nodes_align_to_their_combined_bounds() {
         document.active_page().nodes[4].x,
         document.active_page().nodes[5].x
     );
+}
+
+#[test]
+fn deleting_a_node_mid_geometry_transaction_preserves_undo_history() {
+    let mut engine = DocumentEngine::new();
+    let benchmark_page_id = engine.document.pages[1].id;
+    assert!(engine.document.set_active_page(benchmark_page_id));
+    let doomed_id = engine.document.active_page().nodes[0].id;
+    let survivor_id = engine.document.active_page().nodes[1].id;
+    let doomed_original = {
+        let node = engine.document.active_node(doomed_id).unwrap();
+        (node.x, node.y)
+    };
+    let survivor_original = {
+        let node = engine.document.active_node(survivor_id).unwrap();
+        (node.x, node.y)
+    };
+    engine
+        .begin_geometry_transaction(&serde_json::to_string(&[doomed_id, survivor_id]).unwrap())
+        .unwrap();
+    assert!(
+        engine
+            .move_nodes(
+                &serde_json::to_string(&[doomed_id, survivor_id]).unwrap(),
+                12.0,
+                4.0,
+            )
+            .unwrap()
+    );
+    assert!(engine.delete_node(doomed_id.to_string()));
+    engine.end_transaction();
+    // The deletion is a separate structural edit, so the first undo restores
+    // the node at its moved position.
+    assert!(engine.undo());
+    let restored = engine.document.active_node(doomed_id).unwrap();
+    assert_eq!(
+        (restored.x, restored.y),
+        (doomed_original.0 + 12.0, doomed_original.1 + 4.0)
+    );
+    // The second undo reverses the geometry transaction for both nodes.
+    assert!(engine.undo());
+    let survivor = engine.document.active_node(survivor_id).unwrap();
+    assert_eq!((survivor.x, survivor.y), survivor_original);
+    let restored = engine.document.active_node(doomed_id).unwrap();
+    assert_eq!((restored.x, restored.y), doomed_original);
+}
+
+#[test]
+fn grouping_an_ancestor_with_its_own_descendant_is_rejected() {
+    let mut document = Document::demo();
+    let child_a = document.active_page().nodes[1].id;
+    let child_b = document.active_page().nodes[2].id;
+    let group_id = document.group_nodes(&[child_a, child_b]).unwrap();
+    let nodes_before = document.active_page().nodes.clone();
+    // `group_id` is the parent of `child_a`; grouping them together must be
+    // rejected instead of silently flattening the group's subtree.
+    assert!(document.group_nodes(&[group_id, child_a]).is_none());
+    assert_eq!(document.active_page().nodes, nodes_before);
+}
+
+#[test]
+fn deleting_the_last_page_is_rejected() {
+    let mut document = Document::demo();
+    document.components.clear();
+    document.pages.truncate(1);
+    let only_page = document.active_page_id;
+    assert!(!document.delete_page(only_page));
+    assert_eq!(document.pages.len(), 1);
+}
+
+#[test]
+fn deleting_the_active_page_reassigns_the_active_page() {
+    let mut document = Document::demo();
+    document.components.clear();
+    document.pages.truncate(1);
+    let home = document.active_page_id;
+    let second = document.add_page("Second".into());
+    assert!(document.set_active_page(home));
+    assert!(document.delete_page(home));
+    assert_eq!(document.pages.len(), 1);
+    assert_eq!(document.active_page_id, second);
+}
+
+#[test]
+fn deleting_a_page_with_a_component_source_is_rejected() {
+    let mut document = Document::demo();
+    let home = document.active_page_id;
+    let root_id = document.active_page().nodes[0].id;
+    assert!(document.create_component(root_id, "Card".into()).is_some());
+    document.add_page("Second".into());
+    assert!(document.set_active_page(home));
+    assert!(!document.delete_page(home));
+}
+
+#[test]
+fn rename_page_updates_the_page_name() {
+    let mut document = Document::demo();
+    let page_id = document.active_page_id;
+    assert!(document.rename_page(page_id, "Renamed".into()));
+    assert_eq!(document.active_page().name, "Renamed");
+    assert!(!document.rename_page(Uuid::now_v7(), "Missing".into()));
+}
+
+#[test]
+fn ungrouping_restores_children_as_flat_siblings_at_the_same_position() {
+    let mut document = Document::demo();
+    let parent_id = document.active_page().nodes[1].parent_id;
+    let child_a = document.active_page().nodes[1].id;
+    let child_b = document.active_page().nodes[2].id;
+    let positions_before: Vec<_> = [child_a, child_b]
+        .iter()
+        .map(|id| {
+            let node = document.active_node(*id).unwrap();
+            (node.x, node.y)
+        })
+        .collect();
+    let group_id = document.group_nodes(&[child_a, child_b]).unwrap();
+    assert!(document.ungroup_nodes(group_id));
+    assert!(document.active_node(group_id).is_none());
+    for (id, expected) in [child_a, child_b].iter().zip(positions_before) {
+        let node = document.active_node(*id).unwrap();
+        assert_eq!((node.x, node.y), expected);
+        assert_eq!(node.parent_id, parent_id);
+    }
+}
+
+#[test]
+fn ungrouping_rejects_locked_or_component_groups() {
+    let mut document = Document::demo();
+    let child_a = document.active_page().nodes[1].id;
+    let child_b = document.active_page().nodes[2].id;
+    let group_id = document.group_nodes(&[child_a, child_b]).unwrap();
+    assert!(document.set_node_locked(group_id, true));
+    assert!(!document.ungroup_nodes(group_id));
+    assert!(document.set_node_locked(group_id, false));
+    assert!(
+        document
+            .create_component(group_id, "Group component".into())
+            .is_some()
+    );
+    assert!(!document.ungroup_nodes(group_id));
 }

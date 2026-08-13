@@ -378,6 +378,8 @@ pub(crate) fn default_guide_opacity() -> f32 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Shadow {
+    #[serde(default = "Uuid::now_v7")]
+    pub(crate) id: EntityId,
     pub(crate) kind: ShadowKind,
     pub(crate) color: [f32; 4],
     pub(crate) offset_x: f32,

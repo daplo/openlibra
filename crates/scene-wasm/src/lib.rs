@@ -260,29 +260,40 @@ impl HistoryEntry {
                     .pages
                     .iter_mut()
                     .find(|page| page.id == page_id)
-                    .and_then(|page| page.nodes.iter_mut().find(|node| node.id == node_id))
-                    .expect("history node exists");
-                let inverse = NodeStyleState::capture(node);
-                style.apply(node);
-                Self::NodeStyle {
-                    page_id,
-                    node_id,
-                    style: inverse,
+                    .and_then(|page| page.nodes.iter_mut().find(|node| node.id == node_id));
+                // The node may have been deleted by a later command while this
+                // entry sat on the undo/redo stack; treat that as a no-op
+                // instead of panicking.
+                if let Some(node) = node {
+                    let inverse = NodeStyleState::capture(node);
+                    style.apply(node);
+                    Self::NodeStyle {
+                        page_id,
+                        node_id,
+                        style: inverse,
+                    }
+                } else {
+                    Self::NodeStyle {
+                        page_id,
+                        node_id,
+                        style,
+                    }
                 }
             }
             Self::Geometry { page_id, nodes } => {
-                let page = document
-                    .pages
-                    .iter_mut()
-                    .find(|page| page.id == page_id)
-                    .expect("history page exists");
+                let Some(page) = document.pages.iter_mut().find(|page| page.id == page_id) else {
+                    return Self::Geometry { page_id, nodes };
+                };
                 let mut inverse = Vec::with_capacity(nodes.len());
                 for state in nodes {
-                    let node = page
-                        .nodes
-                        .iter_mut()
-                        .find(|node| node.id == state.id)
-                        .expect("history node exists");
+                    // Nodes captured by an in-flight geometry transaction can
+                    // be deleted before the transaction ends; skip them
+                    // instead of panicking, and keep their captured state so
+                    // a later redo/undo of this entry stays a no-op for them.
+                    let Some(node) = page.nodes.iter_mut().find(|node| node.id == state.id) else {
+                        inverse.push(state);
+                        continue;
+                    };
                     inverse.push(NodeGeometryState::capture(node));
                     state.apply(node);
                 }
@@ -308,6 +319,7 @@ pub struct DocumentEngine {
 impl DocumentEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
+        console_error_panic_hook::set_once();
         Self {
             document: Document::demo(),
             undo_stack: Vec::new(),
@@ -334,7 +346,7 @@ impl DocumentEngine {
     }
 
     pub fn document_json(&self) -> String {
-        serde_json::to_string_pretty(&self.document).expect("document is serializable")
+        serde_json::to_string(&self.document).expect("document is serializable")
     }
 
     pub fn node_json(&self, node_id: String) -> String {
@@ -440,6 +452,21 @@ impl DocumentEngine {
         self.mutate(|document| document.add_page(name)).to_string()
     }
 
+    pub fn rename_page(&mut self, page_id: String, name: String) -> bool {
+        let page_id = parse_entity_id(&page_id);
+        self.mutate(|document| document.rename_page(page_id, name))
+    }
+
+    pub fn delete_page(&mut self, page_id: String) -> bool {
+        let page_id = parse_entity_id(&page_id);
+        self.mutate(|document| document.delete_page(page_id))
+    }
+
+    pub fn ungroup_nodes(&mut self, group_id: String) -> bool {
+        let group_id = parse_entity_id(&group_id);
+        self.mutate(|document| document.ungroup_nodes(group_id))
+    }
+
     pub fn import_figma_json(&mut self, json: &str) -> Result<String, JsValue> {
         let payload: FigmaImportPayload = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Figma import: {error}")))?;
@@ -536,6 +563,10 @@ impl DocumentEngine {
 
     pub fn delete_node(&mut self, node_id: String) -> bool {
         let node_id = parse_entity_id(&node_id);
+        // A geometry transaction only records geometry for nodes that still
+        // exist when it ends. Finish it before a structural deletion so the
+        // move and deletion receive independent, complete history entries.
+        self.end_transaction();
         self.mutate(|document| document.delete_node(node_id))
     }
 
@@ -1066,8 +1097,11 @@ impl DocumentEngine {
         let Some(previous) = self.undo_stack.pop() else {
             return false;
         };
+        let before = self.document.clone();
         self.redo_stack.push(previous.apply(&mut self.document));
-        self.document.sync_component_instances();
+        if component_source_changed(&before, &self.document) {
+            self.document.sync_component_instances();
+        }
         true
     }
 
@@ -1076,8 +1110,11 @@ impl DocumentEngine {
         let Some(next) = self.redo_stack.pop() else {
             return false;
         };
+        let before = self.document.clone();
         let inverse = next.apply(&mut self.document);
-        self.document.sync_component_instances();
+        if component_source_changed(&before, &self.document) {
+            self.document.sync_component_instances();
+        }
         self.push_undo(inverse);
         true
     }
@@ -1101,6 +1138,7 @@ impl DocumentEngine {
     }
 
     pub fn load_json(json: &str) -> Result<DocumentEngine, JsValue> {
+        console_error_panic_hook::set_once();
         let mut value: serde_json::Value = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
         migrate_legacy_document_ids(&mut value);

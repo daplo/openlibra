@@ -1,6 +1,6 @@
 use crate::geometry::{point_in_rotated_node, rotate_around};
 use crate::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl Document {
     pub(crate) fn duplicate_nodes(&mut self, root_ids: &[EntityId]) -> Vec<EntityId> {
@@ -94,6 +94,13 @@ impl Document {
             })
             .collect();
         for page in &mut self.pages {
+            if !page
+                .nodes
+                .iter()
+                .any(|node| node.instance_root_id.is_some())
+            {
+                continue;
+            }
             let instance_roots: Vec<_> = page
                 .nodes
                 .iter()
@@ -438,6 +445,25 @@ impl Document {
         if selected.len() < 2 || selected.iter().any(|node| node.locked) {
             return None;
         }
+        // Reject a selection where one selected node is an ancestor of
+        // another: grouping them would silently flatten the ancestor's
+        // subtree instead of preserving it, since their differing parents
+        // fail the common-parent check below.
+        let nodes_by_id: HashMap<EntityId, &Node> = self
+            .active_page()
+            .nodes
+            .iter()
+            .map(|node| (node.id, node))
+            .collect();
+        for node in &selected {
+            let mut ancestor_id = node.parent_id;
+            while let Some(id) = ancestor_id {
+                if unique.contains(&id) {
+                    return None;
+                }
+                ancestor_id = nodes_by_id.get(&id).and_then(|ancestor| ancestor.parent_id);
+            }
+        }
         let min_x = selected
             .iter()
             .map(|node| node.x)
@@ -474,6 +500,29 @@ impl Document {
             }
         }
         Some(group_id)
+    }
+
+    pub(crate) fn ungroup_nodes(&mut self, group_id: EntityId) -> bool {
+        let Some(group) = self.active_node(group_id) else {
+            return false;
+        };
+        if group.kind != NodeKind::Group
+            || group.locked
+            || group.component_id.is_some()
+            || group.component_slot_id.is_some()
+            || group.instance_root_id.is_some()
+        {
+            return false;
+        }
+        let parent_id = group.parent_id;
+        let page = self.active_page_mut();
+        for node in &mut page.nodes {
+            if node.parent_id == Some(group_id) {
+                node.parent_id = parent_id;
+            }
+        }
+        page.nodes.retain(|node| node.id != group_id);
+        true
     }
 
     pub(crate) fn move_nodes(&mut self, node_ids: &[EntityId], dx: f32, dy: f32) -> bool {
