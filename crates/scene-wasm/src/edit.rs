@@ -403,15 +403,78 @@ impl Document {
     ) -> Option<EntityId> {
         let instance = self.active_node(instance_id)?.clone();
         let component_id = instance.component_id?;
-        if instance.instance_root_id != Some(instance_id) {
+        if instance.instance_root_id != Some(instance_id) || instance.locked {
             return None;
         }
+        let source_root_id = self
+            .components
+            .iter()
+            .find(|component| component.id == component_id)?
+            .variants
+            .iter()
+            .find(|variant| variant.id == variant_id)?
+            .source_root_id;
+        self.active_node(source_root_id)?;
         let (x, y, parent_id) = (instance.x, instance.y, instance.parent_id);
-        self.delete_node(instance_id);
+        if !self.delete_node(instance_id) {
+            return None;
+        }
         let new_id = self.create_component_instance(component_id, variant_id, parent_id)?;
         let new_root = self.active_node(new_id)?.clone();
         self.move_nodes(&[new_id], x - new_root.x, y - new_root.y);
         Some(new_id)
+    }
+
+    pub(crate) fn reset_component_instance(&mut self, instance_id: EntityId) -> Option<EntityId> {
+        let variant_id = self.active_node(instance_id)?.component_variant_id?;
+        self.set_instance_variant(instance_id, variant_id)
+    }
+
+    pub(crate) fn swap_component_instance(
+        &mut self,
+        instance_id: EntityId,
+        component_id: EntityId,
+        variant_id: EntityId,
+    ) -> Option<EntityId> {
+        let instance = self.active_node(instance_id)?.clone();
+        if instance.instance_root_id != Some(instance_id) || instance.locked {
+            return None;
+        }
+        let source_root_id = self
+            .components
+            .iter()
+            .find(|component| component.id == component_id)?
+            .variants
+            .iter()
+            .find(|variant| variant.id == variant_id)?
+            .source_root_id;
+        self.active_node(source_root_id)?;
+        let (x, y, parent_id) = (instance.x, instance.y, instance.parent_id);
+        if !self.delete_node(instance_id) {
+            return None;
+        }
+        let new_id = self.create_component_instance(component_id, variant_id, parent_id)?;
+        let new_root = self.active_node(new_id)?.clone();
+        self.move_nodes(&[new_id], x - new_root.x, y - new_root.y);
+        Some(new_id)
+    }
+
+    pub(crate) fn detach_component_instance(&mut self, instance_id: EntityId) -> bool {
+        if !self
+            .active_node(instance_id)
+            .is_some_and(|node| node.instance_root_id == Some(instance_id))
+        {
+            return false;
+        }
+        for node in &mut self.active_page_mut().nodes {
+            if node.instance_root_id == Some(instance_id) {
+                node.instance_root_id = None;
+                node.component_id = None;
+                node.component_variant_id = None;
+                node.component_slot_id = None;
+            }
+        }
+        true
     }
 
     fn descendant_ids_including(&self, root_id: EntityId) -> HashSet<EntityId> {

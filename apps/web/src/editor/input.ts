@@ -39,6 +39,7 @@ type PointerInput = {
   clientX: number;
   clientY: number;
   button: number;
+  additive?: boolean;
 };
 
 type WheelInput = {
@@ -94,7 +95,12 @@ export class EditorInputController {
         event.clientY,
         event.shiftKey || event.metaKey || event.ctrlKey,
       );
-    this.canvasTarget.pointerDown(event);
+    this.canvasTarget.pointerDown({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: event.button,
+      additive: event.shiftKey || event.metaKey || event.ctrlKey,
+    });
     this.canvas.setPointerCapture(event.pointerId);
   };
 

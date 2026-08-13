@@ -91,6 +91,7 @@ export function Panel({
   const [editingName, setEditingName] = useState("");
   const [editingPageId, setEditingPageId] = useState<string>();
   const [editingPageName, setEditingPageName] = useState("");
+  const [layerQuery, setLayerQuery] = useState("");
   const [draggedNodeId, setDraggedNodeId] = useState<string>();
   const [dropTarget, setDropTarget] = useState<{
     id: string;
@@ -154,7 +155,32 @@ export function Panel({
     return index;
   }, [model.nodes]);
   const rootNodes = nodesByParent.get(null) ?? [];
-  const visibleRootNodes = rootNodes.slice(0, LAYER_DISPLAY_LIMIT);
+  const matchingLayerIds = useMemo(() => {
+    const query = layerQuery.trim().toLocaleLowerCase();
+    if (!query) return undefined;
+    const matches = new Set(
+      model.nodes
+        .filter((node) =>
+          `${node.name} ${node.kind}`.toLocaleLowerCase().includes(query),
+        )
+        .map((node) => node.id),
+    );
+    for (const node of model.nodes) {
+      if (!matches.has(node.id)) continue;
+      let parentId = node.parent_id;
+      while (parentId) {
+        matches.add(parentId);
+        parentId = model.nodes.find(
+          (candidate) => candidate.id === parentId,
+        )?.parent_id;
+      }
+    }
+    return matches;
+  }, [layerQuery, model.nodes]);
+  const filteredRootNodes = matchingLayerIds
+    ? rootNodes.filter((node) => matchingLayerIds.has(node.id))
+    : rootNodes;
+  const visibleRootNodes = filteredRootNodes.slice(0, LAYER_DISPLAY_LIMIT);
 
   function beginRename(node: NodeSummary) {
     setEditingNodeId(node.id);
@@ -201,7 +227,9 @@ export function Panel({
   }
 
   function renderLayer(node: NodeSummary, depth: number): React.ReactNode {
-    const children = nodesByParent.get(node.id) ?? [];
+    const children = (nodesByParent.get(node.id) ?? []).filter(
+      (child) => !matchingLayerIds || matchingLayerIds.has(child.id),
+    );
     const canCollapse =
       children.length > 0 && (node.kind === "frame" || node.kind === "group");
     const collapsed = collapsedNodeIds.has(node.id);
@@ -492,15 +520,28 @@ export function Panel({
           </button>
         </div>
       )}
+      <label className="layer-search">
+        <Search aria-hidden="true" />
+        <input
+          type="search"
+          value={layerQuery}
+          placeholder="Search layers"
+          aria-label="Search layers"
+          onChange={(event) => setLayerQuery(event.target.value)}
+        />
+      </label>
       <div className="layer-list">
         {visibleRootNodes.map((node) => renderLayer(node, 0))}
-        {rootNodes.length > LAYER_DISPLAY_LIMIT && (
+        {filteredRootNodes.length > LAYER_DISPLAY_LIMIT && (
           <EmptyState
-            text={`Showing ${LAYER_DISPLAY_LIMIT.toLocaleString()} of ${rootNodes.length.toLocaleString()} top-level layers to keep the panel responsive.`}
+            text={`Showing ${LAYER_DISPLAY_LIMIT.toLocaleString()} of ${filteredRootNodes.length.toLocaleString()} top-level layers to keep the panel responsive.`}
           />
         )}
         {model.nodes.length === 0 && (
           <EmptyState text="This page is empty. Add a frame or rectangle." />
+        )}
+        {model.nodes.length > 0 && visibleRootNodes.length === 0 && (
+          <EmptyState text="No layers match this search." />
         )}
       </div>
       {contextMenu && (

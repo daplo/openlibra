@@ -51,8 +51,13 @@ export function Properties(props: {
   onDelete: () => void;
   onGroup: () => void;
   onUngroup: (node: NodeSummary) => void;
+  onExportFrame: (node: NodeSummary, scale: number) => void;
   onCreateComponent: (node: NodeSummary) => void;
   onInstanceVariantChange: (node: NodeSummary, variantId: string) => void;
+  onInstanceReset: (node: NodeSummary) => void;
+  onInstanceDetach: (node: NodeSummary) => void;
+  onInstanceSwap: (node: NodeSummary, componentId: string) => void;
+  onGoToMainComponent: (node: NodeSummary) => void;
   onStyleChange: (
     node: NodeSummary,
     change: Partial<{
@@ -122,6 +127,7 @@ export function Properties(props: {
   ) => void;
 }) {
   const { selected } = props;
+  const [exportScale, setExportScale] = useState(1);
   if (selected.length === 0)
     return (
       <>
@@ -156,6 +162,39 @@ export function Properties(props: {
             </button>
           )}
         </PropertySection>
+        {selected.length === 1 && node.kind === "frame" && (
+          <PropertySection title="Export">
+            <div className="export-controls">
+              {[1, 2].map((scale) => (
+                <button
+                  key={scale}
+                  onClick={() => props.onExportFrame(node, scale)}
+                >
+                  PNG {scale}×
+                </button>
+              ))}
+              <label>
+                <span>Scale</span>
+                <input
+                  type="number"
+                  min="0.1"
+                  max="8"
+                  step="0.1"
+                  value={exportScale}
+                  onChange={(event) =>
+                    setExportScale(Number(event.target.value))
+                  }
+                />
+              </label>
+              <button
+                onClick={() => props.onExportFrame(node, exportScale)}
+                disabled={!Number.isFinite(exportScale) || exportScale <= 0}
+              >
+                Export
+              </button>
+            </div>
+          </PropertySection>
+        )}
         {selected.length > 1 && (
           <PropertySection title="Alignment">
             <AlignmentControls onAlign={props.onAlign} />
@@ -181,6 +220,22 @@ export function Properties(props: {
             {node.component_id && node.instance_root_id === node.id && (
               <PropertySection title="Component">
                 <label className="select-control">
+                  <span>Component</span>
+                  <select
+                    aria-label="Swap component"
+                    value={node.component_id}
+                    onChange={(event) =>
+                      props.onInstanceSwap(node, event.target.value)
+                    }
+                  >
+                    {props.components.map((component) => (
+                      <option key={component.id} value={component.id}>
+                        {component.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="select-control">
                   <span>Variant</span>
                   <select
                     aria-label="Component variant"
@@ -198,6 +253,17 @@ export function Properties(props: {
                       ))}
                   </select>
                 </label>
+                <div className="component-instance-actions">
+                  <button onClick={() => props.onInstanceReset(node)}>
+                    Reset
+                  </button>
+                  <button onClick={() => props.onGoToMainComponent(node)}>
+                    Go to main
+                  </button>
+                  <button onClick={() => props.onInstanceDetach(node)}>
+                    Detach
+                  </button>
+                </div>
               </PropertySection>
             )}
             <PropertySection title="Variables">

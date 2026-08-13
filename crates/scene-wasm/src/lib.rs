@@ -696,6 +696,32 @@ impl DocumentEngine {
             .map_or_else(String::new, |id| id.to_string())
     }
 
+    pub fn reset_component_instance(&mut self, instance_id: String) -> String {
+        let instance_id = parse_entity_id(&instance_id);
+        self.mutate(|document| document.reset_component_instance(instance_id))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn swap_component_instance(
+        &mut self,
+        instance_id: String,
+        component_id: String,
+        variant_id: String,
+    ) -> String {
+        let instance_id = parse_entity_id(&instance_id);
+        let component_id = parse_entity_id(&component_id);
+        let variant_id = parse_entity_id(&variant_id);
+        self.mutate(|document| {
+            document.swap_component_instance(instance_id, component_id, variant_id)
+        })
+        .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn detach_component_instance(&mut self, instance_id: String) -> bool {
+        let instance_id = parse_entity_id(&instance_id);
+        self.mutate(|document| document.detach_component_instance(instance_id))
+    }
+
     pub fn move_nodes(&mut self, node_ids_json: &str, dx: f32, dy: f32) -> Result<bool, JsValue> {
         let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;

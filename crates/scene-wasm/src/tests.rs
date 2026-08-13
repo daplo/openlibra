@@ -1910,3 +1910,82 @@ fn ungrouping_rejects_locked_or_component_groups() {
     );
     assert!(!document.ungroup_nodes(group_id));
 }
+
+#[test]
+fn component_instances_can_be_reset_swapped_and_detached() {
+    let mut document = Document::demo();
+    let source_a = document.active_page().nodes[1].id;
+    let source_b = document.active_page().nodes[2].id;
+    let component_a = document.create_component(source_a, "A".into()).unwrap();
+    let component_b = document.create_component(source_b, "B".into()).unwrap();
+    let variant_a = document
+        .components
+        .iter()
+        .find(|component| component.id == component_a)
+        .unwrap()
+        .variants[0]
+        .id;
+    let variant_b = document
+        .components
+        .iter()
+        .find(|component| component.id == component_b)
+        .unwrap()
+        .variants[0]
+        .id;
+    let instance = document
+        .create_component_instance(component_a, variant_a, None)
+        .unwrap();
+    let original_position = {
+        let node = document.active_node(instance).unwrap();
+        (node.x, node.y)
+    };
+    let reset = document.reset_component_instance(instance).unwrap();
+    assert_ne!(reset, instance);
+    let swapped = document
+        .swap_component_instance(reset, component_b, variant_b)
+        .unwrap();
+    assert_eq!(
+        document.active_node(swapped).unwrap().x,
+        original_position.0
+    );
+    assert_eq!(
+        document.active_node(swapped).unwrap().y,
+        original_position.1
+    );
+    assert_eq!(
+        document.active_node(swapped).unwrap().component_id,
+        Some(component_b)
+    );
+    assert!(document.detach_component_instance(swapped));
+    let detached = document.active_node(swapped).unwrap();
+    assert!(detached.component_id.is_none());
+    assert!(detached.instance_root_id.is_none());
+}
+
+#[test]
+fn locked_component_instance_cannot_be_replaced() {
+    let mut document = Document::demo();
+    let source = document.active_page().nodes[1].id;
+    let component = document.create_component(source, "Locked".into()).unwrap();
+    let variant = document
+        .components
+        .iter()
+        .find(|item| item.id == component)
+        .unwrap()
+        .variants[0]
+        .id;
+    let instance = document
+        .create_component_instance(component, variant, None)
+        .unwrap();
+    document.active_node_mut(instance).unwrap().locked = true;
+    let node_count = document.active_page().nodes.len();
+
+    assert!(document.reset_component_instance(instance).is_none());
+    assert!(
+        document
+            .swap_component_instance(instance, component, variant)
+            .is_none()
+    );
+    assert_eq!(document.active_page().nodes.len(), node_count);
+    assert!(document.active_node(instance).is_some());
+}

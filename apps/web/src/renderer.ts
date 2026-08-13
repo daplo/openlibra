@@ -15,6 +15,14 @@ export type InteractionHandlers = {
   resizeSelection: (handle: ResizeHandle, dx: number, dy: number) => void;
   beginEdit: () => void;
   endEdit: () => void;
+  updateMarquee: (
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+  ) => void;
+  endMarquee: (
+    bounds: { left: number; top: number; right: number; bottom: number },
+    additive: boolean,
+  ) => void;
 };
 
 export type CanvasTool = "select" | "hand";
@@ -137,6 +145,13 @@ export class OpenLibraRenderer {
   private targetZoom = 0.8;
   private dragging = false;
   private draggingSelection = false;
+  private marqueeStart?: {
+    clientX: number;
+    clientY: number;
+    worldX: number;
+    worldY: number;
+  };
+  private marqueeAdditive = false;
   private interactions?: InteractionHandlers;
   private tool: CanvasTool = "select";
   private selectionBounds?: {
@@ -498,7 +513,12 @@ export class OpenLibraRenderer {
     this.uniformBuffer.destroy();
   }
 
-  pointerDown(input: { clientX: number; clientY: number; button: number }) {
+  pointerDown(input: {
+    clientX: number;
+    clientY: number;
+    button: number;
+    additive?: boolean;
+  }) {
     const world = this.worldPointFromClient(input.clientX, input.clientY);
     const shouldPan = this.tool === "hand" || input.button === 1;
     this.resizingHandle =
@@ -511,6 +531,16 @@ export class OpenLibraRenderer {
         : undefined;
     this.draggingSelection = hit !== undefined;
     this.dragging = shouldPan;
+    this.marqueeStart =
+      !shouldPan && !this.resizingHandle && !hit && input.button === 0
+        ? {
+            clientX: input.clientX,
+            clientY: input.clientY,
+            worldX: world.x,
+            worldY: world.y,
+          }
+        : undefined;
+    this.marqueeAdditive = Boolean(input.additive);
     if (this.draggingSelection || this.resizingHandle)
       this.interactions?.beginEdit();
     this.targetPan = { ...this.pan };
@@ -533,6 +563,11 @@ export class OpenLibraRenderer {
       this.pan.x += dx;
       this.pan.y += dy;
       this.targetPan = { ...this.pan };
+    } else if (this.marqueeStart) {
+      this.interactions?.updateMarquee(
+        { x: this.marqueeStart.clientX, y: this.marqueeStart.clientY },
+        { x: input.clientX, y: input.clientY },
+      );
     } else return;
     this.lastPointer = { x: input.clientX, y: input.clientY };
   }
@@ -540,9 +575,25 @@ export class OpenLibraRenderer {
   pointerEnd() {
     if (this.draggingSelection || this.resizingHandle)
       this.interactions?.endEdit();
+    if (this.marqueeStart) {
+      const end = this.worldPointFromClient(
+        this.lastPointer.x,
+        this.lastPointer.y,
+      );
+      this.interactions?.endMarquee(
+        {
+          left: Math.min(this.marqueeStart.worldX, end.x),
+          top: Math.min(this.marqueeStart.worldY, end.y),
+          right: Math.max(this.marqueeStart.worldX, end.x),
+          bottom: Math.max(this.marqueeStart.worldY, end.y),
+        },
+        this.marqueeAdditive,
+      );
+    }
     this.dragging = false;
     this.draggingSelection = false;
     this.resizingHandle = undefined;
+    this.marqueeStart = undefined;
   }
 
   wheel(input: { clientX: number; clientY: number; deltaY: number }) {
@@ -722,6 +773,14 @@ export class OpenLibraRenderer {
     return {
       x: (clientX - bounds.left - this.pan.x) / this.zoom,
       y: (clientY - bounds.top - this.pan.y) / this.zoom,
+    };
+  }
+
+  clientPointFromWorld(x: number, y: number) {
+    const bounds = this.canvas.getBoundingClientRect();
+    return {
+      x: bounds.left + x * this.zoom + this.pan.x,
+      y: bounds.top + y * this.zoom + this.pan.y,
     };
   }
 

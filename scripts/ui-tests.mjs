@@ -197,6 +197,18 @@ try {
       previous,
     zoomBefore,
   );
+  await page.mouse.move(
+    canvasBounds.x + canvasBounds.width - 140,
+    canvasBounds.y + canvasBounds.height - 140,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    canvasBounds.x + canvasBounds.width - 40,
+    canvasBounds.y + canvasBounds.height - 40,
+  );
+  await page.locator(".selection-marquee").waitFor();
+  await page.mouse.up();
+  await page.locator(".selection-marquee").waitFor({ state: "detached" });
 
   const firstLayer = page.getByTestId(/^layer-node-/).first();
   const firstLayerId = await firstLayer.getAttribute("data-node-id");
@@ -251,6 +263,21 @@ try {
   await nameInput.fill("UI test layer");
   await nameInput.press("Enter");
   assert.match(await firstLayer.innerText(), /UI test layer/);
+  const layerSearch = page.getByRole("searchbox", { name: "Search layers" });
+  await layerSearch.fill("UI test layer");
+  assert.equal(await page.getByTestId(/^layer-node-/).count(), 1);
+  await layerSearch.fill("");
+
+  const pngDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PNG 1×" }).click();
+  const pngDownload = await pngDownloadPromise;
+  assert.equal(pngDownload.suggestedFilename(), "UI test layer@1x.png");
+
+  await page.getByRole("button", { name: "Developer" }).click();
+  await page.getByText("UI test layer", { exact: true }).last().waitFor();
+  await page.getByRole("button", { name: "Copy CSS" }).click();
+  await page.getByRole("button", { name: "Copied" }).waitFor();
+  await page.getByRole("button", { name: "Design" }).click();
 
   await firstLayer.getByRole("button", { name: /^Lock / }).click();
   assert.equal(await firstLayer.getAttribute("data-locked"), "true");
@@ -608,7 +635,7 @@ try {
   await page.getByRole("button", { name: "File", exact: true }).click();
   await page.getByRole("menuitem", { name: /^Save/ }).click();
   const download = await downloadPromise;
-  assert.equal(download.suggestedFilename(), "Engine study.olibra");
+  assert.equal(download.suggestedFilename(), "Engine study.libra");
   const savedDocumentPath = await download.path();
   assert.ok(savedDocumentPath);
 
@@ -617,9 +644,25 @@ try {
   await projectLibrary.waitFor();
   const recentProject = projectLibrary
     .locator(".project-card")
-    .filter({ hasText: "Engine study.olibra" });
+    .filter({ hasText: "Engine study.libra" });
   await recentProject.waitFor();
   assert.ok((await recentProject.locator(".project-preview-node").count()) > 0);
+  await recentProject.getByRole("button", { name: /Duplicate/ }).click();
+  const duplicatedProject = projectLibrary
+    .locator(".project-card")
+    .filter({ hasText: "Engine study copy.libra" });
+  await duplicatedProject.waitFor();
+  await duplicatedProject.getByRole("button", { name: /Archive/ }).click();
+  await duplicatedProject.waitFor({ state: "detached" });
+  await projectLibrary.getByRole("button", { name: /^Archived/ }).click();
+  const archivedProject = projectLibrary
+    .locator(".project-card")
+    .filter({ hasText: "Engine study copy.libra" });
+  await archivedProject.waitFor();
+  await archivedProject.getByRole("button", { name: /Restore/ }).click();
+  await archivedProject.waitFor({ state: "detached" });
+  await projectLibrary.getByRole("button", { name: "Recent" }).click();
+  await duplicatedProject.waitFor();
   await page.getByRole("button", { name: "Editor", exact: true }).click();
 
   await page.getByRole("button", { name: "File", exact: true }).click();
@@ -627,7 +670,7 @@ try {
   await page.waitForFunction(
     () => document.querySelectorAll('[data-testid^="page-node-"]').length === 1,
   );
-  await page.getByText("Untitled.olibra", { exact: true }).waitFor();
+  await page.getByText("Untitled.libra", { exact: true }).waitFor();
   await page
     .getByText("This page is empty. Add a frame or rectangle.")
     .waitFor();
@@ -648,9 +691,9 @@ try {
   await documentSwitcher.getByText("2 pages · 0 objects").waitFor();
   await documentSwitcher
     .locator(".document-switcher-item")
-    .filter({ hasText: "Engine study.olibra" })
+    .filter({ hasText: "Engine study.libra" })
     .click();
-  await page.getByText("Engine study.olibra", { exact: true }).waitFor();
+  await page.getByText("Engine study.libra", { exact: true }).waitFor();
   assert.equal(await pages.count(), pageCount);
 
   await page.getByRole("button", { name: "File", exact: true }).click();
@@ -664,11 +707,11 @@ try {
   await page.getByRole("menuitem", { name: /^Open/ }).click();
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles({
-    name: "Engine study.olibra",
+    name: "Engine study.libra",
     mimeType: "application/vnd.openlibra+json",
     buffer: readFileSync(savedDocumentPath),
   });
-  await page.getByText("Engine study.olibra", { exact: true }).waitFor();
+  await page.getByText("Engine study.libra", { exact: true }).waitFor();
   assert.equal(await pages.count(), pageCount);
 
   const benchmarkPage = page
