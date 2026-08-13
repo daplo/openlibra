@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
@@ -113,11 +113,11 @@ try {
   await waitForTool("select");
   const requestAction = page
     .locator('[data-testid^="layer-node-"][data-node-kind="group"]')
-    .filter({ hasText: "↙ Request" })
+    .filter({ hasText: "Request" })
     .first();
   const sendAction = page
     .locator('[data-testid^="layer-node-"][data-node-kind="group"]')
-    .filter({ hasText: "↗ Send" })
+    .filter({ hasText: "Send" })
     .first();
   await requestAction.locator(".layer-main").dblclick();
   await page.waitForTimeout(350);
@@ -595,8 +595,86 @@ try {
   await page
     .getByText("This page is empty. Add a frame or rectangle.")
     .waitFor();
+  const addedPage = pages.last();
+  await addedPage.getByRole("button", { name: /^Rename / }).click();
+  const pageNameInput = addedPage.locator("input.layer-name-input");
+  await pageNameInput.fill("Renamed UI page");
+  await pageNameInput.press("Enter");
+  await addedPage.getByText("Renamed UI page", { exact: true }).waitFor();
+  await addedPage.getByRole("button", { name: /^Delete / }).click();
+  assert.equal(await pages.count(), pageCount);
 
-  await page.getByRole("button", { name: /1K Nodes/ }).click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Save/ }).click();
+  const download = await downloadPromise;
+  assert.equal(download.suggestedFilename(), "Engine study.olibra");
+  const savedDocumentPath = await download.path();
+  assert.ok(savedDocumentPath);
+
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  const projectLibrary = page.getByTestId("project-library-view");
+  await projectLibrary.waitFor();
+  const recentProject = projectLibrary
+    .locator(".project-card")
+    .filter({ hasText: "Engine study.olibra" });
+  await recentProject.waitFor();
+  assert.ok((await recentProject.locator(".project-preview-node").count()) > 0);
+  await page.getByRole("button", { name: "Editor", exact: true }).click();
+
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^New document/ }).click();
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-testid^="page-node-"]').length === 1,
+  );
+  await page.getByText("Untitled.olibra", { exact: true }).waitFor();
+  await page
+    .getByText("This page is empty. Add a frame or rectangle.")
+    .waitFor();
+
+  await page.getByRole("button", { name: "+ Add page" }).click();
+  assert.equal(await pages.count(), 2);
+  await page.locator("button.file-name").click();
+  await page
+    .locator(".document-switcher-actions")
+    .getByRole("menuitem", { name: /^New/ })
+    .click();
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-testid^="page-node-"]').length === 1,
+  );
+
+  await page.locator("button.file-name").click();
+  const documentSwitcher = page.locator(".document-switcher-menu");
+  await documentSwitcher.getByText("2 pages · 0 objects").waitFor();
+  await documentSwitcher
+    .locator(".document-switcher-item")
+    .filter({ hasText: "Engine study.olibra" })
+    .click();
+  await page.getByText("Engine study.olibra", { exact: true }).waitFor();
+  assert.equal(await pages.count(), pageCount);
+
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^New document/ }).click();
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-testid^="page-node-"]').length === 1,
+  );
+
+  const fileChooserPromise = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "File", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^Open/ }).click();
+  const fileChooser = await fileChooserPromise;
+  await fileChooser.setFiles({
+    name: "Engine study.olibra",
+    mimeType: "application/vnd.openlibra+json",
+    buffer: readFileSync(savedDocumentPath),
+  });
+  await page.getByText("Engine study.olibra", { exact: true }).waitFor();
+  assert.equal(await pages.count(), pageCount);
+
+  const benchmarkPage = page
+    .getByTestId(/^page-node-/)
+    .filter({ hasText: "1K Nodes" });
+  await benchmarkPage.locator(".page-main").click();
   await page.waitForFunction(() => {
     const rows = [...document.querySelectorAll(".metrics > div")];
     return rows.some(
@@ -605,12 +683,7 @@ try {
         row.querySelector("dd")?.textContent === "1,000",
     );
   });
-  assert.equal(
-    await page
-      .getByRole("button", { name: /1K Nodes/ })
-      .getAttribute("data-active"),
-    "true",
-  );
+  assert.equal(await benchmarkPage.getAttribute("data-active"), "true");
   assert.deepEqual(
     browserErrors,
     [],

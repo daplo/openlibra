@@ -17,12 +17,16 @@ import {
   ChevronRight,
   Component,
   FileArchive,
+  FilePlus2,
+  FolderClock,
+  FolderOpen,
   Frame,
   Hand,
   MessageCircle,
   Moon,
   MousePointer2,
   Redo2,
+  Save,
   Square,
   Sun,
   Type,
@@ -56,6 +60,13 @@ import {
   preferredArtboardId,
   rgbaToHex,
 } from "./editor/model-utils";
+import {
+  createProjectPreview,
+  listRecentDocuments,
+  removeRecentDocument,
+  storeRecentDocument,
+  type RecentDocument,
+} from "./editor/recent-documents";
 import type {
   DocumentReadModel,
   Mode,
@@ -88,6 +99,8 @@ export function App() {
   const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
   const nodesByIdRef = useRef<Map<string, NodeSummary>>(new Map());
   const fileMenuRef = useRef<HTMLDivElement>(null);
+  const documentSwitcherRef = useRef<HTMLDivElement>(null);
+  const documentFileInputRef = useRef<HTMLInputElement>(null);
   const figmaFileInputRef = useRef<HTMLInputElement>(null);
   const editMenuRef = useRef<HTMLDivElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
@@ -96,6 +109,12 @@ export function App() {
   const [rightPanelWidth, setRightPanelWidth] = useState(250);
   const [libraryComponentId, setLibraryComponentId] = useState<string>();
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [librarySection, setLibrarySection] = useState<
+    "projects" | "components"
+  >("projects");
+  const [recentDocuments, setRecentDocuments] = useState<RecentDocument[]>([]);
+  const [currentRecentDocumentId, setCurrentRecentDocumentId] =
+    useState<string>();
   const [canvasContextMenu, setCanvasContextMenu] = useState<{
     x: number;
     y: number;
@@ -113,6 +132,9 @@ export function App() {
   });
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
+  const [documentName, setDocumentName] = useState("Engine study.olibra");
+  const [isDocumentDirty, setIsDocumentDirty] = useState(false);
+  const savedDocumentJsonRef = useRef<string | undefined>(undefined);
   const [editingTextId, setEditingTextId] = useState<string>();
   const editingTextInitialValueRef = useRef("");
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
@@ -134,6 +156,7 @@ export function App() {
     canRedo: false,
   });
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [documentSwitcherOpen, setDocumentSwitcherOpen] = useState(false);
   const [editMenuOpen, setEditMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [rulersVisible, setRulersVisible] = useState(
@@ -228,6 +251,10 @@ export function App() {
     };
   }, [canvasContextMenu]);
 
+  useEffect(() => {
+    void refreshRecentDocuments();
+  }, []);
+
   function refreshDocument(selection = selectedNodeIdsRef.current) {
     const engine = engineRef.current;
     if (!engine) return;
@@ -244,6 +271,10 @@ export function App() {
       setSelectedNodeIds(validSelection);
     }
     setDocumentModel(model);
+    if (savedDocumentJsonRef.current !== undefined)
+      setIsDocumentDirty(
+        engine.document_json() !== savedDocumentJsonRef.current,
+      );
     setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
     const selected = model.nodes.filter((node) =>
       validSelection.includes(node.id),
@@ -326,6 +357,176 @@ export function App() {
         : undefined,
     );
     setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
+    setIsDocumentDirty(true);
+  }
+
+  function replaceDocumentEngine(
+    engine: DocumentEngine,
+    name: string,
+    recentDocumentId?: string,
+  ) {
+    flushPendingSceneRefresh();
+    const previous = engineRef.current;
+    engineRef.current = engine;
+    savedDocumentJsonRef.current = engine.document_json();
+    setDocumentName(name);
+    setCurrentRecentDocumentId(recentDocumentId);
+    setIsDocumentDirty(false);
+    setIsolationRootId(undefined);
+    setEditingTextId(undefined);
+    setLibraryOpen(false);
+    setLibraryComponentId(undefined);
+    copiedNodeIdsRef.current = [];
+    setError(undefined);
+    refreshDocument([]);
+    rendererRef.current?.resetView();
+    previous?.free();
+  }
+
+  async function preserveCurrentDocument() {
+    const engine = engineRef.current;
+    if (!engine) return true;
+    const id = currentRecentDocumentId ?? crypto.randomUUID();
+    const stored = await rememberDocument(engine, documentName, id);
+    return (
+      stored ||
+      window.confirm(
+        "This document could not be stored locally. Continue and discard it?",
+      )
+    );
+  }
+
+  async function newDocument() {
+    setFileMenuOpen(false);
+    setDocumentSwitcherOpen(false);
+    if (!(await preserveCurrentDocument())) return;
+    replaceDocumentEngine(DocumentEngine.new_blank(), "Untitled.olibra");
+  }
+
+  async function requestOpenDocument() {
+    setFileMenuOpen(false);
+    setDocumentSwitcherOpen(false);
+    if (!(await preserveCurrentDocument())) return;
+    documentFileInputRef.current?.click();
+  }
+
+  async function openDocument(file: File) {
+    if (file.size > 250 * 1024 * 1024) {
+      setError("Open Libra documents must be 250 MB or smaller.");
+      return;
+    }
+    try {
+      const engine = DocumentEngine.load_json(await file.text());
+      const recentDocumentId = crypto.randomUUID();
+      replaceDocumentEngine(engine, file.name, recentDocumentId);
+      void rememberDocument(engine, file.name, recentDocumentId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : `Could not open document: ${String(cause)}`,
+      );
+    }
+  }
+
+  function saveDocument() {
+    const engine = engineRef.current;
+    if (!engine) return;
+    setFileMenuOpen(false);
+    const json = engine.document_json();
+    const blob = new Blob([json], { type: "application/vnd.openlibra+json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = /\.(olibra|json)$/i.test(documentName)
+      ? documentName
+      : `${documentName}.olibra`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    savedDocumentJsonRef.current = json;
+    setIsDocumentDirty(false);
+    void rememberDocument(
+      engine,
+      documentName,
+      currentRecentDocumentId ?? crypto.randomUUID(),
+    );
+  }
+
+  async function refreshRecentDocuments() {
+    try {
+      setRecentDocuments(await listRecentDocuments());
+    } catch {
+      // IndexedDB may be unavailable in hardened/private browser contexts.
+      setRecentDocuments([]);
+    }
+  }
+
+  async function rememberDocument(
+    engine: DocumentEngine,
+    name: string,
+    id: string,
+  ) {
+    const json = engine.document_json();
+    const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+    try {
+      await storeRecentDocument({
+        id,
+        name,
+        json,
+        updatedAt: Date.now(),
+        pageCount: model.pages.length,
+        objectCount: model.nodes.length,
+        preview: createProjectPreview(model),
+      });
+      setCurrentRecentDocumentId(id);
+      await refreshRecentDocuments();
+      return true;
+    } catch {
+      setError(
+        "The document is available, but its recent-project preview could not be stored.",
+      );
+      return false;
+    }
+  }
+
+  async function openRecentDocument(document: RecentDocument) {
+    setDocumentSwitcherOpen(false);
+    if (document.id === currentRecentDocumentId) {
+      setLibraryOpen(false);
+      return;
+    }
+    if (!(await preserveCurrentDocument())) return;
+    try {
+      const engine = DocumentEngine.load_json(document.json);
+      replaceDocumentEngine(engine, document.name, document.id);
+      void touchRecentDocument(document);
+      setLibraryOpen(false);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : `Could not open recent document: ${String(cause)}`,
+      );
+    }
+  }
+
+  async function touchRecentDocument(document: RecentDocument) {
+    try {
+      await storeRecentDocument({ ...document, updatedAt: Date.now() });
+      await refreshRecentDocuments();
+    } catch {
+      // Opening the stored project succeeded; a recency update is optional.
+    }
+  }
+
+  async function removeRecentProject(id: string) {
+    try {
+      await removeRecentDocument(id);
+      if (currentRecentDocumentId === id) setCurrentRecentDocumentId(undefined);
+      await refreshRecentDocuments();
+    } catch {
+      setError("Could not remove the project from recent documents.");
+    }
   }
 
   function flushPendingSceneRefresh() {
@@ -401,6 +602,26 @@ export function App() {
     rendererRef.current?.resetView();
   }
 
+  function renamePage(id: string, name: string) {
+    const trimmedName = name.trim();
+    if (!trimmedName || !engineRef.current?.rename_page(id, trimmedName))
+      return;
+    refreshDocument();
+  }
+
+  function deletePage(id: string) {
+    if (!engineRef.current?.delete_page(id)) {
+      setError(
+        documentModel.pages.length <= 1
+          ? "A document must contain at least one page."
+          : "Pages containing component masters cannot be deleted.",
+      );
+      return;
+    }
+    refreshDocument([]);
+    rendererRef.current?.resetView();
+  }
+
   function deleteSelected() {
     if (!selectionCanBeEdited()) return;
     const engine = engineRef.current;
@@ -423,6 +644,15 @@ export function App() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
+  }
+
+  function ungroupSelected(node: NodeSummary) {
+    if (!selectionCanBeEdited()) return;
+    if (!engineRef.current?.ungroup_nodes(node.id)) return;
+    const childIds = documentModel.nodes
+      .filter((candidate) => candidate.parent_id === node.id)
+      .map((candidate) => candidate.id);
+    refreshDocument(childIds);
   }
 
   function copySelection() {
@@ -1243,6 +1473,9 @@ export function App() {
       zoomToFit: () => rendererRef.current?.zoomToFit(),
       toggleRulers: () => setRulersVisible((visible) => !visible),
       toggleGrid: () => setGridVisible((visible) => !visible),
+      newDocument,
+      openDocument: requestOpenDocument,
+      saveDocument,
       deleteSelection: deleteSelected,
       undo,
       redo,
@@ -1276,7 +1509,6 @@ export function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let disposed = false;
-    let localEngine: DocumentEngine | undefined;
     let localRenderer: OpenLibraRenderer | undefined;
     let localInputController: EditorInputController | undefined;
 
@@ -1290,8 +1522,8 @@ export function App() {
       if (disposed) return;
       const startedAt = performance.now();
       const engine = new DocumentEngine();
-      localEngine = engine;
       engineRef.current = engine;
+      savedDocumentJsonRef.current = engine.document_json();
       setDocumentModel(
         JSON.parse(engine.read_model_json()) as DocumentReadModel,
       );
@@ -1309,7 +1541,6 @@ export function App() {
       if (disposed) {
         renderer.dispose();
         engine.free();
-        localEngine = undefined;
         return;
       }
       rendererRef.current = renderer;
@@ -1317,14 +1548,14 @@ export function App() {
       renderer.setTheme(themeRef.current);
       renderer.setInteractionHandlers({
         hitTest: (x, y) => {
-          const id = engine.hit_test(x, y);
+          const id = engineRef.current?.hit_test(x, y) ?? "";
           return id || undefined;
         },
         select: () => {},
         moveSelection: (dx, dy) => moveSelection(dx, dy),
         resizeSelection: (handle, dx, dy) => resizeSelection(handle, dx, dy),
         beginEdit: () => {
-          engine.begin_geometry_transaction(
+          engineRef.current?.begin_geometry_transaction(
             JSON.stringify(selectedNodeIdsRef.current),
           );
         },
@@ -1333,11 +1564,11 @@ export function App() {
           const isBenchmark =
             (documentModelRef.current?.nodes.length ?? 0) >= 1_000;
           if (!isBenchmark) {
-            engine.reparent_nodes_to_artboards(
+            engineRef.current?.reparent_nodes_to_artboards(
               JSON.stringify(selectedNodeIdsRef.current),
             );
           }
-          engine.end_transaction();
+          engineRef.current?.end_transaction();
           if (isBenchmark) {
             patchSelectedNodesFromEngine();
             scheduleSceneRefresh();
@@ -1363,12 +1594,12 @@ export function App() {
       disposed = true;
       localInputController?.dispose();
       localRenderer?.dispose();
-      localEngine?.free();
+      engineRef.current?.free();
       if (rendererRef.current === localRenderer)
         rendererRef.current = undefined;
       if (inputControllerRef.current === localInputController)
         inputControllerRef.current = undefined;
-      if (engineRef.current === localEngine) engineRef.current = undefined;
+      engineRef.current = undefined;
     };
     // Renderer ownership is intentionally tied to the canvas mount lifecycle.
     // Interaction callbacks read mutable engine and selection refs.
@@ -1393,6 +1624,21 @@ export function App() {
     return () =>
       document.removeEventListener("pointerdown", closeFileMenu, true);
   }, [fileMenuOpen]);
+
+  useEffect(() => {
+    if (!documentSwitcherOpen) return;
+    function closeDocumentSwitcher(event: PointerEvent) {
+      if (
+        event.target instanceof Node &&
+        documentSwitcherRef.current?.contains(event.target)
+      )
+        return;
+      setDocumentSwitcherOpen(false);
+    }
+    document.addEventListener("pointerdown", closeDocumentSwitcher, true);
+    return () =>
+      document.removeEventListener("pointerdown", closeDocumentSwitcher, true);
+  }, [documentSwitcherOpen]);
 
   useEffect(() => {
     if (!editMenuOpen) return;
@@ -1463,7 +1709,82 @@ export function App() {
         <div className="brand">
           <span className="mark">OL</span>
           <strong>Open Libra</strong>
-          <span className="file-name">Engine study</span>
+          <div className="document-switcher" ref={documentSwitcherRef}>
+            <button
+              className={`file-name ${documentSwitcherOpen ? "active" : ""}`}
+              aria-haspopup="menu"
+              aria-expanded={documentSwitcherOpen}
+              onClick={() => {
+                setFileMenuOpen(false);
+                setDocumentSwitcherOpen((open) => !open);
+              }}
+            >
+              {documentName}
+              {isDocumentDirty ? " •" : ""}
+              <ChevronRight aria-hidden="true" />
+            </button>
+            {documentSwitcherOpen && (
+              <div className="document-switcher-menu" role="menu">
+                <div className="document-switcher-heading">Documents</div>
+                <button
+                  className="document-switcher-item current"
+                  role="menuitem"
+                  onClick={() => setDocumentSwitcherOpen(false)}
+                >
+                  <Check aria-hidden="true" />
+                  <span>
+                    <strong>{documentName}</strong>
+                    <small>
+                      {isDocumentDirty ? "Unsaved changes" : "Current"}
+                    </small>
+                  </span>
+                </button>
+                {recentDocuments
+                  .filter((document) => document.id !== currentRecentDocumentId)
+                  .slice(0, 6)
+                  .map((document) => (
+                    <button
+                      className="document-switcher-item"
+                      role="menuitem"
+                      key={document.id}
+                      onClick={() => void openRecentDocument(document)}
+                    >
+                      <span className="document-switcher-dot" />
+                      <span>
+                        <strong>{document.name}</strong>
+                        <small>
+                          {document.pageCount} page
+                          {document.pageCount === 1 ? "" : "s"} ·{" "}
+                          {document.objectCount.toLocaleString()} objects
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                <div className="document-switcher-actions">
+                  <button role="menuitem" onClick={() => void newDocument()}>
+                    <FilePlus2 aria-hidden="true" /> New
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => void requestOpenDocument()}
+                  >
+                    <FolderOpen aria-hidden="true" /> Open…
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setDocumentSwitcherOpen(false);
+                      setLibraryComponentId(undefined);
+                      setLibrarySection("projects");
+                      setLibraryOpen(true);
+                    }}
+                  >
+                    <FolderClock aria-hidden="true" /> View all
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <div className="menu-anchor" ref={fileMenuRef}>
             <button
               className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
@@ -1479,6 +1800,35 @@ export function App() {
             </button>
             {fileMenuOpen && (
               <div className="edit-menu file-menu" role="menu">
+                <button role="menuitem" onClick={newDocument}>
+                  <FilePlus2 />
+                  <span>New document</span>
+                  <kbd>⌘N</kbd>
+                </button>
+                <button role="menuitem" onClick={requestOpenDocument}>
+                  <FolderOpen />
+                  <span>Open…</span>
+                  <kbd>⌘O</kbd>
+                </button>
+                <button role="menuitem" onClick={saveDocument}>
+                  <Save />
+                  <span>Save</span>
+                  <kbd>⌘S</kbd>
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    setLibraryComponentId(undefined);
+                    setLibrarySection("projects");
+                    setLibraryOpen(true);
+                  }}
+                >
+                  <FolderClock />
+                  <span>Recent projects…</span>
+                  <kbd />
+                </button>
+                <div className="menu-section-label">Import</div>
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -1492,6 +1842,18 @@ export function App() {
                 </button>
               </div>
             )}
+            <input
+              ref={documentFileInputRef}
+              className="hidden-file-input"
+              data-testid="open-document-input"
+              type="file"
+              accept=".olibra,.json,application/json,application/vnd.openlibra+json"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void openDocument(file);
+                event.currentTarget.value = "";
+              }}
+            />
             <input
               ref={figmaFileInputRef}
               className="hidden-file-input"
@@ -1612,6 +1974,7 @@ export function App() {
             className={`library-trigger ${libraryOpen ? "active" : ""}`}
             onClick={() => {
               setLibraryComponentId(undefined);
+              setLibrarySection("projects");
               setLibraryOpen((open) => !open);
             }}
           >
@@ -1635,7 +1998,14 @@ export function App() {
         <LibraryView
           model={documentModel}
           focusedComponentId={libraryComponentId}
+          section={librarySection}
+          recentDocuments={recentDocuments}
+          currentRecentDocumentId={currentRecentDocumentId}
           onBack={() => setLibraryOpen(false)}
+          onSectionChange={setLibrarySection}
+          onNewDocument={newDocument}
+          onOpenRecent={openRecentDocument}
+          onRemoveRecent={(id) => void removeRecentProject(id)}
           onInsert={createComponentInstance}
           onEditMain={editMainComponent}
           onAddVariant={duplicateComponentVariant}
@@ -1660,6 +2030,8 @@ export function App() {
             onSelectNode={selectNode}
             onAddPage={addPage}
             onSelectPage={selectPage}
+            onRenamePage={renamePage}
+            onDeletePage={deletePage}
             onNavigateNode={(node) => rendererRef.current?.centerOnBounds(node)}
             onReorderNode={(draggedId, targetId, before) => {
               if (
@@ -1709,6 +2081,7 @@ export function App() {
             onAddSelectedComponentVariant={addSelectedComponentVariant}
             onOpenComponentLibrary={(componentId) => {
               setLibraryComponentId(componentId);
+              setLibrarySection("components");
               setLibraryOpen(true);
             }}
             componentWorkspace={
@@ -1984,6 +2357,7 @@ export function App() {
                 onAlign={alignSelected}
                 onDelete={deleteSelected}
                 onGroup={groupSelected}
+                onUngroup={ungroupSelected}
                 onCreateComponent={createComponent}
                 onInstanceVariantChange={changeInstanceVariant}
                 onStyleChange={updateNodeStyle}

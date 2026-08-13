@@ -828,6 +828,7 @@ impl Document {
         if node.locked || shadows.len() > 16 {
             return false;
         }
+        let mut shadow_ids = HashSet::new();
         for shadow in &mut shadows {
             if !shadow.offset_x.is_finite()
                 || !shadow.offset_y.is_finite()
@@ -843,6 +844,10 @@ impl Document {
             shadow.spread = shadow.spread.clamp(-500.0, 500.0);
             for channel in &mut shadow.color {
                 *channel = channel.clamp(0.0, 1.0);
+            }
+            if shadow.id.is_nil() || !shadow_ids.insert(shadow.id) {
+                shadow.id = Uuid::now_v7();
+                shadow_ids.insert(shadow.id);
             }
         }
         node.shadows = shadows;

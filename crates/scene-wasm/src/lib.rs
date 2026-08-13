@@ -13,7 +13,7 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 const FLOATS_PER_RECT: usize = 24;
 
 #[derive(serde::Deserialize)]
@@ -130,6 +130,40 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
                         && node.get("text").is_none()
                     {
                         node["text"] = serde_json::to_value(TextStyle::default()).unwrap();
+                    }
+                    if schema < 8 {
+                        let node_id = node
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or("missing-node");
+                        let shadow_ids: Vec<_> = node
+                            .get("shadows")
+                            .and_then(|shadows| shadows.as_array())
+                            .map(|shadows| {
+                                shadows
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, _)| {
+                                        Uuid::new_v5(
+                                            &Uuid::NAMESPACE_OID,
+                                            format!("open-libra-shadow:{node_id}:{index}")
+                                                .as_bytes(),
+                                        )
+                                        .to_string()
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if let Some(shadows) = node
+                            .get_mut("shadows")
+                            .and_then(|shadows| shadows.as_array_mut())
+                        {
+                            for (shadow, id) in shadows.iter_mut().zip(shadow_ids) {
+                                if shadow.get("id").is_none() {
+                                    shadow["id"] = serde_json::Value::String(id);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -322,6 +356,17 @@ impl DocumentEngine {
         console_error_panic_hook::set_once();
         Self {
             document: Document::demo(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            transaction_start: None,
+            geometry_transaction_start: None,
+        }
+    }
+
+    pub fn new_blank() -> Self {
+        console_error_panic_hook::set_once();
+        Self {
+            document: Document::blank(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             transaction_start: None,

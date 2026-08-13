@@ -36,6 +36,7 @@ export type VariableBindings = {
   padding: Array<EntityId | null>;
 };
 export type ShadowSummary = {
+  id: EntityId;
   kind: "outer" | "inner";
   color: number[];
   offset_x: number;

@@ -50,6 +50,7 @@ export function Properties(props: {
   onAlign: (alignment: string) => void;
   onDelete: () => void;
   onGroup: () => void;
+  onUngroup: (node: NodeSummary) => void;
   onCreateComponent: (node: NodeSummary) => void;
   onInstanceVariantChange: (node: NodeSummary, variantId: string) => void;
   onStyleChange: (
@@ -144,6 +145,14 @@ export function Properties(props: {
           {selected.length > 1 && (
             <button className="primary-button" onClick={props.onGroup}>
               Group selection
+            </button>
+          )}
+          {selected.length === 1 && node.kind === "group" && (
+            <button
+              className="primary-button"
+              onClick={() => props.onUngroup(node)}
+            >
+              Ungroup
             </button>
           )}
         </PropertySection>
@@ -834,6 +843,7 @@ function ShadowControls({
     onChange([
       ...shadows,
       {
+        id: crypto.randomUUID(),
         kind: "outer",
         color: [0, 0, 0, 0.25],
         offset_x: 0,
@@ -846,7 +856,7 @@ function ShadowControls({
   return (
     <div className="shadow-list">
       {shadows.map((shadow, index) => (
-        <div className="shadow-effect" key={index}>
+        <div className="shadow-effect" key={shadow.id}>
           <div className="shadow-effect-header">
             <button
               className={`effect-toggle ${shadow.enabled ? "active" : ""}`}
@@ -870,7 +880,11 @@ function ShadowControls({
               onClick={() =>
                 onChange([
                   ...shadows.slice(0, index + 1),
-                  { ...shadow, color: [...shadow.color] },
+                  {
+                    ...shadow,
+                    id: crypto.randomUUID(),
+                    color: [...shadow.color],
+                  },
                   ...shadows.slice(index + 1),
                 ])
               }

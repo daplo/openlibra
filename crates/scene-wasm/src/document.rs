@@ -4,6 +4,27 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 impl Document {
+    pub(crate) fn blank() -> Self {
+        let page_id = Uuid::now_v7();
+        Self {
+            schema_version: SCHEMA_VERSION,
+            active_page_id: page_id,
+            pages: vec![Page {
+                id: page_id,
+                name: "Page 1".into(),
+                description: String::new(),
+                nodes: Vec::new(),
+                benchmark_node_count: None,
+                benchmark_modified_node_ids: Vec::new(),
+            }],
+            color_library: Vec::new(),
+            number_variables: Vec::new(),
+            text_styles: Vec::new(),
+            media_assets: Vec::new(),
+            components: Vec::new(),
+        }
+    }
+
     pub(crate) fn demo() -> Self {
         let home_id = Uuid::now_v7();
         let mut document = Self {

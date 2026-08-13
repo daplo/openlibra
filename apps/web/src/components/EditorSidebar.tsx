@@ -31,6 +31,8 @@ export function Panel({
   onSelectNode,
   onAddPage,
   onSelectPage,
+  onRenamePage,
+  onDeletePage,
   onNavigateNode,
   onReorderNode,
   onToggleLock,
@@ -58,6 +60,8 @@ export function Panel({
   onSelectNode: (id: string, additive: boolean) => void;
   onAddPage: () => void;
   onSelectPage: (id: string) => void;
+  onRenamePage: (id: string, name: string) => void;
+  onDeletePage: (id: string) => void;
   onNavigateNode: (node: NodeSummary) => void;
   onReorderNode: (draggedId: string, targetId: string, before: boolean) => void;
   onToggleLock: (id: string, locked: boolean) => void;
@@ -85,6 +89,8 @@ export function Panel({
   const [panelTab, setPanelTab] = useState<"layers" | "assets">("layers");
   const [editingNodeId, setEditingNodeId] = useState<string>();
   const [editingName, setEditingName] = useState("");
+  const [editingPageId, setEditingPageId] = useState<string>();
+  const [editingPageName, setEditingPageName] = useState("");
   const [draggedNodeId, setDraggedNodeId] = useState<string>();
   const [dropTarget, setDropTarget] = useState<{
     id: string;
@@ -404,21 +410,82 @@ export function Panel({
       ) : (
         <div className="page-list">
           {model.pages.map((page) => (
-            <button
+            <div
               key={page.id}
               data-testid={`page-node-${page.id}`}
               data-page-id={page.id}
               data-active={page.id === model.active_page_id}
               className={`page-row ${page.id === model.active_page_id ? "active" : ""}`}
-              onClick={() => onSelectPage(page.id)}
               title={page.description || page.name}
             >
-              <span>▾</span>
-              <span className="page-copy">
-                <strong>{page.name}</strong>
-                {page.description && <small>{page.description}</small>}
-              </span>
-            </button>
+              <div
+                className="page-main"
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelectPage(page.id)}
+                onDoubleClick={() => {
+                  setEditingPageId(page.id);
+                  setEditingPageName(page.name);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ")
+                    onSelectPage(page.id);
+                }}
+              >
+                <span>▾</span>
+                <span className="page-copy">
+                  {editingPageId === page.id ? (
+                    <input
+                      className="layer-name-input"
+                      value={editingPageName}
+                      autoFocus
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) =>
+                        setEditingPageName(event.target.value)
+                      }
+                      onBlur={() => {
+                        onRenamePage(page.id, editingPageName);
+                        setEditingPageId(undefined);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") event.currentTarget.blur();
+                        if (event.key === "Escape") {
+                          setEditingPageName(page.name);
+                          setEditingPageId(undefined);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <strong>{page.name}</strong>
+                  )}
+                  {page.description && <small>{page.description}</small>}
+                </span>
+              </div>
+              {editingPageId !== page.id && (
+                <>
+                  <button
+                    className="page-action"
+                    aria-label={`Rename ${page.name}`}
+                    title="Rename page"
+                    onClick={() => {
+                      setEditingPageId(page.id);
+                      setEditingPageName(page.name);
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    className="page-action"
+                    aria-label={`Delete ${page.name}`}
+                    title="Delete page"
+                    disabled={model.pages.length <= 1}
+                    onClick={() => onDeletePage(page.id)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            </div>
           ))}
           <button className="add-page" onClick={onAddPage}>
             + Add page

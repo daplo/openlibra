@@ -49,6 +49,15 @@ fn demo_document_has_stable_renderable_nodes() {
 }
 
 #[test]
+fn blank_document_starts_with_one_empty_page() {
+    let engine = DocumentEngine::new_blank();
+    assert_eq!(engine.document.pages.len(), 1);
+    assert_eq!(engine.document.active_page().name, "Page 1");
+    assert!(engine.document.active_page().nodes.is_empty());
+    assert!(!engine.can_undo());
+}
+
+#[test]
 fn media_assets_create_reusable_non_rectangle_nodes() {
     let mut document = Document::demo();
     let original_rectangles = document.scene_data().len();
@@ -730,6 +739,31 @@ fn schema_five_documents_gain_empty_media_assets_and_node_defaults() {
 }
 
 #[test]
+fn schema_seven_shadow_ids_migrate_deterministically() {
+    let mut value = serde_json::to_value(Document::demo()).unwrap();
+    value["schema_version"] = serde_json::json!(7);
+    let shadow = value["pages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|page| page["nodes"].as_array_mut().unwrap())
+        .flat_map(|node| node["shadows"].as_array_mut().unwrap())
+        .next()
+        .unwrap();
+    shadow.as_object_mut().unwrap().remove("id");
+
+    let mut first = value.clone();
+    let mut second = value;
+    migrate_legacy_document_ids(&mut first);
+    migrate_legacy_document_ids(&mut second);
+
+    let first: Document = serde_json::from_value(first).unwrap();
+    let second: Document = serde_json::from_value(second).unwrap();
+    assert_eq!(first.schema_version, 8);
+    assert_eq!(first, second);
+}
+
+#[test]
 fn text_nodes_are_created_editable_serialized_and_undoable() {
     let mut engine = DocumentEngine::new();
     let id = engine.add_text();
@@ -1280,6 +1314,27 @@ fn multiple_outer_and_inner_shadows_are_serialized_and_rendered() {
     let json = serde_json::to_string(&document).unwrap();
     let restored: Document = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.active_page().nodes[0].shadows.len(), 2);
+}
+
+#[test]
+fn duplicate_shadow_ids_are_replaced() {
+    let mut document = Document::demo();
+    let id = document.active_page().nodes[0].id;
+    let duplicate_id = Uuid::now_v7();
+    let shadow = Shadow {
+        id: duplicate_id,
+        kind: ShadowKind::Outer,
+        color: [0.0, 0.0, 0.0, 0.25],
+        offset_x: 0.0,
+        offset_y: 8.0,
+        blur: 16.0,
+        spread: 0.0,
+        enabled: true,
+    };
+    assert!(document.set_node_shadows(id, vec![shadow.clone(), shadow]));
+    let shadows = &document.active_node(id).unwrap().shadows;
+    assert_eq!(shadows[0].id, duplicate_id);
+    assert_ne!(shadows[0].id, shadows[1].id);
 }
 
 #[test]

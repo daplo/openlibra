@@ -23,6 +23,9 @@ export type EditorInputHandlers = {
   zoomToFit: () => void;
   toggleRulers: () => void;
   toggleGrid: () => void;
+  newDocument: () => void;
+  openDocument: () => void;
+  saveDocument: () => void;
   deleteSelection: () => void;
   undo: () => void;
   redo: () => void;
@@ -115,6 +118,21 @@ export class EditorInputController {
   private onKeyDown = (event: KeyboardEvent) => {
     if (isEditableTarget(event.target)) return;
     const key = event.key.toLowerCase();
+    if ((event.metaKey || event.ctrlKey) && key === "n") {
+      event.preventDefault();
+      this.handlers.newDocument();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && key === "o") {
+      event.preventDefault();
+      this.handlers.openDocument();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && key === "s") {
+      event.preventDefault();
+      this.handlers.saveDocument();
+      return;
+    }
     if (key === "v") this.handlers.setTool("select");
     if (key === "h") this.handlers.setTool("hand");
     if (event.code === "Space" && !event.repeat) {

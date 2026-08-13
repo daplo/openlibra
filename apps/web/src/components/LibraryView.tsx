@@ -1,22 +1,48 @@
-import { ArrowLeft, Component, CopyPlus, Pencil, Plus } from "lucide-react";
+import {
+  ArrowLeft,
+  Component,
+  CopyPlus,
+  FilePlus2,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import type {
   ComponentDefinition,
   DocumentReadModel,
   NodeSummary,
 } from "../editor/types";
 import { rgbaToHex } from "../editor/model-utils";
+import type {
+  ProjectPreview,
+  RecentDocument,
+} from "../editor/recent-documents";
 
 export function LibraryView({
   model,
   focusedComponentId,
+  section,
+  recentDocuments,
+  currentRecentDocumentId,
   onBack,
+  onSectionChange,
+  onNewDocument,
+  onOpenRecent,
+  onRemoveRecent,
   onInsert,
   onEditMain,
   onAddVariant,
 }: {
   model: DocumentReadModel;
   focusedComponentId?: string;
+  section: "projects" | "components";
+  recentDocuments: RecentDocument[];
+  currentRecentDocumentId?: string;
   onBack: () => void;
+  onSectionChange: (section: "projects" | "components") => void;
+  onNewDocument: () => void;
+  onOpenRecent: (document: RecentDocument) => void;
+  onRemoveRecent: (id: string) => void;
   onInsert: (componentId: string, variantId: string) => void;
   onEditMain: (sourceRootId: string) => void;
   onAddVariant: (
@@ -25,6 +51,7 @@ export function LibraryView({
     name: string,
   ) => void;
 }) {
+  const activeSection = focusedComponentId ? "components" : section;
   const components = focusedComponentId
     ? model.components.filter(
         (component) => component.id === focusedComponentId,
@@ -38,12 +65,42 @@ export function LibraryView({
           Editor
         </button>
         <div>
-          <span className="eyebrow">Document library</span>
-          <h1>Components</h1>
-          <p>Reusable definitions, variants, and live previews.</p>
+          <span className="eyebrow">Library</span>
+          <h1>
+            {activeSection === "projects" ? "Recent projects" : "Components"}
+          </h1>
+          <p>
+            {activeSection === "projects"
+              ? "Continue working from a recent local project."
+              : "Reusable definitions, variants, and live previews."}
+          </p>
         </div>
       </header>
-      {components.length === 0 ? (
+      {!focusedComponentId && (
+        <nav className="library-tabs" aria-label="Library sections">
+          <button
+            className={activeSection === "projects" ? "active" : ""}
+            onClick={() => onSectionChange("projects")}
+          >
+            Projects
+          </button>
+          <button
+            className={activeSection === "components" ? "active" : ""}
+            onClick={() => onSectionChange("components")}
+          >
+            Components
+          </button>
+        </nav>
+      )}
+      {activeSection === "projects" ? (
+        <ProjectLibrary
+          documents={recentDocuments}
+          currentDocumentId={currentRecentDocumentId}
+          onNewDocument={onNewDocument}
+          onOpen={onOpenRecent}
+          onRemove={onRemoveRecent}
+        />
+      ) : components.length === 0 ? (
         <div className="library-empty">
           <Component aria-hidden="true" />
           <strong>No components yet</strong>
@@ -65,6 +122,109 @@ export function LibraryView({
       )}
     </section>
   );
+}
+
+function ProjectLibrary({
+  documents,
+  currentDocumentId,
+  onNewDocument,
+  onOpen,
+  onRemove,
+}: {
+  documents: RecentDocument[];
+  currentDocumentId?: string;
+  onNewDocument: () => void;
+  onOpen: (document: RecentDocument) => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="project-library-grid" data-testid="project-library-view">
+      <button className="project-new-card" onClick={onNewDocument}>
+        <FilePlus2 aria-hidden="true" />
+        <strong>New document</strong>
+        <span>Start with an empty page</span>
+      </button>
+      {documents.map((document) => (
+        <article
+          className={`project-card ${document.id === currentDocumentId ? "current" : ""}`}
+          data-testid={`recent-project-${document.id}`}
+          key={document.id}
+        >
+          <button
+            className="project-card-open"
+            onClick={() => onOpen(document)}
+          >
+            <ProjectPreviewImage preview={document.preview} />
+            <span className="project-card-copy">
+              <strong>{document.name}</strong>
+              <small>
+                {document.pageCount} page{document.pageCount === 1 ? "" : "s"} ·{" "}
+                {document.objectCount.toLocaleString()} objects
+              </small>
+              <small>{formatRecentDate(document.updatedAt)}</small>
+            </span>
+          </button>
+          <button
+            className="project-card-remove"
+            aria-label={`Remove ${document.name} from recent projects`}
+            title="Remove from recent projects"
+            onClick={() => onRemove(document.id)}
+          >
+            <Trash2 aria-hidden="true" />
+          </button>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function ProjectPreviewImage({ preview }: { preview: ProjectPreview }) {
+  const scale = Math.min(
+    1,
+    280 / preview.bounds.width,
+    160 / preview.bounds.height,
+  );
+  return (
+    <span className="project-preview">
+      <span
+        className="project-preview-scene"
+        style={{
+          width: preview.bounds.width * scale,
+          height: preview.bounds.height * scale,
+        }}
+      >
+        {preview.nodes.map((node) => (
+          <span
+            className={`project-preview-node ${node.kind}`}
+            key={node.id}
+            style={{
+              left: (node.x - preview.bounds.x) * scale,
+              top: (node.y - preview.bounds.y) * scale,
+              width: Math.max(1, node.width * scale),
+              height: Math.max(1, node.height * scale),
+              borderRadius: node.corner_radii[0] * scale,
+              background: rgba(node.fill),
+              fontSize: Math.max(4, 10 * scale),
+            }}
+          >
+            {node.kind === "text" ? node.text : ""}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+function rgba(color: number[]) {
+  const [red = 0, green = 0, blue = 0, alpha = 1] = color;
+  return `rgba(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)}, ${alpha})`;
+}
+
+function formatRecentDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
 }
 
 function ComponentLibraryCard({
