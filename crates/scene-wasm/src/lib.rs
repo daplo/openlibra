@@ -13,7 +13,7 @@ use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 9;
 const FLOATS_PER_RECT: usize = 24;
 
 #[derive(serde::Deserialize)]
@@ -429,6 +429,48 @@ impl DocumentEngine {
         let parent_id = parse_entity_id(&parent_id);
         self.mutate(|document| document.add_text_to((!parent_id.is_nil()).then_some(parent_id)))
             .to_string()
+    }
+
+    pub fn add_vector_shape(&mut self, shape: String, parent_id: String) -> String {
+        let parent_id = parse_entity_id(&parent_id);
+        let geometry = match shape.as_str() {
+            "line" => VectorGeometry::Line,
+            "polygon" => VectorGeometry::Polygon { sides: 6 },
+            "star" => VectorGeometry::Star {
+                points: 5,
+                inner_ratio: 0.45,
+            },
+            _ => VectorGeometry::Ellipse,
+        };
+        self.mutate(|document| {
+            document.add_vector_shape(geometry, (!parent_id.is_nil()).then_some(parent_id))
+        })
+        .to_string()
+    }
+
+    pub fn update_vector_parameters(
+        &mut self,
+        node_id: String,
+        count: u16,
+        inner_ratio: f32,
+    ) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| document.update_vector_parameters(node_id, count, inner_ratio))
+    }
+
+    pub fn set_vector_fill_rule(&mut self, node_id: String, rule: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        let rule = if rule == "evenodd" {
+            FillRule::Evenodd
+        } else {
+            FillRule::Nonzero
+        };
+        self.mutate(|document| document.set_vector_fill_rule(node_id, rule))
+    }
+
+    pub fn convert_vector_to_path(&mut self, node_id: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| document.convert_vector_to_path(node_id))
     }
 
     #[allow(clippy::too_many_arguments)]

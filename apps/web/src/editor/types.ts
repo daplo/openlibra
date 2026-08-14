@@ -60,7 +60,7 @@ export type TextStyleSummary = {
 export type NodeSummary = {
   id: EntityId;
   name: string;
-  kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon";
+  kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon" | "vector";
   parent_id?: EntityId;
   x: number;
   y: number;
@@ -91,6 +91,7 @@ export type NodeSummary = {
   guide_opacity: number;
   locked: boolean;
   text?: TextStyleSummary;
+  vector?: VectorData;
   variable_bindings: VariableBindings;
   text_style_id?: EntityId;
   asset_id?: EntityId;
@@ -101,6 +102,28 @@ export type NodeSummary = {
   instance_root_id?: EntityId;
   text_override: boolean;
   asset_override: boolean;
+};
+
+export type VectorData = {
+  geometry:
+    | { type: "ellipse" }
+    | { type: "line" }
+    | { type: "polygon"; sides: number }
+    | { type: "star"; points: number; inner_ratio: number }
+    | { type: "path"; contours: VectorContour[] };
+  fill_rule: "nonzero" | "evenodd";
+};
+
+export type VectorContour = {
+  points: VectorPoint[];
+  closed: boolean;
+};
+
+export type VectorPoint = {
+  position: [number, number];
+  handle_in?: [number, number];
+  handle_out?: [number, number];
+  point_type: "corner" | "smooth" | "symmetric";
 };
 export type DocumentReadModel = {
   schema_version: number;

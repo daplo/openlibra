@@ -31,7 +31,7 @@ export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 type SelectionNodeBounds = {
   id: string;
-  kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon";
+  kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon" | "vector";
   x: number;
   y: number;
   width: number;

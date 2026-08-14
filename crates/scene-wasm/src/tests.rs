@@ -759,8 +759,58 @@ fn schema_seven_shadow_ids_migrate_deterministically() {
 
     let first: Document = serde_json::from_value(first).unwrap();
     let second: Document = serde_json::from_value(second).unwrap();
-    assert_eq!(first.schema_version, 8);
+    assert_eq!(first.schema_version, SCHEMA_VERSION);
     assert_eq!(first, second);
+}
+
+#[test]
+fn vector_shapes_are_native_serializable_nodes() {
+    let mut engine = DocumentEngine::new_blank();
+    for shape in ["ellipse", "line", "polygon", "star"] {
+        let id = engine.add_vector_shape(shape.into(), String::new());
+        let node: Node = serde_json::from_str(&engine.node_json(id)).unwrap();
+        assert_eq!(node.kind, NodeKind::Vector);
+        assert!(node.vector.is_some());
+    }
+    let document: Document = serde_json::from_str(&engine.document_json()).unwrap();
+    document.validate().unwrap();
+    assert_eq!(document.active_page().nodes.len(), 4);
+}
+
+#[test]
+fn invalid_vector_geometry_is_rejected() {
+    let mut document = Document::blank();
+    let id = document.add_vector_shape(VectorGeometry::Polygon { sides: 6 }, None);
+    document.active_node_mut(id).unwrap().vector = Some(VectorData {
+        geometry: VectorGeometry::Star {
+            points: 2,
+            inner_ratio: f32::NAN,
+        },
+        fill_rule: FillRule::Nonzero,
+    });
+    assert!(document.validate().is_err());
+}
+
+#[test]
+fn vector_parameters_and_conversion_are_undoable() {
+    let mut engine = DocumentEngine::new_blank();
+    let id = engine.add_vector_shape("star".into(), String::new());
+    assert!(engine.update_vector_parameters(id.clone(), 8, 0.3));
+    assert!(engine.set_vector_fill_rule(id.clone(), "evenodd".into()));
+    assert!(engine.convert_vector_to_path(id.clone()));
+    let node: Node = serde_json::from_str(&engine.node_json(id.clone())).unwrap();
+    let vector = node.vector.unwrap();
+    assert_eq!(vector.fill_rule, FillRule::Evenodd);
+    let VectorGeometry::Path { contours } = vector.geometry else {
+        panic!("star should convert to a path");
+    };
+    assert_eq!(contours[0].points.len(), 16);
+    assert!(engine.undo());
+    let node: Node = serde_json::from_str(&engine.node_json(id)).unwrap();
+    assert!(matches!(
+        node.vector.unwrap().geometry,
+        VectorGeometry::Star { points: 8, .. }
+    ));
 }
 
 #[test]

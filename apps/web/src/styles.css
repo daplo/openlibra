@@ -1579,6 +1579,62 @@ canvas[data-tool="hand"]:active {
   box-shadow: 0 14px 40px #000a;
   transform: translateX(-50%);
 }
+.shape-menu {
+  position: absolute;
+  z-index: 3;
+  top: 54px;
+  left: 50%;
+  width: 220px;
+  padding: 10px;
+  border: 1px solid #3a3d45;
+  border-radius: 10px;
+  background: #1c1e23f5;
+  box-shadow: 0 14px 40px #000a;
+  transform: translateX(-50%);
+}
+.stage.with-rulers .shape-menu {
+  top: calc(var(--ruler-size) + 54px);
+}
+.stage.toolbar-bottom .shape-menu,
+.stage.with-rulers.toolbar-bottom .shape-menu {
+  top: auto;
+  bottom: 54px;
+}
+.shape-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 5px 9px;
+  font-size: 12px;
+}
+.shape-menu-header button {
+  color: #969ba5;
+  background: transparent;
+  font-size: 18px;
+}
+.shape-menu-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.shape-menu-grid button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: #d6d9df;
+  background: transparent;
+  font-size: 11px;
+}
+.shape-menu-grid button:hover {
+  background: #ffffff0d;
+}
+.shape-menu-grid svg {
+  width: 15px;
+  height: 15px;
+}
 .stage.with-rulers .artboard-menu {
   top: calc(var(--ruler-size) + 54px);
 }
@@ -2322,6 +2378,13 @@ canvas[data-tool="hand"]:active {
   height: 100%;
   pointer-events: none;
 }
+.vector-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
 .text-content-input {
   box-sizing: border-box;
   width: 100%;
@@ -2898,7 +2961,8 @@ canvas[data-tool="hand"]:active {
 }
 :root[data-theme="light"] .tool-rail,
 :root[data-theme="light"] .zoom-controls,
-:root[data-theme="light"] .artboard-menu {
+:root[data-theme="light"] .artboard-menu,
+:root[data-theme="light"] .shape-menu {
   border-color: #d0d3d9;
   background: #ffffffee;
   box-shadow: 0 8px 24px #66708532;
@@ -2912,10 +2976,12 @@ canvas[data-tool="hand"]:active {
   color: #123d2d;
   background: #82e6b8;
 }
-:root[data-theme="light"] .artboard-menu section > button {
+:root[data-theme="light"] .artboard-menu section > button,
+:root[data-theme="light"] .shape-menu-grid button {
   color: #30343c;
 }
-:root[data-theme="light"] .artboard-menu section > button:hover {
+:root[data-theme="light"] .artboard-menu section > button:hover,
+:root[data-theme="light"] .shape-menu-grid button:hover {
   background: #eceef2;
 }
 :root[data-theme="light"] .property-section summary {

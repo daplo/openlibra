@@ -714,6 +714,26 @@ try {
   await page.getByText("Engine study.libra", { exact: true }).waitFor();
   assert.equal(await pages.count(), pageCount);
 
+  await page.getByTitle("Shapes", { exact: true }).click();
+  await page.getByRole("dialog", { name: "Shape tools" }).waitFor();
+  await page
+    .getByRole("dialog", { name: "Shape tools" })
+    .getByRole("button", { name: "Star" })
+    .click();
+  await page.getByText("Vector", { exact: true }).waitFor();
+  const starPoints = page.getByRole("spinbutton", { name: "Points" });
+  assert.equal(await starPoints.inputValue(), "5");
+  await starPoints.fill("8");
+  await starPoints.press("Enter");
+  assert.equal(await starPoints.inputValue(), "8");
+  const svgDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export SVG" }).click();
+  assert.equal((await svgDownloadPromise).suggestedFilename(), "Star.svg");
+  await page.getByRole("button", { name: "Convert to path" }).click();
+  await page.getByRole("button", { name: "Convert to path" }).waitFor({
+    state: "detached",
+  });
+
   const benchmarkPage = page
     .getByTestId(/^page-node-/)
     .filter({ hasText: "1K Nodes" });
@@ -734,7 +754,7 @@ try {
   );
 
   console.log(
-    "UI smoke tests passed (typography, variables, text styles, images, icons, corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
+    "UI smoke tests passed (typography, variables, vectors, SVG export, images, icons, corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",
   );
 } finally {
   await browser?.close();
