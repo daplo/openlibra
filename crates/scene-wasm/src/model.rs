@@ -143,6 +143,8 @@ pub struct Node {
     pub(crate) locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) text: Option<TextStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) vector: Option<VectorData>,
     #[serde(default)]
     pub(crate) variable_bindings: VariableBindings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -405,6 +407,58 @@ pub enum NodeKind {
     Text,
     Image,
     Icon,
+    Vector,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VectorData {
+    pub(crate) geometry: VectorGeometry,
+    #[serde(default)]
+    pub(crate) fill_rule: FillRule,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VectorGeometry {
+    Ellipse,
+    Line,
+    Polygon { sides: u16 },
+    Star { points: u16, inner_ratio: f32 },
+    Path { contours: Vec<VectorContour> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VectorContour {
+    pub(crate) points: Vec<VectorPoint>,
+    pub(crate) closed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct VectorPoint {
+    pub(crate) position: [f32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) handle_in: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) handle_out: Option<[f32; 2]>,
+    #[serde(default)]
+    pub(crate) point_type: VectorPointType,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VectorPointType {
+    #[default]
+    Corner,
+    Smooth,
+    Symmetric,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FillRule {
+    #[default]
+    Nonzero,
+    Evenodd,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]

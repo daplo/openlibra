@@ -1497,6 +1497,153 @@ impl Document {
         }
         true
     }
+
+    pub(crate) fn update_vector_parameters(
+        &mut self,
+        node_id: EntityId,
+        count: u16,
+        inner_ratio: f32,
+    ) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(vector) = &mut node.vector else {
+            return false;
+        };
+        match &mut vector.geometry {
+            VectorGeometry::Polygon { sides } => *sides = count.clamp(3, 100),
+            VectorGeometry::Star {
+                points,
+                inner_ratio: ratio,
+            } => {
+                *points = count.clamp(3, 100);
+                *ratio = inner_ratio.clamp(0.01, 0.99);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    pub(crate) fn set_vector_fill_rule(&mut self, node_id: EntityId, rule: FillRule) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(vector) = &mut node.vector else {
+            return false;
+        };
+        if vector.fill_rule == rule {
+            return false;
+        }
+        vector.fill_rule = rule;
+        true
+    }
+
+    pub(crate) fn convert_vector_to_path(&mut self, node_id: EntityId) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(vector) = &mut node.vector else {
+            return false;
+        };
+        let Some(contours) = contours_for_geometry(&vector.geometry) else {
+            return false;
+        };
+        vector.geometry = VectorGeometry::Path { contours };
+        true
+    }
+}
+
+fn contours_for_geometry(geometry: &VectorGeometry) -> Option<Vec<VectorContour>> {
+    let points = match geometry {
+        VectorGeometry::Ellipse => {
+            let kappa = 0.552_284_8;
+            return Some(vec![VectorContour {
+                closed: true,
+                points: vec![
+                    vector_point(
+                        [0.5, 0.0],
+                        Some([0.5 - kappa / 2.0, 0.0]),
+                        Some([0.5 + kappa / 2.0, 0.0]),
+                    ),
+                    vector_point(
+                        [1.0, 0.5],
+                        Some([1.0, 0.5 - kappa / 2.0]),
+                        Some([1.0, 0.5 + kappa / 2.0]),
+                    ),
+                    vector_point(
+                        [0.5, 1.0],
+                        Some([0.5 + kappa / 2.0, 1.0]),
+                        Some([0.5 - kappa / 2.0, 1.0]),
+                    ),
+                    vector_point(
+                        [0.0, 0.5],
+                        Some([0.0, 0.5 + kappa / 2.0]),
+                        Some([0.0, 0.5 - kappa / 2.0]),
+                    ),
+                ],
+            }]);
+        }
+        VectorGeometry::Line => {
+            return Some(vec![VectorContour {
+                closed: false,
+                points: vec![
+                    vector_point([0.0, 0.5], None, None),
+                    vector_point([1.0, 0.5], None, None),
+                ],
+            }]);
+        }
+        VectorGeometry::Polygon { sides } => regular_shape_points(*sides as usize, 1.0),
+        VectorGeometry::Star {
+            points,
+            inner_ratio,
+        } => regular_shape_points(*points as usize * 2, *inner_ratio),
+        VectorGeometry::Path { .. } => return None,
+    };
+    Some(vec![VectorContour {
+        points,
+        closed: true,
+    }])
+}
+
+fn regular_shape_points(count: usize, inner_ratio: f32) -> Vec<VectorPoint> {
+    (0..count)
+        .map(|index| {
+            let radius = if index % 2 == 1 { inner_ratio } else { 1.0 } * 0.5;
+            let angle =
+                -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::TAU / count as f32;
+            vector_point(
+                [0.5 + angle.cos() * radius, 0.5 + angle.sin() * radius],
+                None,
+                None,
+            )
+        })
+        .collect()
+}
+
+fn vector_point(
+    position: [f32; 2],
+    handle_in: Option<[f32; 2]>,
+    handle_out: Option<[f32; 2]>,
+) -> VectorPoint {
+    VectorPoint {
+        position,
+        handle_in,
+        handle_out,
+        point_type: if handle_in.is_some() || handle_out.is_some() {
+            VectorPointType::Smooth
+        } else {
+            VectorPointType::Corner
+        },
+    }
 }
 
 fn clean_asset_name(name: String, fallback: &str) -> String {

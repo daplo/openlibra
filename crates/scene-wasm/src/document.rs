@@ -1740,6 +1740,7 @@ impl Document {
             guide_opacity: default_guide_opacity(),
             locked: false,
             text: (kind == NodeKind::Text).then(TextStyle::default),
+            vector: None,
             variable_bindings: VariableBindings::default(),
             text_style_id: None,
             asset_id: None,
@@ -1772,6 +1773,7 @@ impl Document {
                 [160.0 + offset, 160.0 + offset, 240.0, 80.0],
                 [0.08, 0.09, 0.12, 1.0],
             ),
+            NodeKind::Vector => self.add_vector_shape(VectorGeometry::Ellipse, None),
             _ => self.insert_node(
                 "Rectangle",
                 kind,
@@ -1780,6 +1782,44 @@ impl Document {
                 [0.46, 0.91, 0.72, 1.0],
             ),
         }
+    }
+
+    pub(crate) fn add_vector_shape(
+        &mut self,
+        geometry: VectorGeometry,
+        parent_id: Option<EntityId>,
+    ) -> EntityId {
+        let index = self.active_page().nodes.len() as f32;
+        let offset = (index % 12.0) * 18.0;
+        let (name, width, height) = match &geometry {
+            VectorGeometry::Ellipse => ("Ellipse", 140.0, 140.0),
+            VectorGeometry::Line => ("Line", 180.0, 2.0),
+            VectorGeometry::Polygon { .. } => ("Polygon", 150.0, 150.0),
+            VectorGeometry::Star { .. } => ("Star", 160.0, 160.0),
+            VectorGeometry::Path { .. } => ("Vector", 160.0, 120.0),
+        };
+        let valid_parent = parent_id.filter(|id| {
+            self.active_node(*id)
+                .is_some_and(|node| matches!(node.kind, NodeKind::Frame | NodeKind::Group))
+        });
+        let id = self.insert_node(
+            name,
+            NodeKind::Vector,
+            valid_parent,
+            [160.0 + offset, 160.0 + offset, width, height],
+            [0.46, 0.91, 0.72, 1.0],
+        );
+        let node = self.active_node_mut(id).expect("inserted vector exists");
+        node.stroke_width = if matches!(geometry, VectorGeometry::Line) {
+            2.0
+        } else {
+            0.0
+        };
+        node.vector = Some(VectorData {
+            geometry,
+            fill_rule: FillRule::Nonzero,
+        });
+        id
     }
 
     pub(crate) fn add_rectangle_to(&mut self, parent_id: Option<EntityId>) -> EntityId {
@@ -2199,6 +2239,15 @@ impl Document {
                 if !owned_ids.insert(node.id) {
                     return Err(format!("Node {} belongs to more than one page", node.id));
                 }
+                if node.kind == NodeKind::Vector && node.vector.is_none() {
+                    return Err(format!("Vector node {} has no geometry", node.id));
+                }
+                if node.kind != NodeKind::Vector && node.vector.is_some() {
+                    return Err(format!("Non-vector node {} has vector geometry", node.id));
+                }
+                if let Some(vector) = &node.vector {
+                    validate_vector(node.id, vector)?;
+                }
                 if let Some(parent_id) = node.parent_id {
                     let Some(parent) = nodes_by_id.get(&parent_id) else {
                         return Err(format!(
@@ -2307,6 +2356,41 @@ impl Document {
     }
 }
 
+fn validate_vector(node_id: EntityId, vector: &VectorData) -> Result<(), String> {
+    match &vector.geometry {
+        VectorGeometry::Polygon { sides } if !(3..=100).contains(sides) => {
+            return Err(format!("Vector node {node_id} has invalid polygon sides"));
+        }
+        VectorGeometry::Star {
+            points,
+            inner_ratio,
+        } if !(3..=100).contains(points)
+            || !inner_ratio.is_finite()
+            || !(0.01..=0.99).contains(inner_ratio) =>
+        {
+            return Err(format!("Vector node {node_id} has invalid star geometry"));
+        }
+        VectorGeometry::Path { contours } => {
+            for contour in contours {
+                if contour.points.len() < 2
+                    || contour.points.iter().any(|point| {
+                        point
+                            .position
+                            .iter()
+                            .chain(point.handle_in.iter().flatten())
+                            .chain(point.handle_out.iter().flatten())
+                            .any(|value| !value.is_finite())
+                    })
+                {
+                    return Err(format!("Vector node {node_id} has an invalid contour"));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn benchmark_node(id: EntityId, index: usize, columns: usize) -> Node {
     let column = index % columns;
     let row = index / columns;
@@ -2344,6 +2428,7 @@ fn benchmark_node(id: EntityId, index: usize, columns: usize) -> Node {
         guide_opacity: default_guide_opacity(),
         locked: false,
         text: None,
+        vector: None,
         variable_bindings: VariableBindings::default(),
         text_style_id: None,
         asset_id: None,

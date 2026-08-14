@@ -28,6 +28,7 @@ import {
   Redo2,
   Save,
   Square,
+  Shapes,
   Sun,
   Type,
   Undo2,
@@ -41,8 +42,10 @@ import {
   SelectionOverlay,
   SpacingOverlay,
   TextOverlay,
+  VectorOverlay,
 } from "./components/CanvasOverlays";
 import { ArtboardMenu } from "./components/ArtboardMenu";
+import { ShapeMenu, type VectorShape } from "./components/ShapeMenu";
 import { Inspect, Review, ToolButton } from "./components/EditorChrome";
 import { Panel } from "./components/EditorSidebar";
 import { Properties } from "./components/PropertiesPanel";
@@ -50,6 +53,7 @@ import { LibraryView } from "./components/LibraryView";
 import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
 import { figmaFileToImport } from "./editor/figma-import";
 import { exportFramePng } from "./editor/export-frame";
+import { exportVectorSvg } from "./editor/export-vector";
 import {
   EditorInputController,
   type EditorInputHandlers,
@@ -164,6 +168,7 @@ export function App() {
   const [editingTextId, setEditingTextId] = useState<string>();
   const editingTextInitialValueRef = useRef("");
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
+  const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
   const [documentModel, setDocumentModel] = useState<DocumentReadModel>({
     schema_version: 1,
     active_page_id: "",
@@ -796,6 +801,54 @@ export function App() {
         ? ((JSON.parse(created) as NodeSummary).text?.content ?? "")
         : "";
       setEditingTextId(id);
+    }
+  }
+
+  function addVectorShape(shape: VectorShape) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const parentId = preferredArtboardId(
+      documentModel.nodes,
+      selectedNodeIdsRef.current,
+    );
+    const id = engine.add_vector_shape(shape, parentId ?? "");
+    refreshDocument([id]);
+    setShapeMenuOpen(false);
+  }
+
+  function updateVectorParameters(
+    node: NodeSummary,
+    count: number,
+    innerRatio: number,
+  ) {
+    if (
+      engineRef.current?.update_vector_parameters(
+        node.id,
+        Math.round(count),
+        innerRatio,
+      )
+    )
+      refreshDocument([node.id]);
+  }
+
+  function updateVectorFillRule(
+    node: NodeSummary,
+    fillRule: "nonzero" | "evenodd",
+  ) {
+    if (engineRef.current?.set_vector_fill_rule(node.id, fillRule))
+      refreshDocument([node.id]);
+  }
+
+  function convertVectorToPath(node: NodeSummary) {
+    if (engineRef.current?.convert_vector_to_path(node.id))
+      refreshDocument([node.id]);
+  }
+
+  function exportSelectedVector(node: NodeSummary) {
+    try {
+      exportVectorSvg(node);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
 
@@ -2543,13 +2596,26 @@ export function App() {
               icon={<Frame />}
               disabled={mode !== "design"}
               active={artboardMenuOpen}
-              onClick={() => setArtboardMenuOpen((open) => !open)}
+              onClick={() => {
+                setShapeMenuOpen(false);
+                setArtboardMenuOpen((open) => !open);
+              }}
             />
             <ToolButton
               label="Rectangle"
               icon={<Square />}
               disabled={mode !== "design"}
               onClick={() => addNode("rectangle")}
+            />
+            <ToolButton
+              label="Shapes"
+              icon={<Shapes />}
+              active={shapeMenuOpen}
+              disabled={mode !== "design"}
+              onClick={() => {
+                setArtboardMenuOpen(false);
+                setShapeMenuOpen((open) => !open);
+              }}
             />
             <ToolButton
               label="Text"
@@ -2568,6 +2634,12 @@ export function App() {
             <ArtboardMenu
               onChoose={addArtboard}
               onClose={() => setArtboardMenuOpen(false)}
+            />
+          )}
+          {shapeMenuOpen && (
+            <ShapeMenu
+              onChoose={addVectorShape}
+              onClose={() => setShapeMenuOpen(false)}
             />
           )}
 
@@ -2604,6 +2676,10 @@ export function App() {
               rendererRef={rendererRef}
               nodes={documentModel.nodes}
               assets={documentModel.media_assets}
+            />
+            <VectorOverlay
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
             />
             <TextOverlay
               rendererRef={rendererRef}
@@ -2803,6 +2879,10 @@ export function App() {
                 onInstanceDetach={detachComponentInstance}
                 onInstanceSwap={swapComponentInstance}
                 onGoToMainComponent={goToMainComponent}
+                onVectorParametersChange={updateVectorParameters}
+                onVectorFillRuleChange={updateVectorFillRule}
+                onVectorConvertToPath={convertVectorToPath}
+                onExportVector={exportSelectedVector}
                 onStyleChange={updateNodeStyle}
                 onBoundsChange={updateNodeBounds}
                 onOpacityChange={updateNodeOpacity}

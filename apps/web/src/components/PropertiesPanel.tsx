@@ -58,6 +58,17 @@ export function Properties(props: {
   onInstanceDetach: (node: NodeSummary) => void;
   onInstanceSwap: (node: NodeSummary, componentId: string) => void;
   onGoToMainComponent: (node: NodeSummary) => void;
+  onVectorParametersChange: (
+    node: NodeSummary,
+    count: number,
+    innerRatio: number,
+  ) => void;
+  onVectorFillRuleChange: (
+    node: NodeSummary,
+    fillRule: "nonzero" | "evenodd",
+  ) => void;
+  onVectorConvertToPath: (node: NodeSummary) => void;
+  onExportVector: (node: NodeSummary) => void;
   onStyleChange: (
     node: NodeSummary,
     change: Partial<{
@@ -217,6 +228,90 @@ export function Properties(props: {
                 />
               )}
             </PropertySection>
+            {node.kind === "vector" && node.vector && (
+              <PropertySection title="Vector">
+                <label className="select-control">
+                  <span>Fill rule</span>
+                  <select
+                    value={node.vector.fill_rule}
+                    onChange={(event) =>
+                      props.onVectorFillRuleChange(
+                        node,
+                        event.target.value as "nonzero" | "evenodd",
+                      )
+                    }
+                  >
+                    <option value="nonzero">Nonzero</option>
+                    <option value="evenodd">Even-odd</option>
+                  </select>
+                </label>
+                {node.vector.geometry.type === "polygon" && (
+                  <NumberControl
+                    label="Sides"
+                    value={node.vector.geometry.sides}
+                    min={3}
+                    max={100}
+                    step={1}
+                    live
+                    onChange={(value) =>
+                      props.onVectorParametersChange(node, value, 0.45)
+                    }
+                  />
+                )}
+                {node.vector.geometry.type === "star" && (
+                  <>
+                    <NumberControl
+                      label="Points"
+                      value={node.vector.geometry.points}
+                      min={3}
+                      max={100}
+                      step={1}
+                      live
+                      onChange={(value) =>
+                        props.onVectorParametersChange(
+                          node,
+                          value,
+                          node.vector?.geometry.type === "star"
+                            ? node.vector.geometry.inner_ratio
+                            : 0.45,
+                        )
+                      }
+                    />
+                    <NumberControl
+                      label="Inset"
+                      value={Math.round(node.vector.geometry.inner_ratio * 100)}
+                      min={1}
+                      max={99}
+                      step={1}
+                      live
+                      onChange={(value) =>
+                        props.onVectorParametersChange(
+                          node,
+                          node.vector?.geometry.type === "star"
+                            ? node.vector.geometry.points
+                            : 5,
+                          value / 100,
+                        )
+                      }
+                    />
+                  </>
+                )}
+                {node.vector.geometry.type !== "path" && (
+                  <button
+                    className="secondary-button"
+                    onClick={() => props.onVectorConvertToPath(node)}
+                  >
+                    Convert to path
+                  </button>
+                )}
+                <button
+                  className="secondary-button"
+                  onClick={() => props.onExportVector(node)}
+                >
+                  Export SVG
+                </button>
+              </PropertySection>
+            )}
             {node.component_id && node.instance_root_id === node.id && (
               <PropertySection title="Component">
                 <label className="select-control">
