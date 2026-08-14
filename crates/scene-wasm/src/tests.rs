@@ -814,6 +814,40 @@ fn vector_parameters_and_conversion_are_undoable() {
 }
 
 #[test]
+fn vector_points_can_be_moved_cut_joined_and_deleted() {
+    let mut engine = DocumentEngine::new_blank();
+    let id = engine.add_vector_shape("star".into(), String::new());
+    assert!(engine.convert_vector_to_path(id.clone()));
+
+    engine.begin_transaction();
+    assert!(engine.move_vector_point(id.clone(), 0, 0, 0.25, 0.1));
+    assert!(engine.move_vector_point(id.clone(), 0, 0, 0.3, 0.15));
+    engine.end_transaction();
+    let moved: Node = serde_json::from_str(&engine.node_json(id.clone())).unwrap();
+    let VectorGeometry::Path { contours } = moved.vector.unwrap().geometry else {
+        panic!("converted star should be a path");
+    };
+    assert_eq!(contours[0].points[0].position, [0.3, 0.15]);
+    assert!(engine.undo());
+
+    assert!(engine.cut_vector_path(id.clone(), 0, 3));
+    let cut: Node = serde_json::from_str(&engine.node_json(id.clone())).unwrap();
+    let VectorGeometry::Path { contours } = cut.vector.unwrap().geometry else {
+        panic!("cut vector should remain a path");
+    };
+    assert!(!contours[0].closed);
+    assert!(engine.cut_vector_path(id.clone(), 0, 4));
+    assert!(engine.join_vector_path(id.clone()));
+    assert!(engine.delete_vector_point(id.clone(), 0, 2));
+    let edited: Node = serde_json::from_str(&engine.node_json(id)).unwrap();
+    let VectorGeometry::Path { contours } = edited.vector.unwrap().geometry else {
+        panic!("edited vector should remain a path");
+    };
+    assert_eq!(contours.len(), 1);
+    assert!(!contours[0].closed);
+}
+
+#[test]
 fn text_nodes_are_created_editable_serialized_and_undoable() {
     let mut engine = DocumentEngine::new();
     let id = engine.add_text();

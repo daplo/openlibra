@@ -128,6 +128,7 @@ export function Inspect({
       )}
       <pre className="code-block">{css}</pre>
       <button
+        type="button"
         className="secondary-button"
         onClick={() => {
           void navigator.clipboard.writeText(css).then(() => {
@@ -184,7 +185,9 @@ export function Review() {
   return (
     <>
       <h2>Comments</h2>
-      <button className="primary-button">Place comment</button>
+      <button type="button" className="primary-button">
+        Place comment
+      </button>
       <EmptyState text="Anchored collaborative threads arrive in Level 9." />
     </>
   );
@@ -205,6 +208,7 @@ export function ToolButton({
 }) {
   return (
     <button
+      type="button"
       className={active ? "active" : ""}
       disabled={disabled}
       title={label}

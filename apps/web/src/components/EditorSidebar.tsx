@@ -285,6 +285,7 @@ export function Panel({
         >
           {canCollapse ? (
             <button
+              type="button"
               className={`layer-chevron ${collapsed ? "collapsed" : ""}`}
               aria-label={`${collapsed ? "Expand" : "Collapse"} ${node.name}`}
               onClick={(event) => {
@@ -363,6 +364,7 @@ export function Panel({
           </div>
           {!node.locked && editingNodeId !== node.id && (
             <button
+              type="button"
               className="rename-layer"
               aria-label={`Rename ${node.name}`}
               title="Rename layer"
@@ -375,6 +377,7 @@ export function Panel({
             </button>
           )}
           <button
+            type="button"
             className={`lock-layer ${node.locked ? "active" : ""}`}
             aria-label={`${node.locked ? "Unlock" : "Lock"} ${node.name}`}
             title={node.locked ? "Unlock layer" : "Lock layer"}
@@ -492,6 +495,7 @@ export function Panel({
               {editingPageId !== page.id && (
                 <>
                   <button
+                    type="button"
                     className="page-action"
                     aria-label={`Rename ${page.name}`}
                     title="Rename page"
@@ -503,6 +507,7 @@ export function Panel({
                     ✎
                   </button>
                   <button
+                    type="button"
                     className="page-action"
                     aria-label={`Delete ${page.name}`}
                     title="Delete page"
@@ -515,7 +520,7 @@ export function Panel({
               )}
             </div>
           ))}
-          <button className="add-page" onClick={onAddPage}>
+          <button type="button" className="add-page" onClick={onAddPage}>
             + Add page
           </button>
         </div>
@@ -551,6 +556,7 @@ export function Panel({
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
+            type="button"
             role="menuitem"
             onClick={() => {
               onOpenComponentLibrary(contextMenu.componentId);
@@ -607,6 +613,7 @@ function PanelTabs({
   return (
     <div className="panel-tabs">
       <button
+        type="button"
         className={active === "layers" ? "active" : ""}
         onClick={() => onChange("layers")}
       >
@@ -614,6 +621,7 @@ function PanelTabs({
         Layers
       </button>
       <button
+        type="button"
         className={active === "assets" ? "active" : ""}
         onClick={() => onChange("assets")}
       >
@@ -729,6 +737,7 @@ function VaultPanel({
             .filter((asset) => asset.kind === "image")
             .map((asset) => (
               <button
+                type="button"
                 key={asset.id}
                 className="media-asset-card"
                 title={`Insert ${asset.name}`}
@@ -783,6 +792,7 @@ function VaultPanel({
               <small>{component.variants.length} variant(s)</small>
               {component.variants.map((variant) => (
                 <button
+                  type="button"
                   key={variant.id}
                   onClick={() =>
                     onAddComponentInstance(component.id, variant.id)
@@ -792,6 +802,7 @@ function VaultPanel({
                 </button>
               ))}
               <button
+                type="button"
                 disabled={
                   !hasSelectedComponentCandidate(model, selectedNodeIds)
                 }
@@ -823,6 +834,7 @@ function VaultPanel({
             onChange={(event) => setVariableValue(event.target.value)}
           />
           <button
+            type="button"
             className="vault-icon-button"
             aria-label="Add variable"
             title="Add variable"
@@ -858,6 +870,7 @@ function VaultPanel({
                 }
               />
               <button
+                type="button"
                 className="vault-delete"
                 aria-label={`Delete ${variable.name}`}
                 onClick={() => onDeleteNumberVariable(variable.id)}
@@ -881,6 +894,7 @@ function VaultPanel({
             onChange={(event) => setStyleName(event.target.value)}
           />
           <button
+            type="button"
             className="vault-icon-button"
             aria-label="Add from selection"
             disabled={!hasSelectedText}
@@ -957,6 +971,7 @@ function VaultPanel({
                   />
                 </div>
                 <button
+                  type="button"
                   className="vault-icon-button"
                   aria-label={`Update ${asset.name} from selection`}
                   title="Update from selection"
@@ -967,6 +982,7 @@ function VaultPanel({
                 </button>
               </div>
               <button
+                type="button"
                 className="vault-delete"
                 aria-label={`Delete ${asset.name}`}
                 onClick={() => onDeleteTextStyle(asset.id)}
@@ -1021,6 +1037,7 @@ function IconLibraryButton({
 }) {
   return (
     <button
+      type="button"
       className="icon-library-button"
       data-testid={`icon-library-${icon.name}`}
       aria-label={`Insert ${icon.name}`}

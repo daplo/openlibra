@@ -14,7 +14,7 @@ export function ArtboardMenu({
     <div className="artboard-menu" role="dialog" aria-label="Artboard presets">
       <div className="artboard-menu-header">
         <strong>New artboard</strong>
-        <button onClick={onClose} aria-label="Close">
+        <button type="button" onClick={onClose} aria-label="Close">
           ×
         </button>
       </div>
@@ -25,6 +25,7 @@ export function ArtboardMenu({
             (preset) => preset.category === category,
           ).map((preset) => (
             <button
+              type="button"
               key={`${preset.name}-${preset.width}`}
               onClick={() => onChoose(preset)}
             >

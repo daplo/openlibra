@@ -3,15 +3,77 @@ import { ensureGoogleFont, isGoogleFont } from "./font-catalog";
 import { mediaImageSource } from "./media-source";
 import { rgbaToHex } from "./model-utils";
 
-export async function exportFramePng(
-  frame: NodeSummary,
+export type RasterExportOptions = {
+  format: "png" | "jpeg";
+  scale: number;
+  quality?: number;
+  background?: string;
+  filename?: string;
+};
+
+export async function exportNodeRaster(
+  target: NodeSummary,
   nodes: NodeSummary[],
   assets: MediaAsset[],
-  scale: number,
+  options: RasterExportOptions,
 ) {
-  if (frame.kind !== "frame") throw new Error("Select a frame to export.");
-  const width = Math.round(frame.width * scale);
-  const height = Math.round(frame.height * scale);
+  const descendants = nodes.filter((node) =>
+    isDescendant(node, target.id, nodes),
+  );
+  await exportRaster(
+    {
+      name: target.name,
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      drawables: [target, ...descendants],
+    },
+    assets,
+    options,
+  );
+}
+
+export async function exportPageRaster(
+  name: string,
+  nodes: NodeSummary[],
+  assets: MediaAsset[],
+  options: RasterExportOptions,
+) {
+  if (nodes.length === 0) throw new Error("The current page is empty.");
+  const left = Math.min(...nodes.map((node) => node.x));
+  const top = Math.min(...nodes.map((node) => node.y));
+  const right = Math.max(...nodes.map((node) => node.x + node.width));
+  const bottom = Math.max(...nodes.map((node) => node.y + node.height));
+  await exportRaster(
+    {
+      name,
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+      drawables: nodes,
+    },
+    assets,
+    options,
+  );
+}
+
+async function exportRaster(
+  target: {
+    name: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    drawables: NodeSummary[];
+  },
+  assets: MediaAsset[],
+  options: RasterExportOptions,
+) {
+  const { scale, format } = options;
+  const width = Math.round(target.width * scale);
+  const height = Math.round(target.height * scale);
   if (width < 1 || height < 1 || width > 16_384 || height > 16_384)
     throw new Error(
       "The exported image must be between 1 and 16,384 pixels per side.",
@@ -21,21 +83,25 @@ export async function exportFramePng(
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Could not create the export canvas.");
-  await loadExportFonts(nodes);
+  await loadExportFonts(target.drawables);
   context.scale(scale, scale);
-  const descendants = nodes.filter((node) =>
-    isDescendant(node, frame.id, nodes),
-  );
-  for (const node of [frame, ...descendants])
-    await drawNode(context, node, frame, assets);
+  if (options.background) {
+    context.fillStyle = options.background;
+    context.fillRect(0, 0, target.width, target.height);
+  }
+  for (const node of target.drawables)
+    await drawNode(context, node, target, assets);
+  const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
   const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/png"),
+    canvas.toBlob(resolve, mimeType, options.quality ?? 0.92),
   );
-  if (!blob) throw new Error("Could not encode the PNG export.");
+  if (!blob)
+    throw new Error(`Could not encode the ${format.toUpperCase()} export.`);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${safeFilename(frame.name)}@${scale}x.png`;
+  const extension = format === "jpeg" ? "jpg" : "png";
+  link.download = `${safeFilename(options.filename ?? target.name)}@${scale}x.${extension}`;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
@@ -43,11 +109,11 @@ export async function exportFramePng(
 async function drawNode(
   context: CanvasRenderingContext2D,
   node: NodeSummary,
-  frame: NodeSummary,
+  target: { x: number; y: number },
   assets: MediaAsset[],
 ) {
-  const x = node.x - frame.x;
-  const y = node.y - frame.y;
+  const x = node.x - target.x;
+  const y = node.y - target.y;
   context.save();
   context.globalAlpha = node.opacity;
   context.translate(x + node.width / 2, y + node.height / 2);

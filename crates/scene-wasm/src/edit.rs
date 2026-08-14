@@ -1560,6 +1560,201 @@ impl Document {
         vector.geometry = VectorGeometry::Path { contours };
         true
     }
+
+    pub(crate) fn move_vector_point(
+        &mut self,
+        node_id: EntityId,
+        contour_index: usize,
+        point_index: usize,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(VectorGeometry::Path { contours }) =
+            node.vector.as_mut().map(|vector| &mut vector.geometry)
+        else {
+            return false;
+        };
+        let Some(point) = contours
+            .get_mut(contour_index)
+            .and_then(|contour| contour.points.get_mut(point_index))
+        else {
+            return false;
+        };
+        let next = [x.clamp(-10.0, 10.0), y.clamp(-10.0, 10.0)];
+        if point.position == next {
+            return false;
+        }
+        let delta = [next[0] - point.position[0], next[1] - point.position[1]];
+        point.position = next;
+        for handle in [&mut point.handle_in, &mut point.handle_out]
+            .into_iter()
+            .flatten()
+        {
+            handle[0] += delta[0];
+            handle[1] += delta[1];
+        }
+        true
+    }
+
+    pub(crate) fn delete_vector_point(
+        &mut self,
+        node_id: EntityId,
+        contour_index: usize,
+        point_index: usize,
+    ) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(VectorGeometry::Path { contours }) =
+            node.vector.as_mut().map(|vector| &mut vector.geometry)
+        else {
+            return false;
+        };
+        let Some(contour) = contours.get_mut(contour_index) else {
+            return false;
+        };
+        let minimum = if contour.closed { 3 } else { 2 };
+        if contour.points.len() <= minimum || point_index >= contour.points.len() {
+            return false;
+        }
+        contour.points.remove(point_index);
+        true
+    }
+
+    pub(crate) fn cut_vector_path(
+        &mut self,
+        node_id: EntityId,
+        contour_index: usize,
+        point_index: usize,
+    ) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(VectorGeometry::Path { contours }) =
+            node.vector.as_mut().map(|vector| &mut vector.geometry)
+        else {
+            return false;
+        };
+        let Some(contour) = contours.get_mut(contour_index) else {
+            return false;
+        };
+        if point_index >= contour.points.len() {
+            return false;
+        }
+        if contour.closed {
+            contour.points.rotate_left(point_index);
+            contour.closed = false;
+            return true;
+        }
+        if point_index == 0 || point_index + 1 >= contour.points.len() {
+            return false;
+        }
+        let split_point = contour.points[point_index].clone();
+        let right = contour.points.split_off(point_index);
+        contour.points.push(split_point);
+        contours.insert(
+            contour_index + 1,
+            VectorContour {
+                points: right,
+                closed: false,
+            },
+        );
+        true
+    }
+
+    pub(crate) fn join_vector_path(&mut self, node_id: EntityId) -> bool {
+        let Some(node) = self.active_node_mut(node_id) else {
+            return false;
+        };
+        if node.locked || node.kind != NodeKind::Vector {
+            return false;
+        }
+        let Some(VectorGeometry::Path { contours }) =
+            node.vector.as_mut().map(|vector| &mut vector.geometry)
+        else {
+            return false;
+        };
+        let open: Vec<_> = contours
+            .iter()
+            .enumerate()
+            .filter_map(|(index, contour)| (!contour.closed).then_some(index))
+            .collect();
+        if open.len() == 1 {
+            contours[open[0]].closed = true;
+            return true;
+        }
+        let [first, second, ..] = open.as_slice() else {
+            return false;
+        };
+        let mut b = contours.remove(*second);
+        let mut a = contours.remove(*first);
+        let candidates = [
+            (false, false, endpoint_distance(&a, false, &b, true)),
+            (false, true, endpoint_distance(&a, false, &b, false)),
+            (true, false, endpoint_distance(&a, true, &b, true)),
+            (true, true, endpoint_distance(&a, true, &b, false)),
+        ];
+        let (reverse_a, reverse_b, _) = candidates
+            .into_iter()
+            .min_by(|left, right| left.2.total_cmp(&right.2))
+            .expect("join candidates are non-empty");
+        if reverse_a {
+            reverse_contour(&mut a);
+        }
+        if reverse_b {
+            reverse_contour(&mut b);
+        }
+        a.points.extend(b.points);
+        contours.insert(
+            *first,
+            VectorContour {
+                points: a.points,
+                closed: false,
+            },
+        );
+        true
+    }
+}
+
+fn reverse_contour(contour: &mut VectorContour) {
+    contour.points.reverse();
+    for point in &mut contour.points {
+        std::mem::swap(&mut point.handle_in, &mut point.handle_out);
+    }
+}
+
+fn endpoint_distance(
+    first: &VectorContour,
+    first_start: bool,
+    second: &VectorContour,
+    second_start: bool,
+) -> f32 {
+    let a = if first_start {
+        &first.points[0]
+    } else {
+        first.points.last().expect("validated contour")
+    };
+    let b = if second_start {
+        &second.points[0]
+    } else {
+        second.points.last().expect("validated contour")
+    };
+    (a.position[0] - b.position[0]).powi(2) + (a.position[1] - b.position[1]).powi(2)
 }
 
 fn contours_for_geometry(geometry: &VectorGeometry) -> Option<Vec<VectorContour>> {

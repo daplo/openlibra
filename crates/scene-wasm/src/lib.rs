@@ -473,6 +473,45 @@ impl DocumentEngine {
         self.mutate(|document| document.convert_vector_to_path(node_id))
     }
 
+    pub fn move_vector_point(
+        &mut self,
+        node_id: String,
+        contour_index: usize,
+        point_index: usize,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| {
+            document.move_vector_point(node_id, contour_index, point_index, x, y)
+        })
+    }
+
+    pub fn delete_vector_point(
+        &mut self,
+        node_id: String,
+        contour_index: usize,
+        point_index: usize,
+    ) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| document.delete_vector_point(node_id, contour_index, point_index))
+    }
+
+    pub fn cut_vector_path(
+        &mut self,
+        node_id: String,
+        contour_index: usize,
+        point_index: usize,
+    ) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| document.cut_vector_path(node_id, contour_index, point_index))
+    }
+
+    pub fn join_vector_path(&mut self, node_id: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| document.join_vector_path(node_id))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn add_media_asset_node(
         &mut self,

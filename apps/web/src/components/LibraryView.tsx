@@ -78,7 +78,7 @@ export function LibraryView({
   return (
     <section className="library-view" data-testid="component-library-view">
       <header className="library-view-header">
-        <button className="library-back" onClick={onBack}>
+        <button type="button" className="library-back" onClick={onBack}>
           <ArrowLeft aria-hidden="true" />
           Editor
         </button>
@@ -97,12 +97,14 @@ export function LibraryView({
       {!focusedComponentId && (
         <nav className="library-tabs" aria-label="Library sections">
           <button
+            type="button"
             className={activeSection === "projects" ? "active" : ""}
             onClick={() => onSectionChange("projects")}
           >
             Projects
           </button>
           <button
+            type="button"
             className={activeSection === "components" ? "active" : ""}
             onClick={() => onSectionChange("components")}
           >
@@ -182,12 +184,14 @@ function ProjectLibrary({
     <div className="project-library" data-testid="project-library-view">
       <div className="project-library-toolbar">
         <button
+          type="button"
           className={!showArchived ? "active" : ""}
           onClick={() => setShowArchived(false)}
         >
           Recent
         </button>
         <button
+          type="button"
           className={showArchived ? "active" : ""}
           onClick={() => setShowArchived(true)}
         >
@@ -196,7 +200,11 @@ function ProjectLibrary({
       </div>
       <div className="project-library-grid">
         {!showArchived && (
-          <button className="project-new-card" onClick={onNewDocument}>
+          <button
+            type="button"
+            className="project-new-card"
+            onClick={onNewDocument}
+          >
             <FilePlus2 aria-hidden="true" />
             <strong>New document</strong>
             <span>Start with an empty page</span>
@@ -209,6 +217,7 @@ function ProjectLibrary({
             key={document.id}
           >
             <button
+              type="button"
               className="project-card-open"
               onClick={() => onOpen(document)}
             >
@@ -223,6 +232,7 @@ function ProjectLibrary({
               </span>
             </button>
             <button
+              type="button"
               className="project-card-remove"
               aria-label={`Remove ${document.name} from recent projects`}
               title="Remove from recent projects"
@@ -233,6 +243,7 @@ function ProjectLibrary({
             <div className="project-card-actions">
               {showArchived ? (
                 <button
+                  type="button"
                   onClick={() => onRestore(document)}
                   title="Restore project"
                 >
@@ -240,20 +251,25 @@ function ProjectLibrary({
                 </button>
               ) : (
                 <>
-                  <button onClick={() => onRename(document)}>Rename</button>
+                  <button type="button" onClick={() => onRename(document)}>
+                    Rename
+                  </button>
                   <button
+                    type="button"
                     onClick={() => onDuplicate(document)}
                     title="Duplicate project"
                   >
                     <Copy aria-hidden="true" /> Duplicate
                   </button>
                   <button
+                    type="button"
                     onClick={() => onArchive(document)}
                     title="Archive project"
                   >
                     <Archive aria-hidden="true" /> Archive
                   </button>
                   <button
+                    type="button"
                     onClick={() => onRecover(document)}
                     title="Recovery history"
                   >
@@ -368,6 +384,7 @@ function ComponentLibraryCard({
           <span>{component.variants.length} variant(s)</span>
         </div>
         <button
+          type="button"
           className="component-edit-main"
           onClick={() => onEditMain(component.variants[0].source_root_id)}
         >
@@ -375,6 +392,7 @@ function ComponentLibraryCard({
           Edit main
         </button>
         <button
+          type="button"
           className="component-add-variant"
           onClick={() => {
             const source = component.variants.at(-1)!;
@@ -400,6 +418,7 @@ function ComponentLibraryCard({
               <footer>
                 <span>{variant.name}</span>
                 <button
+                  type="button"
                   aria-label={`Edit ${component.name} ${variant.name}`}
                   title="Edit variant in isolation"
                   onClick={() => onEditMain(variant.source_root_id)}
@@ -407,6 +426,7 @@ function ComponentLibraryCard({
                   <Pencil aria-hidden="true" />
                 </button>
                 <button
+                  type="button"
                   aria-label={`Insert ${component.name} ${variant.name}`}
                   title="Insert instance"
                   onClick={() => onInsert(component.id, variant.id)}

@@ -44,6 +44,10 @@ import {
   TextOverlay,
   VectorOverlay,
 } from "./components/CanvasOverlays";
+import {
+  VectorPointOverlay,
+  type VectorPointSelection,
+} from "./components/VectorPointOverlay";
 import { ArtboardMenu } from "./components/ArtboardMenu";
 import { ShapeMenu, type VectorShape } from "./components/ShapeMenu";
 import { Inspect, Review, ToolButton } from "./components/EditorChrome";
@@ -52,7 +56,11 @@ import { Properties } from "./components/PropertiesPanel";
 import { LibraryView } from "./components/LibraryView";
 import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
 import { figmaFileToImport } from "./editor/figma-import";
-import { exportFramePng } from "./editor/export-frame";
+import {
+  exportNodeRaster,
+  exportPageRaster,
+  type RasterExportOptions,
+} from "./editor/export-frame";
 import { exportVectorSvg } from "./editor/export-vector";
 import {
   EditorInputController,
@@ -166,6 +174,9 @@ export function App() {
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [editingTextId, setEditingTextId] = useState<string>();
+  const [editingVectorId, setEditingVectorId] = useState<string>();
+  const [selectedVectorPoint, setSelectedVectorPoint] =
+    useState<VectorPointSelection>();
   const editingTextInitialValueRef = useRef("");
   const [artboardMenuOpen, setArtboardMenuOpen] = useState(false);
   const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
@@ -205,6 +216,9 @@ export function App() {
   const nodesById = useMemo(
     () => new Map(documentModel.nodes.map((node) => [node.id, node])),
     [documentModel.nodes],
+  );
+  const activePage = documentModel.pages.find(
+    (page) => page.id === documentModel.active_page_id,
   );
   nodesByIdRef.current = nodesById;
   const selectedNodes = useMemo(
@@ -270,6 +284,24 @@ export function App() {
     if (isolationRootId && !nodesById.has(isolationRootId))
       setIsolationRootId(undefined);
   }, [isolationRootId, nodesById]);
+
+  useEffect(() => {
+    if (editingVectorId && !selectedNodeIds.includes(editingVectorId)) {
+      setEditingVectorId(undefined);
+      setSelectedVectorPoint(undefined);
+    }
+  }, [editingVectorId, selectedNodeIds]);
+
+  useEffect(() => {
+    if (!editingVectorId) return;
+    const leaveVectorEdit = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setEditingVectorId(undefined);
+      setSelectedVectorPoint(undefined);
+    };
+    window.addEventListener("keydown", leaveVectorEdit);
+    return () => window.removeEventListener("keydown", leaveVectorEdit);
+  }, [editingVectorId]);
 
   useEffect(() => {
     if (!canvasContextMenu) return;
@@ -424,6 +456,8 @@ export function App() {
     setIsDocumentDirty(false);
     setIsolationRootId(undefined);
     setEditingTextId(undefined);
+    setEditingVectorId(undefined);
+    setSelectedVectorPoint(undefined);
     setLibraryOpen(false);
     setLibraryComponentId(undefined);
     copiedNodeIdsRef.current = [];
@@ -842,6 +876,79 @@ export function App() {
   function convertVectorToPath(node: NodeSummary) {
     if (engineRef.current?.convert_vector_to_path(node.id))
       refreshDocument([node.id]);
+  }
+
+  function toggleVectorEditing(node: NodeSummary) {
+    if (editingVectorId === node.id) {
+      setEditingVectorId(undefined);
+      setSelectedVectorPoint(undefined);
+      return;
+    }
+    if (node.vector?.geometry.type !== "path")
+      engineRef.current?.convert_vector_to_path(node.id);
+    refreshDocument([node.id]);
+    setEditingVectorId(node.id);
+    setSelectedVectorPoint(undefined);
+  }
+
+  function beginVectorPointMove() {
+    engineRef.current?.begin_transaction();
+  }
+
+  function moveVectorPoint(
+    selection: VectorPointSelection,
+    position: [number, number],
+  ) {
+    if (
+      engineRef.current?.move_vector_point(
+        selection.nodeId,
+        selection.contourIndex,
+        selection.pointIndex,
+        position[0],
+        position[1],
+      )
+    )
+      refreshDocument([selection.nodeId]);
+  }
+
+  function endVectorPointMove() {
+    engineRef.current?.end_transaction();
+    refreshDocument(selectedNodeIdsRef.current);
+  }
+
+  function deleteVectorPoint(selection = selectedVectorPoint) {
+    if (!selection) return;
+    if (
+      engineRef.current?.delete_vector_point(
+        selection.nodeId,
+        selection.contourIndex,
+        selection.pointIndex,
+      )
+    ) {
+      setSelectedVectorPoint(undefined);
+      refreshDocument([selection.nodeId]);
+    }
+  }
+
+  function cutVectorPath(node: NodeSummary) {
+    if (!selectedVectorPoint || selectedVectorPoint.nodeId !== node.id) return;
+    if (
+      engineRef.current?.cut_vector_path(
+        node.id,
+        selectedVectorPoint.contourIndex,
+        selectedVectorPoint.pointIndex,
+      )
+    ) {
+      setSelectedVectorPoint(undefined);
+      refreshDocument([node.id]);
+    }
+  }
+
+  function joinVectorPath(node: NodeSummary) {
+    if (engineRef.current?.join_vector_path(node.id)) {
+      setSelectedVectorPoint(undefined);
+      refreshDocument([node.id]);
+    }
   }
 
   function exportSelectedVector(node: NodeSummary) {
@@ -1820,13 +1927,29 @@ export function App() {
       refreshDocument(selection);
   }
 
-  async function exportSelectedFrame(node: NodeSummary, scale: number) {
+  async function exportSelectedNode(
+    node: NodeSummary,
+    options: RasterExportOptions,
+  ) {
     try {
-      await exportFramePng(
+      await exportNodeRaster(
         node,
         documentModel.nodes,
         documentModel.media_assets,
-        scale,
+        options,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function exportActivePage(options: RasterExportOptions) {
+    try {
+      await exportPageRaster(
+        activePage?.name ?? "Page",
+        documentModel.nodes,
+        documentModel.media_assets,
+        options,
       );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1901,6 +2024,9 @@ export function App() {
           applySelection([node.id]);
           editingTextInitialValueRef.current = node.text.content;
           setEditingTextId(node.id);
+        } else if (node?.kind === "vector" && node.vector && !node.locked) {
+          applySelection([node.id]);
+          toggleVectorEditing(node);
         }
       },
     };
@@ -2170,6 +2296,7 @@ export function App() {
           <strong>Open Libra</strong>
           <div className="document-switcher" ref={documentSwitcherRef}>
             <button
+              type="button"
               className={`file-name ${documentSwitcherOpen ? "active" : ""}`}
               aria-haspopup="menu"
               aria-expanded={documentSwitcherOpen}
@@ -2190,6 +2317,7 @@ export function App() {
               <div className="document-switcher-menu" role="menu">
                 <div className="document-switcher-heading">Documents</div>
                 <button
+                  type="button"
                   className="document-switcher-item current"
                   role="menuitem"
                   onClick={() => setDocumentSwitcherOpen(false)}
@@ -2207,6 +2335,7 @@ export function App() {
                   .slice(0, 6)
                   .map((document) => (
                     <button
+                      type="button"
                       className="document-switcher-item"
                       role="menuitem"
                       key={document.id}
@@ -2224,16 +2353,22 @@ export function App() {
                     </button>
                   ))}
                 <div className="document-switcher-actions">
-                  <button role="menuitem" onClick={() => void newDocument()}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => void newDocument()}
+                  >
                     <FilePlus2 aria-hidden="true" /> New
                   </button>
                   <button
+                    type="button"
                     role="menuitem"
                     onClick={() => void requestOpenDocument()}
                   >
                     <FolderOpen aria-hidden="true" /> Open…
                   </button>
                   <button
+                    type="button"
                     role="menuitem"
                     onClick={() => {
                       setDocumentSwitcherOpen(false);
@@ -2250,6 +2385,7 @@ export function App() {
           </div>
           <div className="menu-anchor" ref={fileMenuRef}>
             <button
+              type="button"
               className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
               aria-haspopup="menu"
               aria-expanded={fileMenuOpen}
@@ -2263,22 +2399,27 @@ export function App() {
             </button>
             {fileMenuOpen && (
               <div className="edit-menu file-menu" role="menu">
-                <button role="menuitem" onClick={newDocument}>
+                <button type="button" role="menuitem" onClick={newDocument}>
                   <FilePlus2 />
                   <span>New document</span>
                   <kbd>⌘N</kbd>
                 </button>
-                <button role="menuitem" onClick={requestOpenDocument}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={requestOpenDocument}
+                >
                   <FolderOpen />
                   <span>Open…</span>
                   <kbd>⌘O</kbd>
                 </button>
-                <button role="menuitem" onClick={saveDocument}>
+                <button type="button" role="menuitem" onClick={saveDocument}>
                   <Save />
                   <span>Save</span>
                   <kbd>⌘S</kbd>
                 </button>
                 <button
+                  type="button"
                   role="menuitem"
                   onClick={() => {
                     setFileMenuOpen(false);
@@ -2293,6 +2434,7 @@ export function App() {
                 </button>
                 <div className="menu-section-label">Import</div>
                 <button
+                  type="button"
                   role="menuitem"
                   onClick={() => {
                     setFileMenuOpen(false);
@@ -2332,6 +2474,7 @@ export function App() {
           </div>
           <div className="menu-anchor" ref={editMenuRef}>
             <button
+              type="button"
               className={`menu-trigger ${editMenuOpen ? "active" : ""}`}
               onClick={() => {
                 setFileMenuOpen(false);
@@ -2344,6 +2487,7 @@ export function App() {
             {editMenuOpen && (
               <div className="edit-menu" role="menu">
                 <button
+                  type="button"
                   role="menuitem"
                   disabled={!historyState.canUndo}
                   onClick={() => {
@@ -2356,6 +2500,7 @@ export function App() {
                   <kbd>⌘Z</kbd>
                 </button>
                 <button
+                  type="button"
                   role="menuitem"
                   disabled={!historyState.canRedo}
                   onClick={() => {
@@ -2372,6 +2517,7 @@ export function App() {
           </div>
           <div className="menu-anchor" ref={viewMenuRef}>
             <button
+              type="button"
               className={`menu-trigger ${viewMenuOpen ? "active" : ""}`}
               onClick={() => {
                 setFileMenuOpen(false);
@@ -2384,6 +2530,7 @@ export function App() {
             {viewMenuOpen && (
               <div className="edit-menu view-menu" role="menu">
                 <button
+                  type="button"
                   role="menuitemcheckbox"
                   aria-checked={rulersVisible}
                   onClick={() => setRulersVisible((visible) => !visible)}
@@ -2393,6 +2540,7 @@ export function App() {
                   <kbd>⇧R</kbd>
                 </button>
                 <button
+                  type="button"
                   role="menuitemcheckbox"
                   aria-checked={gridVisible}
                   onClick={() => setGridVisible((visible) => !visible)}
@@ -2404,6 +2552,7 @@ export function App() {
                 <div className="menu-section-label">Toolbar</div>
                 {(["top", "bottom"] as const).map((position) => (
                   <button
+                    type="button"
                     key={position}
                     role="menuitemradio"
                     aria-checked={toolbarPosition === position}
@@ -2423,6 +2572,7 @@ export function App() {
         <nav className="mode-switcher" aria-label="Editor mode">
           {MODES.map((item) => (
             <button
+              type="button"
               key={item.id}
               className={mode === item.id ? "active" : ""}
               onClick={() => setMode(item.id)}
@@ -2434,6 +2584,7 @@ export function App() {
         </nav>
         <div className="topbar-actions">
           <button
+            type="button"
             className={`library-trigger ${libraryOpen ? "active" : ""}`}
             onClick={() => {
               setLibraryComponentId(undefined);
@@ -2444,6 +2595,7 @@ export function App() {
             Library
           </button>
           <button
+            type="button"
             className="theme-toggle"
             onClick={() =>
               setTheme((current) => (current === "dark" ? "light" : "dark"))
@@ -2453,7 +2605,9 @@ export function App() {
           >
             {theme === "dark" ? <Sun /> : <Moon />}
           </button>
-          <button className="share-button">Share</button>
+          <button type="button" className="share-button">
+            Share
+          </button>
         </div>
       </header>
 
@@ -2681,6 +2835,21 @@ export function App() {
               rendererRef={rendererRef}
               nodes={documentModel.nodes}
             />
+            {editingVectorId &&
+              selectedNodes.length === 1 &&
+              selectedNodes[0].id === editingVectorId &&
+              selectedNodes[0].vector?.geometry.type === "path" && (
+                <VectorPointOverlay
+                  rendererRef={rendererRef}
+                  node={selectedNodes[0]}
+                  selectedPoint={selectedVectorPoint}
+                  onSelectPoint={setSelectedVectorPoint}
+                  onBeginMove={beginVectorPointMove}
+                  onMovePoint={moveVectorPoint}
+                  onEndMove={endVectorPointMove}
+                  onDeletePoint={deleteVectorPoint}
+                />
+              )}
             <TextOverlay
               rendererRef={rendererRef}
               nodes={documentModel.nodes}
@@ -2719,6 +2888,7 @@ export function App() {
               >
                 <Component aria-hidden="true" />
                 <button
+                  type="button"
                   className="component-breadcrumb-link"
                   onClick={() => {
                     setLibraryComponentId(componentWorkspace?.component.id);
@@ -2734,6 +2904,7 @@ export function App() {
                 <ChevronRight aria-hidden="true" />
                 <span>{componentWorkspace?.variant.name ?? "Default"}</span>
                 <button
+                  type="button"
                   className="component-workspace-done"
                   onClick={() => setIsolationRootId(undefined)}
                 >
@@ -2790,6 +2961,7 @@ export function App() {
                 }}
               >
                 <button
+                  type="button"
                   role="menuitem"
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => {
@@ -2808,21 +2980,27 @@ export function App() {
 
           <div className="zoom-controls">
             <button
+              type="button"
               onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
               aria-label="Zoom out"
             >
               −
             </button>
-            <button onClick={() => rendererRef.current?.resetView()}>
+            <button
+              type="button"
+              onClick={() => rendererRef.current?.resetView()}
+            >
               {Math.round(stats.zoom * 100)}%
             </button>
             <button
+              type="button"
               onClick={() => rendererRef.current?.zoomBy(1.2)}
               aria-label="Zoom in"
             >
               +
             </button>
             <button
+              type="button"
               onClick={() => rendererRef.current?.zoomToFit()}
               title="Zoom to fit (F)"
             >
@@ -2852,6 +3030,7 @@ export function App() {
                   Open this component workspace before editing its layers.
                 </span>
                 <button
+                  type="button"
                   onClick={() => editMainComponent(selectedMasterRoot.id)}
                 >
                   Edit component
@@ -2860,6 +3039,8 @@ export function App() {
             ) : (
               <Properties
                 selected={editableSelectedNodes}
+                pageName={activePage?.name ?? "Page"}
+                pageHasContent={documentModel.nodes.length > 0}
                 documentColors={documentColors}
                 numberVariables={documentModel.number_variables}
                 textStyles={documentModel.text_styles}
@@ -2870,9 +3051,10 @@ export function App() {
                 onDelete={deleteSelected}
                 onGroup={groupSelected}
                 onUngroup={ungroupSelected}
-                onExportFrame={(node, scale) =>
-                  void exportSelectedFrame(node, scale)
+                onExportRaster={(node, options) =>
+                  void exportSelectedNode(node, options)
                 }
+                onExportPage={(options) => void exportActivePage(options)}
                 onCreateComponent={createComponent}
                 onInstanceVariantChange={changeInstanceVariant}
                 onInstanceReset={resetComponentInstance}
@@ -2882,6 +3064,14 @@ export function App() {
                 onVectorParametersChange={updateVectorParameters}
                 onVectorFillRuleChange={updateVectorFillRule}
                 onVectorConvertToPath={convertVectorToPath}
+                vectorEditing={editingVectorId === selectedNodes[0]?.id}
+                hasSelectedVectorPoint={
+                  selectedVectorPoint?.nodeId === selectedNodes[0]?.id
+                }
+                onVectorEditToggle={toggleVectorEditing}
+                onVectorPointDelete={() => deleteVectorPoint()}
+                onVectorCut={cutVectorPath}
+                onVectorJoin={joinVectorPath}
                 onExportVector={exportSelectedVector}
                 onStyleChange={updateNodeStyle}
                 onBoundsChange={updateNodeBounds}
@@ -2946,6 +3136,7 @@ function PanelResizeHandle({
   };
   return (
     <button
+      type="button"
       className={`panel-resize-handle ${side}`}
       aria-label={`Resize ${side} sidebar`}
       title={`Resize ${side} sidebar`}

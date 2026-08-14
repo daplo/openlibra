@@ -1072,6 +1072,7 @@ h2 {
 }
 .export-controls button,
 .export-controls label {
+  height: 30px;
   min-height: 30px;
   border: 1px solid var(--control-border);
   border-radius: var(--control-radius);
@@ -1089,6 +1090,10 @@ h2 {
   gap: 5px;
   padding: 0 6px;
 }
+.export-controls label:has(input[type="text"]),
+.export-controls > .primary-button {
+  grid-column: 1 / -1;
+}
 .export-controls label span {
   color: #858a95;
 }
@@ -1098,6 +1103,31 @@ h2 {
   border: 0;
   outline: 0;
   background: transparent;
+}
+.export-controls
+  input:not([type="range"]):not([type="color"]):not([type="checkbox"]),
+.export-controls select {
+  height: 30px;
+}
+.export-controls select {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  background: transparent;
+}
+.export-controls .export-checkbox {
+  grid-column: 1 / -1;
+}
+.export-controls .export-checkbox input {
+  width: auto;
+}
+.export-quick-actions {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
 }
 .component-instance-actions {
   display: grid;
@@ -2384,6 +2414,44 @@ canvas[data-tool="hand"]:active {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+.vector-point-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.vector-point-overlay circle {
+  pointer-events: all;
+  cursor: move;
+  fill: #ffffff;
+  stroke: #166a4d;
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+.vector-point-overlay circle.selected {
+  fill: #82e6b8;
+  stroke: #0b3e2c;
+}
+.vector-path-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.vector-path-actions button {
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  color: #c8ccd4;
+  background: var(--control-surface);
+  font-size: 10px;
+}
+.vector-path-actions button:last-child {
+  grid-column: 1 / -1;
 }
 .text-content-input {
   box-sizing: border-box;

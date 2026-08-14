@@ -294,6 +294,13 @@ try {
   assert.equal(await rectangles.count(), rectangleCount + 1);
   const createdRectangle = rectangles.nth(rectangleCount);
   assert.equal(await createdRectangle.getAttribute("data-selected"), "true");
+  await page.getByLabel("Export format").selectOption("jpeg");
+  const jpegDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "JPEG 1×" }).click();
+  assert.equal(
+    (await jpegDownloadPromise).suggestedFilename(),
+    "Rectangle@1x.jpg",
+  );
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+C" : "Control+C",
   );
@@ -305,6 +312,11 @@ try {
   await createdRectangle.locator(".layer-main").click();
   await page.getByRole("button", { name: "Delete layer" }).click();
   assert.equal(await rectangles.count(), rectangleCount);
+  await page.getByText("Page export", { exact: true }).waitFor();
+  await page.getByLabel("Export format").selectOption("png");
+  const pageDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "PNG 1×" }).click();
+  assert.equal((await pageDownloadPromise).suggestedFilename(), "Home@1x.png");
 
   const textLayers = page.locator(
     '[data-testid^="layer-node-"][data-node-kind="text"]',
@@ -380,7 +392,7 @@ try {
   assert.notDeepEqual(activeTextBoxStyle, inactiveTextBoxStyle);
   const propertyControlHeights = await page
     .locator(
-      '.right-panel .property-section-body button, .right-panel .property-section-body input:not([type="range"]):not([type="color"]):not(.transform-controls input), .right-panel .property-section-body select, .right-panel .transform-controls label',
+      '.right-panel .property-section-body button, .right-panel .property-section-body input:not([type="range"]):not([type="color"]):not([type="checkbox"]):not(.transform-controls input), .right-panel .property-section-body select, .right-panel .transform-controls label',
     )
     .evaluateAll((elements) =>
       elements
@@ -733,6 +745,31 @@ try {
   await page.getByRole("button", { name: "Convert to path" }).waitFor({
     state: "detached",
   });
+  await page.getByRole("button", { name: "Edit points" }).click();
+  const pointEditor = page.getByLabel("Vector point editor");
+  await pointEditor.waitFor();
+  const anchors = pointEditor.locator("circle[data-vector-point]");
+  assert.equal(await anchors.count(), 16);
+  const firstAnchorBounds = await anchors.first().boundingBox();
+  assert.ok(firstAnchorBounds);
+  await page.mouse.move(
+    firstAnchorBounds.x + firstAnchorBounds.width / 2,
+    firstAnchorBounds.y + firstAnchorBounds.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    firstAnchorBounds.x + firstAnchorBounds.width / 2 + 12,
+    firstAnchorBounds.y + firstAnchorBounds.height / 2 + 8,
+  );
+  await page.mouse.up();
+  await anchors.first().click();
+  await page.getByRole("button", { name: "Cut at point" }).click();
+  await page.getByRole("button", { name: "Join / close" }).click();
+  await anchors.first().click();
+  await page.getByRole("button", { name: "Delete point" }).click();
+  assert.equal(await anchors.count(), 15);
+  await page.getByRole("button", { name: "Done editing" }).click();
+  await pointEditor.waitFor({ state: "detached" });
 
   const benchmarkPage = page
     .getByTestId(/^page-node-/)

@@ -24,13 +24,18 @@ export function ShapeMenu({
     <div className="shape-menu" role="dialog" aria-label="Shape tools">
       <div className="shape-menu-header">
         <strong>Shape tool</strong>
-        <button onClick={onClose} aria-label="Close shape tools">
+        <button type="button" onClick={onClose} aria-label="Close shape tools">
           ×
         </button>
       </div>
       <div className="shape-menu-grid">
         {SHAPES.map(({ id, name, icon: Icon }) => (
-          <button key={id} onClick={() => onChoose(id)} aria-label={name}>
+          <button
+            type="button"
+            key={id}
+            onClick={() => onChoose(id)}
+            aria-label={name}
+          >
             <Icon aria-hidden="true" />
             <span>{name}</span>
           </button>

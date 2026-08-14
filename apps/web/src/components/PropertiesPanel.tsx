@@ -38,9 +38,28 @@ import type {
   TextStyleAsset,
   TextStyleSummary,
 } from "../editor/types";
+import type { RasterExportOptions } from "../editor/export-frame";
+
+type ExportSettings = {
+  format: "png" | "jpeg";
+  scale: number;
+  quality: number;
+  transparent: boolean;
+  background: string;
+};
+
+const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
+  format: "png",
+  scale: 1,
+  quality: 0.92,
+  transparent: true,
+  background: "#ffffff",
+};
 
 export function Properties(props: {
   selected: NodeSummary[];
+  pageName: string;
+  pageHasContent: boolean;
   documentColors: string[];
   numberVariables: NumberVariable[];
   textStyles: TextStyleAsset[];
@@ -51,7 +70,8 @@ export function Properties(props: {
   onDelete: () => void;
   onGroup: () => void;
   onUngroup: (node: NodeSummary) => void;
-  onExportFrame: (node: NodeSummary, scale: number) => void;
+  onExportRaster: (node: NodeSummary, options: RasterExportOptions) => void;
+  onExportPage: (options: RasterExportOptions) => void;
   onCreateComponent: (node: NodeSummary) => void;
   onInstanceVariantChange: (node: NodeSummary, variantId: string) => void;
   onInstanceReset: (node: NodeSummary) => void;
@@ -68,6 +88,12 @@ export function Properties(props: {
     fillRule: "nonzero" | "evenodd",
   ) => void;
   onVectorConvertToPath: (node: NodeSummary) => void;
+  vectorEditing: boolean;
+  hasSelectedVectorPoint: boolean;
+  onVectorEditToggle: (node: NodeSummary) => void;
+  onVectorPointDelete: () => void;
+  onVectorCut: (node: NodeSummary) => void;
+  onVectorJoin: (node: NodeSummary) => void;
   onExportVector: (node: NodeSummary) => void;
   onStyleChange: (
     node: NodeSummary,
@@ -138,12 +164,34 @@ export function Properties(props: {
   ) => void;
 }) {
   const { selected } = props;
-  const [exportScale, setExportScale] = useState(1);
+  const [exportSettings, setExportSettings] = useState(loadExportSettings);
+  const exportTargetName =
+    selected.length === 1 ? selected[0].name : props.pageName;
+  const [exportFilename, setExportFilename] = useState(exportTargetName);
+  useEffect(() => setExportFilename(exportTargetName), [exportTargetName]);
+  useEffect(() => {
+    localStorage.setItem(
+      "open-libra-export-settings",
+      JSON.stringify(exportSettings),
+    );
+  }, [exportSettings]);
   if (selected.length === 0)
     return (
       <>
         <h2>Properties</h2>
-        <EmptyState text="Select a layer to inspect it." />
+        <div className="property-groups">
+          <PropertySection title="Page export">
+            <RasterExportControls
+              settings={exportSettings}
+              filename={exportFilename}
+              disabled={!props.pageHasContent}
+              onFilenameChange={setExportFilename}
+              onSettingsChange={setExportSettings}
+              onExport={(options) => props.onExportPage(options)}
+            />
+          </PropertySection>
+          <EmptyState text="Select a layer to inspect and export it individually." />
+        </div>
       </>
     );
   const node = selected[0];
@@ -160,12 +208,17 @@ export function Properties(props: {
           />
           {selected.length === 1 && <Property label="Type" value={node.kind} />}
           {selected.length > 1 && (
-            <button className="primary-button" onClick={props.onGroup}>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={props.onGroup}
+            >
               Group selection
             </button>
           )}
           {selected.length === 1 && node.kind === "group" && (
             <button
+              type="button"
               className="primary-button"
               onClick={() => props.onUngroup(node)}
             >
@@ -173,37 +226,15 @@ export function Properties(props: {
             </button>
           )}
         </PropertySection>
-        {selected.length === 1 && node.kind === "frame" && (
+        {selected.length === 1 && (
           <PropertySection title="Export">
-            <div className="export-controls">
-              {[1, 2].map((scale) => (
-                <button
-                  key={scale}
-                  onClick={() => props.onExportFrame(node, scale)}
-                >
-                  PNG {scale}×
-                </button>
-              ))}
-              <label>
-                <span>Scale</span>
-                <input
-                  type="number"
-                  min="0.1"
-                  max="8"
-                  step="0.1"
-                  value={exportScale}
-                  onChange={(event) =>
-                    setExportScale(Number(event.target.value))
-                  }
-                />
-              </label>
-              <button
-                onClick={() => props.onExportFrame(node, exportScale)}
-                disabled={!Number.isFinite(exportScale) || exportScale <= 0}
-              >
-                Export
-              </button>
-            </div>
+            <RasterExportControls
+              settings={exportSettings}
+              filename={exportFilename}
+              onFilenameChange={setExportFilename}
+              onSettingsChange={setExportSettings}
+              onExport={(options) => props.onExportRaster(node, options)}
+            />
           </PropertySection>
         )}
         {selected.length > 1 && (
@@ -298,6 +329,7 @@ export function Properties(props: {
                 )}
                 {node.vector.geometry.type !== "path" && (
                   <button
+                    type="button"
                     className="secondary-button"
                     onClick={() => props.onVectorConvertToPath(node)}
                   >
@@ -305,6 +337,40 @@ export function Properties(props: {
                   </button>
                 )}
                 <button
+                  type="button"
+                  className={
+                    props.vectorEditing ? "primary-button" : "secondary-button"
+                  }
+                  onClick={() => props.onVectorEditToggle(node)}
+                >
+                  {props.vectorEditing ? "Done editing" : "Edit points"}
+                </button>
+                {node.vector.geometry.type === "path" && (
+                  <div className="vector-path-actions">
+                    <button
+                      type="button"
+                      disabled={!props.hasSelectedVectorPoint}
+                      onClick={() => props.onVectorCut(node)}
+                    >
+                      Cut at point
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => props.onVectorJoin(node)}
+                    >
+                      Join / close
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!props.hasSelectedVectorPoint}
+                      onClick={props.onVectorPointDelete}
+                    >
+                      Delete point
+                    </button>
+                  </div>
+                )}
+                <button
+                  type="button"
                   className="secondary-button"
                   onClick={() => props.onExportVector(node)}
                 >
@@ -349,13 +415,22 @@ export function Properties(props: {
                   </select>
                 </label>
                 <div className="component-instance-actions">
-                  <button onClick={() => props.onInstanceReset(node)}>
+                  <button
+                    type="button"
+                    onClick={() => props.onInstanceReset(node)}
+                  >
                     Reset
                   </button>
-                  <button onClick={() => props.onGoToMainComponent(node)}>
+                  <button
+                    type="button"
+                    onClick={() => props.onGoToMainComponent(node)}
+                  >
                     Go to main
                   </button>
-                  <button onClick={() => props.onInstanceDetach(node)}>
+                  <button
+                    type="button"
+                    onClick={() => props.onInstanceDetach(node)}
+                  >
                     Detach
                   </button>
                 </div>
@@ -441,13 +516,18 @@ export function Properties(props: {
             !node.instance_root_id &&
             !node.locked && (
               <button
+                type="button"
                 className="primary-button"
                 onClick={() => props.onCreateComponent(node)}
               >
                 Create component
               </button>
             )}
-          <button className="danger-button" onClick={props.onDelete}>
+          <button
+            type="button"
+            className="danger-button"
+            onClick={props.onDelete}
+          >
             Delete {selected.length > 1 ? "layers" : "layer"}
           </button>
         </PropertySection>
@@ -521,7 +601,12 @@ function AlignmentControls({
   return (
     <div className="alignment-controls">
       {actions.map(([id, icon]) => (
-        <button key={id} onClick={() => onAlign(id)} title={`Align ${id}`}>
+        <button
+          type="button"
+          key={id}
+          onClick={() => onAlign(id)}
+          title={`Align ${id}`}
+        >
           {icon}
         </button>
       ))}
@@ -584,6 +669,7 @@ function TypographyControls({
             </select>
           </label>
           <button
+            type="button"
             className="token-add-button"
             aria-label="Create text style from selection"
             title="Create text style from this text"
@@ -810,6 +896,7 @@ function VariableSelect({
         </select>
       </label>
       <button
+        type="button"
         className="token-add-button"
         aria-label={`Create ${label.toLowerCase()} variable`}
         title={`Create variable from current ${label.toLowerCase()}`}
@@ -1020,6 +1107,7 @@ function ShadowControls({
         <div className="shadow-effect" key={shadow.id}>
           <div className="shadow-effect-header">
             <button
+              type="button"
               className={`effect-toggle ${shadow.enabled ? "active" : ""}`}
               onClick={() => update(index, { enabled: !shadow.enabled })}
               title={shadow.enabled ? "Hide shadow" : "Show shadow"}
@@ -1038,6 +1126,7 @@ function ShadowControls({
               <option value="inner">Inner shadow</option>
             </select>
             <button
+              type="button"
               onClick={() =>
                 onChange([
                   ...shadows.slice(0, index + 1),
@@ -1054,6 +1143,7 @@ function ShadowControls({
               ＋
             </button>
             <button
+              type="button"
               onClick={() =>
                 onChange(shadows.filter((_, position) => position !== index))
               }
@@ -1111,7 +1201,11 @@ function ShadowControls({
           />
         </div>
       ))}
-      <button className="secondary-button add-shadow" onClick={add}>
+      <button
+        type="button"
+        className="secondary-button add-shadow"
+        onClick={add}
+      >
         + Add shadow
       </button>
     </div>
@@ -1188,12 +1282,14 @@ function GeometryControls({
           />
         </label>
         <button
+          type="button"
           title="Rotate 90° clockwise"
           onClick={() => onTransformChange({ rotation: node.rotation + 90 })}
         >
           <RotateCw />
         </button>
         <button
+          type="button"
           title="Flip horizontally"
           aria-pressed={node.flip_x}
           onClick={() => onTransformChange({ flip_x: !node.flip_x })}
@@ -1201,6 +1297,7 @@ function GeometryControls({
           <FlipHorizontal2 />
         </button>
         <button
+          type="button"
           title="Flip vertically"
           aria-pressed={node.flip_y}
           onClick={() => onTransformChange({ flip_y: !node.flip_y })}
@@ -1250,12 +1347,14 @@ function AutoLayoutControls({
         aria-label="Layout direction"
       >
         <button
+          type="button"
           className={node.layout_mode === "none" ? "active" : ""}
           onClick={() => onChange({ layout_mode: "none" })}
         >
           Off
         </button>
         <button
+          type="button"
           className={node.layout_mode === "row" ? "active" : ""}
           onClick={() => onChange({ layout_mode: "row" })}
         >
@@ -1263,6 +1362,7 @@ function AutoLayoutControls({
           Row
         </button>
         <button
+          type="button"
           className={node.layout_mode === "column" ? "active" : ""}
           onClick={() => onChange({ layout_mode: "column" })}
         >
@@ -1276,12 +1376,14 @@ function AutoLayoutControls({
             <span>Height</span>
             <div>
               <button
+                type="button"
                 className={!node.auto_height ? "active" : ""}
                 onClick={() => onChange({ auto_height: false })}
               >
                 Fixed
               </button>
               <button
+                type="button"
                 className={node.auto_height ? "active" : ""}
                 onClick={() => onChange({ auto_height: true })}
               >
@@ -1374,12 +1476,14 @@ function WidthSizingControl({
       <span>Width</span>
       <div>
         <button
+          type="button"
           className={node.width_sizing === "fixed" ? "active" : ""}
           onClick={() => onChange("fixed")}
         >
           Fixed
         </button>
         <button
+          type="button"
           className={node.width_sizing === "fill" ? "active" : ""}
           onClick={() => onChange("fill")}
         >
@@ -1416,18 +1520,21 @@ function ArtboardGuideControls({
     <div className="guide-controls">
       <div className="layout-direction">
         <button
+          type="button"
           className={node.guide_mode === "none" ? "active" : ""}
           onClick={() => onChange({ guide_mode: "none" })}
         >
           Off
         </button>
         <button
+          type="button"
           className={node.guide_mode === "grid" ? "active" : ""}
           onClick={() => onChange({ guide_mode: "grid" })}
         >
           Grid
         </button>
         <button
+          type="button"
           className={node.guide_mode === "columns" ? "active" : ""}
           onClick={() => onChange({ guide_mode: "columns" })}
         >
@@ -1517,6 +1624,7 @@ function AlignmentGrid({
       {values.flatMap((y) =>
         values.map((x) => (
           <button
+            type="button"
             key={`${x}-${y}`}
             className={horizontal === x && vertical === y ? "active" : ""}
             title={`${y} ${x}`}
@@ -1767,6 +1875,164 @@ function ColorPalette({
       )}
     </section>
   );
+}
+
+function RasterExportControls({
+  settings,
+  filename,
+  disabled = false,
+  onFilenameChange,
+  onSettingsChange,
+  onExport,
+}: {
+  settings: ExportSettings;
+  filename: string;
+  disabled?: boolean;
+  onFilenameChange: (filename: string) => void;
+  onSettingsChange: (settings: ExportSettings) => void;
+  onExport: (options: RasterExportOptions) => void;
+}) {
+  const update = (change: Partial<ExportSettings>) =>
+    onSettingsChange({ ...settings, ...change });
+  const options = (scale = settings.scale): RasterExportOptions => ({
+    format: settings.format,
+    scale,
+    quality: settings.quality,
+    background:
+      settings.format === "jpeg" || !settings.transparent
+        ? settings.background
+        : undefined,
+    filename,
+  });
+  const valid =
+    !disabled &&
+    filename.trim().length > 0 &&
+    Number.isFinite(settings.scale) &&
+    settings.scale >= 0.1 &&
+    settings.scale <= 8;
+  return (
+    <div className="export-controls">
+      <label>
+        <span>Filename</span>
+        <input
+          type="text"
+          aria-label="Export filename"
+          value={filename}
+          onChange={(event) => onFilenameChange(event.target.value)}
+        />
+      </label>
+      <label>
+        <span>Format</span>
+        <select
+          aria-label="Export format"
+          value={settings.format}
+          onChange={(event) =>
+            update({ format: event.target.value as "png" | "jpeg" })
+          }
+        >
+          <option value="png">PNG</option>
+          <option value="jpeg">JPEG</option>
+        </select>
+      </label>
+      <label>
+        <span>Scale</span>
+        <input
+          type="number"
+          aria-label="Export scale"
+          min="0.1"
+          max="8"
+          step="0.1"
+          value={settings.scale}
+          onChange={(event) => update({ scale: Number(event.target.value) })}
+        />
+      </label>
+      {settings.format === "jpeg" && (
+        <label>
+          <span>Quality</span>
+          <input
+            type="range"
+            aria-label="JPEG quality"
+            min="0.1"
+            max="1"
+            step="0.01"
+            value={settings.quality}
+            onChange={(event) =>
+              update({ quality: Number(event.target.value) })
+            }
+          />
+        </label>
+      )}
+      {settings.format === "png" && (
+        <label className="export-checkbox">
+          <input
+            type="checkbox"
+            checked={settings.transparent}
+            onChange={(event) => update({ transparent: event.target.checked })}
+          />
+          <span>Transparent background</span>
+        </label>
+      )}
+      {(settings.format === "jpeg" || !settings.transparent) && (
+        <label>
+          <span>Background</span>
+          <input
+            type="color"
+            aria-label="Export background"
+            value={settings.background}
+            onChange={(event) => update({ background: event.target.value })}
+          />
+        </label>
+      )}
+      <div className="export-quick-actions">
+        {[1, 2].map((scale) => (
+          <button
+            type="button"
+            key={scale}
+            disabled={disabled || !filename.trim()}
+            onClick={() => onExport(options(scale))}
+          >
+            {settings.format.toUpperCase()} {scale}×
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="primary-button"
+        disabled={!valid}
+        onClick={() => onExport(options())}
+      >
+        Export {settings.format.toUpperCase()}
+      </button>
+    </div>
+  );
+}
+
+function loadExportSettings(): ExportSettings {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem("open-libra-export-settings") ?? "null",
+    ) as Partial<ExportSettings> | null;
+    if (!stored) return DEFAULT_EXPORT_SETTINGS;
+    return {
+      format: stored.format === "jpeg" ? "jpeg" : "png",
+      scale:
+        typeof stored.scale === "number" && Number.isFinite(stored.scale)
+          ? Math.min(8, Math.max(0.1, stored.scale))
+          : 1,
+      quality:
+        typeof stored.quality === "number" && Number.isFinite(stored.quality)
+          ? Math.min(1, Math.max(0.1, stored.quality))
+          : 0.92,
+      transparent: stored.transparent !== false,
+      background:
+        typeof stored.background === "string" &&
+        /^#[0-9a-f]{6}$/i.test(stored.background)
+          ? stored.background
+          : "#ffffff",
+    };
+  } catch {
+    return DEFAULT_EXPORT_SETTINGS;
+  }
 }
 
 function NumberControl({
