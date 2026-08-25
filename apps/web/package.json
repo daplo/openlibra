@@ -21,6 +21,7 @@
   "devDependencies": {
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@webgpu/types": "latest"
+    "@webgpu/types": "latest",
+    "sass": "^1.103.1"
   }
 }

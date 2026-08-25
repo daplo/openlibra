@@ -1,0 +1,12 @@
+// Open Libra styles — split from the original styles.css by selector group.
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: min(var(--left-panel-width, 200px), 240px) 1fr;
+  }
+  .right-panel {
+    display: none;
+  }
+  .hint {
+    display: none;
+  }
+}

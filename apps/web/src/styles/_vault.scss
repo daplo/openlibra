@@ -1,0 +1,318 @@
+// Open Libra styles — split from the original styles.css by selector group.
+.vault-heading {
+  display: grid;
+  gap: 8px;
+  padding: 4px 4px 14px;
+}
+
+.vault-heading h2,
+.vault-section h3 {
+  margin: 0;
+}
+
+.vault-heading small,
+.vault-style-copy small {
+  color: #8e93a1;
+}
+
+.vault-heading small {
+  line-height: 1.35;
+}
+
+.vault-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px 4px;
+  border-top: 1px solid #2d3037;
+}
+
+.vault-section h3 {
+  font-size: 12px;
+}
+
+.vault-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.asset-upload-button {
+  display: inline-flex;
+  height: var(--control-height);
+  align-items: center;
+  width: var(--control-width);
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.asset-upload-button svg,
+.icon-search svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
+.asset-upload-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.figma-import-section {
+  display: grid;
+  gap: var(--control-gap);
+}
+
+.figma-import-section small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.figma-import-button {
+  position: relative;
+  display: flex;
+  height: var(--control-height);
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.figma-import-button:hover {
+  border-color: var(--accent);
+}
+
+.figma-import-button svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
+.figma-import-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.media-asset-grid,
+.icon-library-grid {
+  display: grid;
+  gap: var(--control-gap);
+}
+
+.media-asset-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.icon-library-grid {
+  grid-template-columns: repeat(auto-fill, var(--control-width));
+}
+
+.media-asset-card,
+.icon-library-button {
+  width: var(--control-width);
+  height: var(--control-height);
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  color: var(--text);
+  background: var(--control-surface);
+}
+
+.media-asset-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.media-asset-card span {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 8px;
+}
+
+.icon-search {
+  display: flex;
+  height: var(--control-height);
+  align-items: center;
+  gap: var(--control-gap);
+  padding: 0 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+}
+
+.icon-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.icon-library-button span {
+  display: grid;
+  height: 100%;
+  place-items: center;
+}
+
+.icon-library-button svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
+.media-controls {
+  display: grid;
+  gap: var(--control-gap);
+}
+
+.vault-create-row,
+.vault-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px var(--control-width);
+  gap: var(--control-gap);
+}
+
+.vault-create-row input,
+.vault-token-row input,
+.vault-style-copy input {
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 var(--control-padding-inline);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-font-size);
+}
+
+.vault-create-row button,
+.vault-token-row button,
+.vault-style-card button {
+  height: var(--control-height);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+  color: var(--text);
+  font-size: var(--control-font-size);
+}
+
+.vault-list {
+  display: grid;
+  gap: var(--control-gap);
+}
+
+.component-asset-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--control-gap);
+  padding: 8px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface-muted);
+}
+
+.component-asset-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.component-asset-card small {
+  color: #8e93a1;
+}
+
+.component-asset-card button {
+  grid-column: 1 / -1;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+}
+
+.vault-icon-button,
+.vault-delete {
+  display: grid;
+  width: var(--control-width);
+  min-width: var(--control-width);
+  padding: 0;
+  place-items: center;
+}
+
+.vault-icon-button svg,
+.vault-delete svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
+.vault-style-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) var(--control-height);
+  align-items: start;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #343740;
+  border-radius: 10px;
+  background: #1d1f24;
+}
+
+.vault-style-preview {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 8px;
+  background: #24262c;
+  overflow: hidden;
+}
+
+.vault-style-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.vault-style-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px 50px;
+  gap: 4px;
+}
+
+.vault-style-fields input {
+  padding-inline: 5px;
+}
+
+.vault-style-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-delete {
+  padding: 0;
+  color: #ff8d8d !important;
+}

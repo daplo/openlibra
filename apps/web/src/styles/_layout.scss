@@ -1,0 +1,110 @@
+// Open Libra styles — split from the original styles.css by selector group.
+.app-shell {
+  display: grid;
+  grid-template-rows: 52px 1fr;
+  width: 100%;
+  height: 100%;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns:
+    var(--left-panel-width, 240px) 1fr
+    var(--right-panel-width, 250px);
+  min-height: 0;
+}
+
+.workspace-hidden {
+  position: absolute;
+  inset: 48px 0 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.left-panel,
+.right-panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  padding: 18px 14px;
+  background: #17181c;
+}
+
+.left-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.right-panel :is(button, input, select) {
+  font-size: var(--control-font-size);
+}
+
+.panel-resize-handle {
+  position: absolute;
+  z-index: 8;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.panel-resize-handle.left {
+  right: -4px;
+}
+
+.panel-resize-handle.right {
+  left: -4px;
+}
+
+.panel-resize-handle:hover,
+.panel-resize-handle:focus-visible {
+  background: #82e6b866;
+}
+
+.left-panel {
+  border-right: 1px solid #292b31;
+}
+
+.right-panel {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-left: 1px solid #292b31;
+}
+
+.vault-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 0;
+  font-size: var(--control-font-size);
+}
+
+.vault-panel button {
+  height: var(--control-height);
+  font-size: var(--control-font-size);
+}
+
+.vault-panel input:not([type="file"]) {
+  height: var(--control-height);
+  font-size: var(--control-font-size);
+}
+
+.vault-panel :is(button, input):focus-visible,
+.right-panel :is(button, input, select):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 1px;
+}
+
+.vault-panel button:disabled,
+.right-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

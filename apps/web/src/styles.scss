@@ -1,0 +1,12 @@
+// Open Libra styles — split from the original styles.css by selector group.
+@use "styles/tokens";
+@use "styles/base";
+@use "styles/layout";
+@use "styles/topbar";
+@use "styles/sidebar";
+@use "styles/canvas";
+@use "styles/panels";
+@use "styles/vault";
+@use "styles/overlays";
+@use "styles/library";
+@use "styles/responsive";

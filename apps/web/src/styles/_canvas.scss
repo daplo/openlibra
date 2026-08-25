@@ -1,0 +1,369 @@
+// Open Libra styles — split from the original styles.css by selector group.
+.canvas-context-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 154px;
+  padding: 5px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--control-surface);
+  box-shadow: 0 12px 32px #0008;
+}
+
+.canvas-context-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--control-gap);
+  width: 100%;
+  height: var(--control-height);
+  padding: 0 8px;
+  border-radius: var(--control-radius);
+  color: #e4e1ea;
+  background: transparent;
+  text-align: left;
+  font-size: var(--control-font-size);
+  line-height: 1;
+}
+
+.canvas-context-menu button:hover {
+  background: #34303d;
+}
+
+.canvas-context-menu svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  color: #a970ff;
+}
+
+.stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.canvas-wrap,
+canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-wrap {
+  position: relative;
+}
+
+canvas[data-tool="select"] {
+  cursor: default;
+}
+
+canvas[data-tool="hand"] {
+  cursor: grab;
+}
+
+canvas[data-tool="hand"]:active {
+  cursor: grabbing;
+}
+
+.snap-guide {
+  position: fixed;
+  z-index: 6;
+  pointer-events: none;
+  background: #df59ff;
+  box-shadow: 0 0 0 1px #df59ff33;
+}
+
+.snap-guide.vertical {
+  top: 48px;
+  bottom: 0;
+  width: 1px;
+}
+
+.snap-guide.horizontal {
+  right: 0;
+  left: 0;
+  height: 1px;
+}
+
+.spacing-overlay {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.isolation-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.component-isolation-bar {
+  position: absolute;
+  z-index: 6;
+  top: 14px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height);
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 9px;
+  background: var(--control-surface);
+  box-shadow: 0 8px 24px #0005;
+  color: #9da2ad;
+  font-size: 11px;
+  transform: translateX(-50%);
+}
+
+.component-isolation-bar > svg {
+  width: 14px;
+  color: #a78bfa;
+}
+
+.component-isolation-bar > svg:not(:first-child) {
+  width: 11px;
+  color: #686d77;
+}
+
+.component-isolation-bar strong {
+  color: inherit;
+  font-weight: 600;
+}
+
+.component-isolation-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-height);
+  margin-left: 4px;
+  padding: 0 9px;
+  border: 1px solid #8b5cf6;
+  border-radius: 6px;
+  background: #7c3aed;
+  color: white;
+}
+
+.component-isolation-bar button svg {
+  width: 13px;
+}
+
+.component-isolation-bar .component-breadcrumb-link {
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #b89af6;
+}
+
+.component-isolation-bar .component-breadcrumb-link:hover {
+  color: #d7c7fa;
+}
+
+.component-isolation-bar .component-workspace-done {
+  margin-left: 8px;
+}
+
+.canvas-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.artboard-guides {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.horizontal-ruler {
+  position: absolute;
+  top: 0;
+  left: var(--ruler-size);
+  width: calc(100% - var(--ruler-size));
+  height: var(--ruler-size);
+  border-bottom: 1px solid #343740;
+}
+
+.vertical-ruler {
+  position: absolute;
+  top: var(--ruler-size);
+  left: 0;
+  width: var(--ruler-size);
+  height: calc(100% - var(--ruler-size));
+  border-right: 1px solid #343740;
+}
+
+.tool-rail {
+  position: absolute;
+  z-index: 7;
+  top: 12px;
+  left: 50%;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #373a42;
+  border-radius: 9px;
+  background: #1b1d22ee;
+  box-shadow: 0 7px 22px #0007;
+  transform: translateX(-50%);
+  transition: top 0.15s ease;
+}
+
+.stage:has(.component-isolation-bar) .tool-rail {
+  left: auto;
+  right: 14px;
+  transform: none;
+}
+
+.stage.with-rulers .tool-rail {
+  top: calc(var(--ruler-size) + 12px);
+}
+
+.stage.toolbar-bottom .tool-rail {
+  top: auto;
+  bottom: 12px;
+}
+
+.tool-rail button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  border-radius: 5px;
+  color: #aeb2bb;
+  background: transparent;
+}
+
+.tool-rail button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tool-rail button.active {
+  color: #101713;
+  background: #82e6b8;
+}
+
+.tool-rail button:disabled {
+  cursor: not-allowed;
+  opacity: 0.28;
+}
+
+.artboard-menu {
+  position: absolute;
+  z-index: 3;
+  top: 54px;
+  left: 50%;
+  width: 280px;
+  max-height: calc(100% - 80px);
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #3a3d45;
+  border-radius: 10px;
+  background: #1c1e23f5;
+  box-shadow: 0 14px 40px #000a;
+  transform: translateX(-50%);
+}
+
+.stage.with-rulers .shape-menu {
+  top: calc(var(--ruler-size) + 54px);
+}
+
+.stage.toolbar-bottom .shape-menu,
+.stage.with-rulers.toolbar-bottom .shape-menu {
+  top: auto;
+  bottom: 54px;
+}
+
+.stage.with-rulers .artboard-menu {
+  top: calc(var(--ruler-size) + 54px);
+}
+
+.stage.toolbar-bottom .artboard-menu,
+.stage.with-rulers.toolbar-bottom .artboard-menu {
+  top: auto;
+  bottom: 54px;
+}
+
+.artboard-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 5px 9px;
+  font-size: 12px;
+}
+
+.artboard-menu-header button {
+  color: #969ba5;
+  background: transparent;
+  font-size: 18px;
+}
+
+.artboard-menu section > p {
+  margin: 9px 5px 4px;
+  color: #777c87;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.artboard-menu section > button {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 5px;
+  color: #d8dbe1;
+  background: transparent;
+  text-align: left;
+  font-size: 11px;
+}
+
+.artboard-menu section > button:hover {
+  background: #30333a;
+}
+
+.artboard-menu small {
+  color: #818691;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.zoom-controls {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid #373a42;
+  border-radius: 8px;
+  background: #1b1d22ee;
+  box-shadow: 0 6px 20px #0006;
+}
+
+.zoom-controls button {
+  min-width: 32px;
+  height: 30px;
+  padding: 0 9px;
+  border-right: 1px solid #34373e;
+  color: #afb3bc;
+  background: transparent;
+  font-size: 11px;
+}
+
+.zoom-controls button:last-child {
+  border: 0;
+}
+
+.zoom-controls button:hover {
+  background: #30333a;
+}

@@ -1,0 +1,338 @@
+// Open Libra styles — split from the original styles.css by selector group.
+:root {
+  --control-height: 30px;
+  --control-width: 30px;
+  --control-icon-size: 15px;
+  --control-font-size: 11px;
+  --control-padding-inline: 6px;
+  --control-radius: 5px;
+  --control-gap: 6px;
+  --control-border: #343740;
+  --control-surface: #24262c;
+  --control-surface-muted: #202228;
+  --control-focus: #82e6b8;
+  --scrollbar-thumb: #454952;
+  --scrollbar-thumb-hover: #626874;
+  --ruler-size: 24px;
+  color: #f3f4f7;
+  background: #0f1013;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+}
+
+:root[data-theme="light"] .vault-create-row input,
+:root[data-theme="light"] .vault-token-row input,
+:root[data-theme="light"] .vault-style-copy input,
+:root[data-theme="light"] .vault-create-row button,
+:root[data-theme="light"] .vault-token-row button,
+:root[data-theme="light"] .vault-style-card button,
+:root[data-theme="light"] .vault-style-preview {
+  border-color: #ccd1d9;
+  background: #fff;
+}
+
+:root[data-theme="light"] .token-add-button {
+  border-color: #ccd1d9;
+  background: #fff;
+}
+
+:root[data-theme="light"] .vault-style-card {
+  border-color: #d9dde4;
+  background: #f5f7fa;
+}
+
+:root[data-theme="light"] {
+  --control-border: #ccd1d9;
+  --control-surface: #fff;
+  --control-surface-muted: #f5f7fa;
+  --control-focus: #24865e;
+  --scrollbar-thumb: #b4bac4;
+  --scrollbar-thumb-hover: #929aa7;
+  color: #202229;
+  background: #e7e9ed;
+}
+
+:root[data-theme="light"] .topbar,
+:root[data-theme="light"] .left-panel,
+:root[data-theme="light"] .right-panel {
+  background: #f7f8fa;
+  border-color: #d6d9df;
+}
+
+:root[data-theme="light"] .topbar {
+  box-shadow: 0 1px 8px #66708518;
+}
+
+:root[data-theme="light"] .file-name,
+:root[data-theme="light"] .empty-state,
+:root[data-theme="light"] .property span,
+:root[data-theme="light"] .color-control,
+:root[data-theme="light"] .number-control {
+  color: #676d78;
+}
+
+:root[data-theme="light"] .mode-switcher {
+  border-color: #d4d7dd;
+  background: #eceef2;
+}
+
+:root[data-theme="light"] .mode-switcher button {
+  color: #6c727e;
+}
+
+:root[data-theme="light"] .mode-switcher button.active {
+  color: #202229;
+  background: #fff;
+  box-shadow: 0 1px 3px #66708528;
+}
+
+:root[data-theme="light"] .theme-toggle {
+  border-color: #d2d5db;
+  color: #4f5560;
+  background: #fff;
+}
+
+:root[data-theme="light"] .menu-trigger {
+  color: #666c77;
+}
+
+:root[data-theme="light"] .menu-trigger:hover,
+:root[data-theme="light"] .menu-trigger.active {
+  color: #22252c;
+  background: #e8eaee;
+}
+
+:root[data-theme="light"] .edit-menu {
+  border-color: #d0d3d9;
+  background: #fff;
+  box-shadow: 0 12px 34px #66708542;
+}
+
+:root[data-theme="light"] .edit-menu button {
+  color: #30343c;
+}
+
+:root[data-theme="light"] .edit-menu button:hover:not(:disabled) {
+  background: #eceef2;
+}
+
+:root[data-theme="light"] .horizontal-ruler,
+:root[data-theme="light"] .vertical-ruler,
+:root[data-theme="light"] .ruler-corner {
+  border-color: #d6d9df;
+}
+
+:root[data-theme="light"] .ruler-corner {
+  background: #f7f8fa;
+}
+
+:root[data-theme="light"] .panel-tabs,
+:root[data-theme="light"] .page-list,
+:root[data-theme="light"] .property-section,
+:root[data-theme="light"] .property,
+:root[data-theme="light"] .style-controls {
+  border-color: #dfe1e6;
+}
+
+:root[data-theme="light"] .page-row.active,
+:root[data-theme="light"] .layer-row:hover {
+  color: #252830;
+  background: #e8eaee;
+}
+
+:root[data-theme="light"] .layer-row.selected {
+  color: #123d2d;
+  background: #b9efd6;
+  box-shadow: inset 3px 0 #24865e;
+}
+
+:root[data-theme="light"] .metrics {
+  border-color: #d9dce2;
+  background: #d9dce2;
+}
+
+:root[data-theme="light"] .metrics div {
+  background: #f1f2f5;
+}
+
+:root[data-theme="light"] .tool-rail,
+:root[data-theme="light"] .zoom-controls,
+:root[data-theme="light"] .artboard-menu,
+:root[data-theme="light"] .shape-menu {
+  border-color: #d0d3d9;
+  background: #ffffffee;
+  box-shadow: 0 8px 24px #66708532;
+}
+
+:root[data-theme="light"] .tool-rail button,
+:root[data-theme="light"] .zoom-controls button {
+  color: #555b66;
+  border-color: #d8dbe1;
+}
+
+:root[data-theme="light"] .tool-rail button.active {
+  color: #123d2d;
+  background: #82e6b8;
+}
+
+:root[data-theme="light"] .artboard-menu section > button,
+:root[data-theme="light"] .shape-menu-grid button {
+  color: #30343c;
+}
+
+:root[data-theme="light"] .artboard-menu section > button:hover,
+:root[data-theme="light"] .shape-menu-grid button:hover {
+  background: #eceef2;
+}
+
+:root[data-theme="light"] .property-section summary {
+  color: #292c33;
+}
+
+:root[data-theme="light"] .segmented-control > span {
+  color: #676d78;
+}
+
+:root[data-theme="light"] .segmented-control button {
+  border-color: #d5d8de;
+  color: #4f5560;
+  background: #fff;
+}
+
+:root[data-theme="light"] .segmented-control button:hover {
+  border-color: #aeb4bd;
+  color: #202229;
+  background: #f0f2f5;
+}
+
+:root[data-theme="light"] .segmented-control button.active {
+  border-color: #62b98f;
+  color: #195f40;
+  background: #dff5e9;
+}
+
+:root[data-theme="light"] .text-content-input,
+:root[data-theme="light"] .select-control select {
+  border-color: #d5d8de;
+  color: #252830;
+  background: #fff;
+}
+
+:root[data-theme="light"] .geometry-input,
+:root[data-theme="light"] .hex-input,
+:root[data-theme="light"] .number-control input[type="number"] {
+  border-color: #d5d8de;
+  color: #252830;
+  background: #fff;
+}
+
+:root[data-theme="light"] .transform-controls label,
+:root[data-theme="light"] .transform-controls button {
+  border-color: #d5d8de;
+  color: #555b66;
+  background: #fff;
+}
+
+:root[data-theme="light"] .transform-controls input {
+  color: #252830;
+}
+
+:root[data-theme="light"] .layout-direction button,
+:root[data-theme="light"] .layout-select select {
+  border-color: #d5d8de;
+  color: #555b66;
+  background: #fff;
+}
+
+:root[data-theme="light"] .layout-direction button.active {
+  border-color: #62b98f;
+  color: #287a54;
+  background: #e9f7ef;
+}
+
+:root[data-theme="light"] .layout-number-input input {
+  border-color: #d5d8de;
+  color: #252830;
+  background: #fff;
+}
+
+:root[data-theme="light"] .alignment-grid {
+  border-color: #d5d8de;
+  background: #fff;
+}
+
+:root[data-theme="light"] .alignment-grid button:hover,
+:root[data-theme="light"] .alignment-grid button.active {
+  background: #e9f7ef;
+}
+
+:root[data-theme="light"] .child-sizing button {
+  border-color: #d5d8de;
+  color: #555b66;
+  background: #fff;
+}
+
+:root[data-theme="light"] .child-sizing button.active {
+  border-color: #62b98f;
+  color: #287a54;
+  background: #e9f7ef;
+}
+
+:root[data-theme="light"] .shadow-effect {
+  border-color: #dfe1e6;
+  background: #f7f8fa;
+}
+
+:root[data-theme="light"] .shadow-effect-header button,
+:root[data-theme="light"] .shadow-effect-header select {
+  border-color: #d5d8de;
+  color: #292c33;
+  background: #fff;
+}
+
+:root[data-theme="light"] .code-block {
+  color: #176b48;
+  background: #e5f5ed;
+}
+
+:root[data-theme="light"] .color-swatch-button {
+  border-color: #d5d8de;
+  background: #fff;
+}
+
+:root[data-theme="light"] .color-library {
+  border-color: #d0d3d9;
+  color: #292c33;
+  background: #fff;
+  box-shadow: 0 12px 36px #66708542;
+}
+
+:root[data-theme="light"] .custom-color-row {
+  border-color: #e0e2e7;
+  color: #555b66;
+}
+
+:root[data-theme="light"] .library-actions button {
+  border-color: #d8dbe1;
+  color: #4f5560;
+  background: #f2f3f5;
+}
+
+:root[data-theme="light"]
+  .number-control
+  input[type="range"]::-webkit-slider-runnable-track {
+  background: #d8dbe1;
+}
+
+:root[data-theme="light"]
+  .number-control
+  input[type="range"]::-moz-range-track {
+  background: #d8dbe1;
+}

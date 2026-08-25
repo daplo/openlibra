@@ -1,0 +1,144 @@
+// Open Libra styles — split from the original styles.css by selector group.
+.topbar {
+  position: relative;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 14px;
+  border-bottom: 1px solid #292b31;
+  background: #17181c;
+  box-shadow: 0 1px 8px #0004;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #0c1210;
+  background: #82e6b8;
+  font-weight: 850;
+}
+
+.file-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  padding-left: 14px;
+  border-left: 1px solid #34363e;
+  color: #a1a5af;
+  background: transparent;
+  font-size: 12px;
+}
+
+.file-name:hover,
+.file-name.active {
+  color: #f1f3f5;
+}
+
+.file-name svg {
+  width: 12px;
+  height: 12px;
+  transform: rotate(90deg);
+}
+
+.autosave-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #666c78;
+}
+
+.autosave-indicator.saving {
+  background: #e4bc68;
+}
+
+.autosave-indicator.saved {
+  background: #82e6b8;
+}
+
+.autosave-indicator.error {
+  background: #ff7777;
+}
+
+.mode-switcher {
+  display: flex;
+  padding: 3px;
+  border: 1px solid #30323a;
+  border-radius: 8px;
+  background: #111216;
+}
+
+.mode-switcher button {
+  padding: 6px 13px;
+  border-radius: 5px;
+  color: #9296a2;
+  background: transparent;
+  font-size: 12px;
+}
+
+.mode-switcher button.active {
+  color: #f6f7f8;
+  background: #33363e;
+  box-shadow: 0 1px 2px #0008;
+}
+
+.topbar-actions {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-toggle {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #343740;
+  border-radius: 7px;
+  color: #c8ccd4;
+  background: #22242a;
+}
+
+.theme-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.theme-toggle:hover {
+  background: #30333a;
+}
+
+.share-button {
+  padding: 7px 14px;
+  border-radius: 7px;
+  color: #13201a;
+  background: #82e6b8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.library-trigger {
+  height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  color: #b8bdc7;
+  background: var(--control-surface);
+}
+
+.library-trigger.active {
+  border-color: #a970ff;
+  color: #d9c2ff;
+  background: #33244b;
+}
