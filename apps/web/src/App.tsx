@@ -5,56 +5,36 @@ import {
   useState,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import "@fontsource/lexend-deca/300.css";
 import "@fontsource/lexend-deca/400.css";
 import "@fontsource/lexend-deca/500.css";
 import "@fontsource/lexend-deca/600.css";
 import "@fontsource/lexend-deca/700.css";
-import {
-  Check,
-  ChevronRight,
-  Component,
-  FileArchive,
-  FilePlus2,
-  FolderClock,
-  FolderOpen,
-  Frame,
-  Hand,
-  MessageCircle,
-  Moon,
-  MousePointer2,
-  Redo2,
-  Save,
-  Square,
-  Shapes,
-  Sun,
-  Type,
-  Undo2,
-} from "lucide-react";
-import {
-  ArtboardGuides,
-  CanvasGrid,
-  IsolationOverlay,
-  MediaOverlay,
-  Rulers,
-  SelectionOverlay,
-  SpacingOverlay,
-  TextOverlay,
-  VectorOverlay,
-} from "./components/CanvasOverlays";
-import {
-  VectorPointOverlay,
-  type VectorPointSelection,
-} from "./components/VectorPointOverlay";
-import { ArtboardMenu } from "./components/ArtboardMenu";
-import { ShapeMenu, type VectorShape } from "./components/ShapeMenu";
-import { Inspect, Review, ToolButton } from "./components/EditorChrome";
+import { Component } from "lucide-react";
+import { type VectorPointSelection } from "./components/VectorPointOverlay";
+import { type VectorShape } from "./components/ShapeMenu";
+import { Inspect, Review } from "./components/EditorChrome";
+import { CanvasStage } from "./components/CanvasStage";
+import { EditorTopbar } from "./components/EditorTopbar";
 import { Panel } from "./components/EditorSidebar";
 import { Properties } from "./components/PropertiesPanel";
 import { LibraryView } from "./components/LibraryView";
-import { ARTBOARD_PRESETS, EMPTY_STATS, MODES } from "./editor/constants";
+import { PanelResizeHandle } from "./components/PanelResizeHandle";
+import { ARTBOARD_PRESETS, EMPTY_STATS } from "./editor/constants";
+import {
+  componentSourceRootForNode,
+  findComponentMasterRoot,
+  isComponentMasterNode,
+  isNodeWithinRoot,
+  measureTextBounds,
+  nearestSnap,
+  readFileAsDataUrl,
+  readImageDimensions,
+  textStylesEqual,
+  textTypographyEqual,
+  topLevelFrameAtPoint,
+} from "./editor/app-utils";
 import { figmaFileToImport } from "./editor/figma-import";
 import {
   exportNodeRaster,
@@ -122,12 +102,6 @@ export function App() {
   const pendingSceneFrameRef = useRef<number | undefined>(undefined);
   const documentModelRef = useRef<DocumentReadModel | undefined>(undefined);
   const nodesByIdRef = useRef<Map<string, NodeSummary>>(new Map());
-  const fileMenuRef = useRef<HTMLDivElement>(null);
-  const documentSwitcherRef = useRef<HTMLDivElement>(null);
-  const documentFileInputRef = useRef<HTMLInputElement>(null);
-  const figmaFileInputRef = useRef<HTMLInputElement>(null);
-  const editMenuRef = useRef<HTMLDivElement>(null);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("design");
   const [leftPanelWidth, setLeftPanelWidth] = useState(240);
   const [rightPanelWidth, setRightPanelWidth] = useState(250);
@@ -197,10 +171,6 @@ export function App() {
     canUndo: false,
     canRedo: false,
   });
-  const [fileMenuOpen, setFileMenuOpen] = useState(false);
-  const [documentSwitcherOpen, setDocumentSwitcherOpen] = useState(false);
-  const [editMenuOpen, setEditMenuOpen] = useState(false);
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [rulersVisible, setRulersVisible] = useState(
     () => localStorage.getItem("open-libra-rulers") !== "hidden",
   );
@@ -481,8 +451,6 @@ export function App() {
   }
 
   async function newDocument() {
-    setFileMenuOpen(false);
-    setDocumentSwitcherOpen(false);
     if (!(await preserveCurrentDocument())) return;
     const id = crypto.randomUUID();
     const name = nextUntitledDocumentName();
@@ -492,10 +460,7 @@ export function App() {
   }
 
   async function requestOpenDocument() {
-    setFileMenuOpen(false);
-    setDocumentSwitcherOpen(false);
-    if (!(await preserveCurrentDocument())) return;
-    documentFileInputRef.current?.click();
+    return preserveCurrentDocument();
   }
 
   async function openDocument(file: File) {
@@ -520,7 +485,6 @@ export function App() {
   function saveDocument() {
     const engine = engineRef.current;
     if (!engine) return;
-    setFileMenuOpen(false);
     const json = engine.document_json();
     const blob = new Blob([serializeProject(json)], {
       type: OPEN_LIBRA_PROJECT_MIME,
@@ -643,7 +607,6 @@ export function App() {
   }
 
   async function openRecentDocument(document: RecentDocument) {
-    setDocumentSwitcherOpen(false);
     if (document.id === currentRecentDocumentId) {
       setLibraryOpen(false);
       return;
@@ -2195,66 +2158,6 @@ export function App() {
     inputControllerRef.current?.setHandlers(createInputHandlers());
   });
 
-  useEffect(() => {
-    if (!fileMenuOpen) return;
-    function closeFileMenu(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        fileMenuRef.current?.contains(event.target)
-      )
-        return;
-      setFileMenuOpen(false);
-    }
-    document.addEventListener("pointerdown", closeFileMenu, true);
-    return () =>
-      document.removeEventListener("pointerdown", closeFileMenu, true);
-  }, [fileMenuOpen]);
-
-  useEffect(() => {
-    if (!documentSwitcherOpen) return;
-    function closeDocumentSwitcher(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        documentSwitcherRef.current?.contains(event.target)
-      )
-        return;
-      setDocumentSwitcherOpen(false);
-    }
-    document.addEventListener("pointerdown", closeDocumentSwitcher, true);
-    return () =>
-      document.removeEventListener("pointerdown", closeDocumentSwitcher, true);
-  }, [documentSwitcherOpen]);
-
-  useEffect(() => {
-    if (!editMenuOpen) return;
-    function closeEditMenu(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        editMenuRef.current?.contains(event.target)
-      )
-        return;
-      setEditMenuOpen(false);
-    }
-    document.addEventListener("pointerdown", closeEditMenu, true);
-    return () =>
-      document.removeEventListener("pointerdown", closeEditMenu, true);
-  }, [editMenuOpen]);
-
-  useEffect(() => {
-    if (!viewMenuOpen) return;
-    function closeViewMenu(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        viewMenuRef.current?.contains(event.target)
-      )
-        return;
-      setViewMenuOpen(false);
-    }
-    document.addEventListener("pointerdown", closeViewMenu, true);
-    return () =>
-      document.removeEventListener("pointerdown", closeViewMenu, true);
-  }, [viewMenuOpen]);
-
   useEffect(
     () =>
       localStorage.setItem(
@@ -2290,326 +2193,36 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="mark">OL</span>
-          <strong>Open Libra</strong>
-          <div className="document-switcher" ref={documentSwitcherRef}>
-            <button
-              type="button"
-              className={`file-name ${documentSwitcherOpen ? "active" : ""}`}
-              aria-haspopup="menu"
-              aria-expanded={documentSwitcherOpen}
-              onClick={() => {
-                setFileMenuOpen(false);
-                setDocumentSwitcherOpen((open) => !open);
-              }}
-            >
-              {documentName}
-              {isDocumentDirty ? " •" : ""}
-              <span
-                className={`autosave-indicator ${autosaveState}`}
-                title={autosaveLabel(autosaveState, isDocumentDirty)}
-              />
-              <ChevronRight aria-hidden="true" />
-            </button>
-            {documentSwitcherOpen && (
-              <div className="document-switcher-menu" role="menu">
-                <div className="document-switcher-heading">Documents</div>
-                <button
-                  type="button"
-                  className="document-switcher-item current"
-                  role="menuitem"
-                  onClick={() => setDocumentSwitcherOpen(false)}
-                >
-                  <Check aria-hidden="true" />
-                  <span>
-                    <strong>{documentName}</strong>
-                    <small>
-                      {autosaveLabel(autosaveState, isDocumentDirty)}
-                    </small>
-                  </span>
-                </button>
-                {recentDocuments
-                  .filter((document) => document.id !== currentRecentDocumentId)
-                  .slice(0, 6)
-                  .map((document) => (
-                    <button
-                      type="button"
-                      className="document-switcher-item"
-                      role="menuitem"
-                      key={document.id}
-                      onClick={() => void openRecentDocument(document)}
-                    >
-                      <span className="document-switcher-dot" />
-                      <span>
-                        <strong>{document.name}</strong>
-                        <small>
-                          {document.pageCount} page
-                          {document.pageCount === 1 ? "" : "s"} ·{" "}
-                          {document.objectCount.toLocaleString()} objects
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-                <div className="document-switcher-actions">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void newDocument()}
-                  >
-                    <FilePlus2 aria-hidden="true" /> New
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void requestOpenDocument()}
-                  >
-                    <FolderOpen aria-hidden="true" /> Open…
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setDocumentSwitcherOpen(false);
-                      setLibraryComponentId(undefined);
-                      setLibrarySection("projects");
-                      setLibraryOpen(true);
-                    }}
-                  >
-                    <FolderClock aria-hidden="true" /> View all
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="menu-anchor" ref={fileMenuRef}>
-            <button
-              type="button"
-              className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
-              aria-haspopup="menu"
-              aria-expanded={fileMenuOpen}
-              onClick={() => {
-                setEditMenuOpen(false);
-                setViewMenuOpen(false);
-                setFileMenuOpen((open) => !open);
-              }}
-            >
-              File
-            </button>
-            {fileMenuOpen && (
-              <div className="edit-menu file-menu" role="menu">
-                <button type="button" role="menuitem" onClick={newDocument}>
-                  <FilePlus2 />
-                  <span>New document</span>
-                  <kbd>⌘N</kbd>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={requestOpenDocument}
-                >
-                  <FolderOpen />
-                  <span>Open…</span>
-                  <kbd>⌘O</kbd>
-                </button>
-                <button type="button" role="menuitem" onClick={saveDocument}>
-                  <Save />
-                  <span>Save</span>
-                  <kbd>⌘S</kbd>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setFileMenuOpen(false);
-                    setLibraryComponentId(undefined);
-                    setLibrarySection("projects");
-                    setLibraryOpen(true);
-                  }}
-                >
-                  <FolderClock />
-                  <span>Recent projects…</span>
-                  <kbd />
-                </button>
-                <div className="menu-section-label">Import</div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setFileMenuOpen(false);
-                    figmaFileInputRef.current?.click();
-                  }}
-                >
-                  <FileArchive />
-                  <span>Import Figma file…</span>
-                  <kbd>.fig</kbd>
-                </button>
-              </div>
-            )}
-            <input
-              ref={documentFileInputRef}
-              className="hidden-file-input"
-              data-testid="open-document-input"
-              type="file"
-              accept=".libra,.olibra,.json,application/json,application/vnd.openlibra.project+json,application/vnd.openlibra+json"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void openDocument(file);
-                event.currentTarget.value = "";
-              }}
-            />
-            <input
-              ref={figmaFileInputRef}
-              className="hidden-file-input"
-              data-testid="file-menu-figma-upload"
-              type="file"
-              accept=".fig,application/octet-stream"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void importFigma(file);
-                event.currentTarget.value = "";
-              }}
-            />
-          </div>
-          <div className="menu-anchor" ref={editMenuRef}>
-            <button
-              type="button"
-              className={`menu-trigger ${editMenuOpen ? "active" : ""}`}
-              onClick={() => {
-                setFileMenuOpen(false);
-                setViewMenuOpen(false);
-                setEditMenuOpen((open) => !open);
-              }}
-            >
-              Edit
-            </button>
-            {editMenuOpen && (
-              <div className="edit-menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!historyState.canUndo}
-                  onClick={() => {
-                    undo();
-                    setEditMenuOpen(false);
-                  }}
-                >
-                  <Undo2 />
-                  <span>Undo</span>
-                  <kbd>⌘Z</kbd>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!historyState.canRedo}
-                  onClick={() => {
-                    redo();
-                    setEditMenuOpen(false);
-                  }}
-                >
-                  <Redo2 />
-                  <span>Redo</span>
-                  <kbd>⇧⌘Z</kbd>
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="menu-anchor" ref={viewMenuRef}>
-            <button
-              type="button"
-              className={`menu-trigger ${viewMenuOpen ? "active" : ""}`}
-              onClick={() => {
-                setFileMenuOpen(false);
-                setEditMenuOpen(false);
-                setViewMenuOpen((open) => !open);
-              }}
-            >
-              View
-            </button>
-            {viewMenuOpen && (
-              <div className="edit-menu view-menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={rulersVisible}
-                  onClick={() => setRulersVisible((visible) => !visible)}
-                >
-                  <span className="menu-check">{rulersVisible ? "✓" : ""}</span>
-                  <span>Show rulers</span>
-                  <kbd>⇧R</kbd>
-                </button>
-                <button
-                  type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={gridVisible}
-                  onClick={() => setGridVisible((visible) => !visible)}
-                >
-                  <span className="menu-check">{gridVisible ? "✓" : ""}</span>
-                  <span>Show grid</span>
-                  <kbd>⇧G</kbd>
-                </button>
-                <div className="menu-section-label">Toolbar</div>
-                {(["top", "bottom"] as const).map((position) => (
-                  <button
-                    type="button"
-                    key={position}
-                    role="menuitemradio"
-                    aria-checked={toolbarPosition === position}
-                    onClick={() => setToolbarPosition(position)}
-                  >
-                    <span className="menu-check">
-                      {toolbarPosition === position ? "●" : ""}
-                    </span>
-                    <span>{position === "top" ? "Top" : "Bottom"}</span>
-                    <span />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <nav className="mode-switcher" aria-label="Editor mode">
-          {MODES.map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              className={mode === item.id ? "active" : ""}
-              onClick={() => setMode(item.id)}
-              title={`${item.label} mode (${item.shortcut})`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        <div className="topbar-actions">
-          <button
-            type="button"
-            className={`library-trigger ${libraryOpen ? "active" : ""}`}
-            onClick={() => {
-              setLibraryComponentId(undefined);
-              setLibrarySection("projects");
-              setLibraryOpen((open) => !open);
-            }}
-          >
-            Library
-          </button>
-          <button
-            type="button"
-            className="theme-toggle"
-            onClick={() =>
-              setTheme((current) => (current === "dark" ? "light" : "dark"))
-            }
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          >
-            {theme === "dark" ? <Sun /> : <Moon />}
-          </button>
-          <button type="button" className="share-button">
-            Share
-          </button>
-        </div>
-      </header>
+      <EditorTopbar
+        documentName={documentName}
+        isDocumentDirty={isDocumentDirty}
+        autosaveState={autosaveState}
+        recentDocuments={recentDocuments}
+        currentRecentDocumentId={currentRecentDocumentId}
+        mode={mode}
+        setMode={setMode}
+        libraryOpen={libraryOpen}
+        setLibraryOpen={setLibraryOpen}
+        setLibraryComponentId={setLibraryComponentId}
+        setLibrarySection={setLibrarySection}
+        theme={theme}
+        setTheme={setTheme}
+        historyState={historyState}
+        rulersVisible={rulersVisible}
+        setRulersVisible={setRulersVisible}
+        gridVisible={gridVisible}
+        setGridVisible={setGridVisible}
+        toolbarPosition={toolbarPosition}
+        setToolbarPosition={setToolbarPosition}
+        newDocument={newDocument}
+        requestOpenDocument={requestOpenDocument}
+        saveDocument={saveDocument}
+        openDocument={openDocument}
+        importFigma={importFigma}
+        openRecentDocument={openRecentDocument}
+        undo={undo}
+        redo={redo}
+      />
 
       {libraryOpen && (
         <LibraryView
@@ -2728,286 +2341,55 @@ export function App() {
           />
         </aside>
 
-        <section
-          className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
-        >
-          <div className="tool-rail" aria-label="Canvas tools">
-            <ToolButton
-              label="Select (V)"
-              icon={<MousePointer2 />}
-              active={canvasTool === "select"}
-              disabled={mode !== "design"}
-              onClick={() => setCanvasTool("select")}
-            />
-            <ToolButton
-              label="Hand (H)"
-              icon={<Hand />}
-              active={canvasTool === "hand"}
-              onClick={() => setCanvasTool("hand")}
-            />
-            <ToolButton
-              label="Artboard"
-              icon={<Frame />}
-              disabled={mode !== "design"}
-              active={artboardMenuOpen}
-              onClick={() => {
-                setShapeMenuOpen(false);
-                setArtboardMenuOpen((open) => !open);
-              }}
-            />
-            <ToolButton
-              label="Rectangle"
-              icon={<Square />}
-              disabled={mode !== "design"}
-              onClick={() => addNode("rectangle")}
-            />
-            <ToolButton
-              label="Shapes"
-              icon={<Shapes />}
-              active={shapeMenuOpen}
-              disabled={mode !== "design"}
-              onClick={() => {
-                setArtboardMenuOpen(false);
-                setShapeMenuOpen((open) => !open);
-              }}
-            />
-            <ToolButton
-              label="Text"
-              icon={<Type />}
-              disabled={mode !== "design"}
-              onClick={() => addNode("text")}
-            />
-            <ToolButton
-              label="Comment"
-              icon={<MessageCircle />}
-              disabled={mode === "developer"}
-            />
-          </div>
-
-          {artboardMenuOpen && (
-            <ArtboardMenu
-              onChoose={addArtboard}
-              onClose={() => setArtboardMenuOpen(false)}
-            />
-          )}
-          {shapeMenuOpen && (
-            <ShapeMenu
-              onChoose={addVectorShape}
-              onClose={() => setShapeMenuOpen(false)}
-            />
-          )}
-
-          <div className="canvas-wrap">
-            <canvas
-              ref={canvasRef}
-              aria-label="Open Libra WebGPU editor canvas"
-              onContextMenu={(event) => {
-                event.preventDefault();
-                openCanvasComponentMenu(event.clientX, event.clientY);
-              }}
-              onDragOver={(event) => {
-                if (
-                  event.dataTransfer.types.includes("Files") ||
-                  event.dataTransfer.types.includes(
-                    "application/x-open-libra-asset",
-                  )
-                ) {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "copy";
-                }
-              }}
-              onDrop={dropAssetOnCanvas}
-            />
-            {gridVisible && (
-              <CanvasGrid rendererRef={rendererRef} theme={theme} />
-            )}
-            <ArtboardGuides
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              artboards={guidedArtboards}
-            />
-            <MediaOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              assets={documentModel.media_assets}
-            />
-            <VectorOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-            />
-            {editingVectorId &&
-              selectedNodes.length === 1 &&
-              selectedNodes[0].id === editingVectorId &&
-              selectedNodes[0].vector?.geometry.type === "path" && (
-                <VectorPointOverlay
-                  rendererRef={rendererRef}
-                  node={selectedNodes[0]}
-                  selectedPoint={selectedVectorPoint}
-                  onSelectPoint={setSelectedVectorPoint}
-                  onBeginMove={beginVectorPointMove}
-                  onMovePoint={moveVectorPoint}
-                  onEndMove={endVectorPointMove}
-                  onDeletePoint={deleteVectorPoint}
-                />
-              )}
-            <TextOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              editingTextId={editingTextId}
-            />
-            {isolationRoot && (
-              <IsolationOverlay
-                rendererRef={rendererRef}
-                root={isolationRoot}
-                theme={theme}
-              />
-            )}
-            <SelectionOverlay
-              rendererRef={rendererRef}
-              selected={selectedNodes}
-            />
-            {marqueeRect && (
-              <div className="selection-marquee" style={marqueeRect} />
-            )}
-            {snapGuides.x !== undefined && (
-              <div
-                className="snap-guide vertical"
-                style={{ left: snapGuides.x }}
-              />
-            )}
-            {snapGuides.y !== undefined && (
-              <div
-                className="snap-guide horizontal"
-                style={{ top: snapGuides.y }}
-              />
-            )}
-            {isolationRoot && (
-              <div
-                className="component-isolation-bar"
-                data-testid="component-isolation"
-              >
-                <Component aria-hidden="true" />
-                <button
-                  type="button"
-                  className="component-breadcrumb-link"
-                  onClick={() => {
-                    setLibraryComponentId(componentWorkspace?.component.id);
-                    setLibraryOpen(true);
-                  }}
-                >
-                  Components
-                </button>
-                <ChevronRight aria-hidden="true" />
-                <strong>
-                  {componentWorkspace?.component.name ?? isolationRoot.name}
-                </strong>
-                <ChevronRight aria-hidden="true" />
-                <span>{componentWorkspace?.variant.name ?? "Default"}</span>
-                <button
-                  type="button"
-                  className="component-workspace-done"
-                  onClick={() => setIsolationRootId(undefined)}
-                >
-                  <Check aria-hidden="true" />
-                  Done
-                </button>
-              </div>
-            )}
-            <SpacingOverlay
-              rendererRef={rendererRef}
-              interactionCanvasRef={canvasRef}
-              nodes={documentModel.nodes}
-              selected={selectedNodes}
-            />
-            {editingTextNode?.text && (
-              <textarea
-                className="text-editor-overlay"
-                defaultValue={editingTextNode.text.content}
-                autoFocus
-                wrap={
-                  editingTextNode.text.sizing === "auto_width" ? "off" : "soft"
-                }
-                style={textEditorStyle(editingTextNode, rendererRef.current)}
-                onBlur={(event) => {
-                  if (
-                    event.currentTarget.value !==
-                    editingTextInitialValueRef.current
-                  )
-                    updateNodeText(editingTextNode, {
-                      ...editingTextNode.text!,
-                      content: event.currentTarget.value,
-                    });
-                  setEditingTextId(undefined);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") setEditingTextId(undefined);
-                }}
-                aria-label="Edit text content"
-              />
-            )}
-            {error && (
-              <div className="error-card">
-                <strong>Renderer unavailable</strong>
-                <span>{error}</span>
-              </div>
-            )}
-            {canvasContextMenu && (
-              <div
-                className="canvas-context-menu"
-                role="menu"
-                style={{
-                  left: canvasContextMenu.x,
-                  top: canvasContextMenu.y,
-                }}
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => {
-                    editMainComponent(canvasContextMenu.sourceRootId);
-                    setCanvasContextMenu(undefined);
-                  }}
-                >
-                  <Component aria-hidden="true" />
-                  Edit component
-                </button>
-              </div>
-            )}
-          </div>
-
-          {rulersVisible && <Rulers rendererRef={rendererRef} theme={theme} />}
-
-          <div className="zoom-controls">
-            <button
-              type="button"
-              onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
-              aria-label="Zoom out"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              onClick={() => rendererRef.current?.resetView()}
-            >
-              {Math.round(stats.zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              onClick={() => rendererRef.current?.zoomBy(1.2)}
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={() => rendererRef.current?.zoomToFit()}
-              title="Zoom to fit (F)"
-            >
-              Fit
-            </button>
-          </div>
-        </section>
+        <CanvasStage
+          canvasRef={canvasRef}
+          rendererRef={rendererRef}
+          mode={mode}
+          rulersVisible={rulersVisible}
+          toolbarPosition={toolbarPosition}
+          canvasTool={canvasTool}
+          setCanvasTool={setCanvasTool}
+          artboardMenuOpen={artboardMenuOpen}
+          setArtboardMenuOpen={setArtboardMenuOpen}
+          shapeMenuOpen={shapeMenuOpen}
+          setShapeMenuOpen={setShapeMenuOpen}
+          addNode={addNode}
+          addArtboard={addArtboard}
+          addVectorShape={addVectorShape}
+          openCanvasComponentMenu={openCanvasComponentMenu}
+          dropAssetOnCanvas={dropAssetOnCanvas}
+          gridVisible={gridVisible}
+          theme={theme}
+          documentModel={documentModel}
+          guidedArtboards={guidedArtboards}
+          editingVectorId={editingVectorId}
+          selectedNodes={selectedNodes}
+          selectedVectorPoint={selectedVectorPoint}
+          setSelectedVectorPoint={setSelectedVectorPoint}
+          beginVectorPointMove={beginVectorPointMove}
+          moveVectorPoint={moveVectorPoint}
+          endVectorPointMove={endVectorPointMove}
+          deleteVectorPoint={deleteVectorPoint}
+          editingTextId={editingTextId}
+          isolationRoot={isolationRoot}
+          componentWorkspace={componentWorkspace}
+          marqueeRect={marqueeRect}
+          snapGuides={snapGuides}
+          openComponentLibrary={(componentId) => {
+            setLibraryComponentId(componentId);
+            setLibraryOpen(true);
+          }}
+          exitIsolation={() => setIsolationRootId(undefined)}
+          editingTextNode={editingTextNode}
+          editingTextInitialValue={editingTextInitialValueRef.current}
+          updateNodeText={updateNodeText}
+          setEditingTextId={setEditingTextId}
+          error={error}
+          canvasContextMenu={canvasContextMenu}
+          editMainComponent={editMainComponent}
+          dismissCanvasContextMenu={() => setCanvasContextMenu(undefined)}
+          zoom={stats.zoom}
+        />
 
         <aside className="right-panel">
           <PanelResizeHandle
@@ -3102,252 +2484,4 @@ export function App() {
       </section>
     </main>
   );
-}
-
-function PanelResizeHandle({
-  side,
-  width,
-  onChange,
-}: {
-  side: "left" | "right";
-  width: number;
-  onChange: (width: number) => void;
-}) {
-  const clamp = (value: number) => Math.min(420, Math.max(190, value));
-  const beginResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    const originX = event.clientX;
-    const originWidth = width;
-    const move = (moveEvent: PointerEvent) =>
-      onChange(
-        clamp(
-          originWidth +
-            (side === "left"
-              ? moveEvent.clientX - originX
-              : originX - moveEvent.clientX),
-        ),
-      );
-    const stop = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop, { once: true });
-  };
-  return (
-    <button
-      type="button"
-      className={`panel-resize-handle ${side}`}
-      aria-label={`Resize ${side} sidebar`}
-      title={`Resize ${side} sidebar`}
-      onPointerDown={beginResize}
-      onKeyDown={(event) => {
-        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-        const direction = event.key === "ArrowRight" ? 1 : -1;
-        onChange(clamp(width + direction * (side === "left" ? 10 : -10)));
-      }}
-    />
-  );
-}
-
-function textEditorStyle(node: NodeSummary, renderer?: OpenLibraRenderer) {
-  const view = renderer?.getViewState() ?? { pan: { x: 0, y: 0 }, zoom: 1 };
-  const text = node.text!;
-  return {
-    left: node.x * view.zoom + view.pan.x,
-    top: node.y * view.zoom + view.pan.y,
-    width: node.width * view.zoom,
-    height: node.height * view.zoom,
-    fontFamily: text.font_family,
-    fontWeight: text.font_weight,
-    fontStyle: text.font_style,
-    fontSize: text.font_size * view.zoom,
-    lineHeight: text.line_height,
-    letterSpacing: text.letter_spacing * view.zoom,
-    textAlign: text.horizontal_align,
-    whiteSpace: text.sizing === "auto_width" ? "pre" : "pre-wrap",
-    overflow: text.sizing === "fixed" ? "auto" : "hidden",
-    color: rgbaToHex(node.fill),
-  } as const;
-}
-
-function measureTextBounds(node: NodeSummary, text: TextStyleSummary) {
-  if (text.sizing === "fixed") return undefined;
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (!context) return undefined;
-  context.font = `${text.font_style} ${text.font_weight} ${text.font_size}px ${JSON.stringify(text.font_family)}, sans-serif`;
-  const measure = (value: string) =>
-    context.measureText(value).width +
-    Math.max(0, value.length - 1) * text.letter_spacing;
-  let lines: string[];
-  if (text.sizing === "auto_width") {
-    lines = text.content.split("\n");
-  } else {
-    lines = [];
-    for (const paragraph of text.content.split("\n")) {
-      const words = paragraph.split(/\s+/);
-      let line = "";
-      for (const word of words) {
-        const candidate = line ? `${line} ${word}` : word;
-        if (line && measure(candidate) > node.width) {
-          lines.push(line);
-          line = word;
-        } else line = candidate;
-      }
-      lines.push(line);
-    }
-  }
-  return {
-    width:
-      text.sizing === "auto_width"
-        ? Math.max(8, ...lines.map(measure))
-        : node.width,
-    height: Math.max(8, lines.length * text.font_size * text.line_height),
-  };
-}
-
-function textStylesEqual(left: TextStyleSummary, right: TextStyleSummary) {
-  return (
-    left.content === right.content &&
-    left.font_family === right.font_family &&
-    left.font_weight === right.font_weight &&
-    left.font_size === right.font_size &&
-    left.line_height === right.line_height &&
-    left.letter_spacing === right.letter_spacing &&
-    left.horizontal_align === right.horizontal_align &&
-    left.vertical_align === right.vertical_align &&
-    left.font_style === right.font_style &&
-    left.sizing === right.sizing
-  );
-}
-
-function textTypographyEqual(left: TextStyleSummary, right: TextStyleSummary) {
-  return (
-    left.font_family === right.font_family &&
-    left.font_weight === right.font_weight &&
-    left.font_size === right.font_size &&
-    left.line_height === right.line_height &&
-    left.letter_spacing === right.letter_spacing &&
-    left.horizontal_align === right.horizontal_align &&
-    left.vertical_align === right.vertical_align &&
-    left.font_style === right.font_style &&
-    left.sizing === right.sizing
-  );
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
-}
-
-function readImageDimensions(source: string) {
-  return new Promise<{ width: number; height: number }>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () =>
-      resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => reject(new Error("The selected image is invalid."));
-    image.src = source;
-  });
-}
-
-function topLevelFrameAtPoint(nodes: NodeSummary[], x: number, y: number) {
-  return nodes
-    .filter(
-      (node) =>
-        node.kind === "frame" &&
-        !node.parent_id &&
-        x >= node.x &&
-        x <= node.x + node.width &&
-        y >= node.y &&
-        y <= node.y + node.height,
-    )
-    .at(-1);
-}
-
-function isNodeWithinRoot(
-  nodeId: string,
-  rootId: string,
-  nodesById: Map<string, NodeSummary>,
-) {
-  let current = nodesById.get(nodeId);
-  const visited = new Set<string>();
-  while (current && !visited.has(current.id)) {
-    if (current.id === rootId) return true;
-    visited.add(current.id);
-    current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
-  }
-  return false;
-}
-
-function findComponentMasterRoot(
-  nodeId: string,
-  nodesById: Map<string, NodeSummary>,
-) {
-  let current = nodesById.get(nodeId);
-  const visited = new Set<string>();
-  while (current && !visited.has(current.id)) {
-    if (current.component_id && !current.instance_root_id) return current;
-    visited.add(current.id);
-    current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
-  }
-  return undefined;
-}
-
-function isComponentMasterNode(
-  nodeId: string,
-  nodesById: Map<string, NodeSummary>,
-) {
-  return Boolean(findComponentMasterRoot(nodeId, nodesById));
-}
-
-function componentSourceRootForNode(
-  nodeId: string,
-  nodesById: Map<string, NodeSummary>,
-  model: DocumentReadModel,
-) {
-  let current = nodesById.get(nodeId);
-  const visited = new Set<string>();
-  while (current && !visited.has(current.id)) {
-    const componentId = current.component_id;
-    const variantId = current.component_variant_id;
-    if (componentId && variantId) {
-      return model.components
-        .find((component) => component.id === componentId)
-        ?.variants.find((variant) => variant.id === variantId)?.source_root_id;
-    }
-    visited.add(current.id);
-    current = current.parent_id ? nodesById.get(current.parent_id) : undefined;
-  }
-  return undefined;
-}
-
-function autosaveLabel(
-  state: "idle" | "saving" | "saved" | "error",
-  dirty: boolean,
-) {
-  if (state === "saving") return "Saving locally…";
-  if (state === "error") return "Local save failed";
-  if (state === "saved" && dirty) return "Saved locally · file not downloaded";
-  if (state === "saved") return "Saved locally";
-  return "Current";
-}
-
-function nearestSnap(moving: number[], targets: number[], threshold: number) {
-  let best: { offset: number; target: number } | undefined;
-  for (const source of moving) {
-    for (const target of targets) {
-      const offset = target - source;
-      if (
-        Math.abs(offset) <= threshold &&
-        (!best || Math.abs(offset) < Math.abs(best.offset))
-      )
-        best = { offset, target };
-    }
-  }
-  return best;
 }
