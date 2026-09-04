@@ -224,6 +224,76 @@
   transform: translateX(-50%);
 }
 
+.vector-tool-menu {
+  position: absolute;
+  z-index: 8;
+  top: 54px;
+  left: 50%;
+  width: 260px;
+  padding: 10px;
+  border: 1px solid #3a3d45;
+  border-radius: 10px;
+  background: #1c1e23f5;
+  box-shadow: 0 14px 40px #000a;
+  transform: translateX(-50%);
+}
+
+.vector-tool-list {
+  display: grid;
+  gap: 3px;
+}
+
+.vector-tool-list > button {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: #d6d9df;
+  background: transparent;
+  text-align: left;
+}
+
+.vector-tool-list > button:hover,
+.vector-tool-list > button.active {
+  background: #ffffff0d;
+}
+
+.vector-tool-list > button.active {
+  color: #82e6b8;
+}
+
+.vector-tool-list > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.vector-tool-list svg {
+  width: 17px;
+  height: 17px;
+}
+
+.vector-tool-list span {
+  display: grid;
+  gap: 2px;
+}
+
+.vector-tool-list strong {
+  font-size: 11px;
+}
+
+.vector-tool-list small {
+  color: #8f949f;
+  font-size: 9px;
+}
+
+.vector-tool-list kbd {
+  color: #8f949f;
+  font-size: 10px;
+}
+
 .shape-menu-header {
   display: flex;
   align-items: center;
@@ -292,6 +362,97 @@
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+.vector-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.vector-point-overlay,
+.pen-tool-overlay,
+.knife-tool-overlay {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.vector-point-overlay {
+  z-index: 5;
+  pointer-events: none;
+}
+
+.vector-point-overlay circle,
+.vector-point-overlay .vector-segment-hit {
+  pointer-events: auto;
+}
+
+.vector-segment-visible,
+.pen-draft-path {
+  fill: none;
+  stroke: #59dca3;
+  stroke-width: 1.5;
+}
+
+.vector-segment-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+.vector-point-overlay [data-vector-point],
+.pen-tool-overlay [data-pen-anchor] {
+  fill: #f7f8fa;
+  stroke: #238a62;
+  stroke-width: 1.5;
+  cursor: move;
+}
+
+.vector-point-overlay [data-vector-point].selected,
+.pen-tool-overlay [data-pen-anchor].first {
+  fill: #59dca3;
+  stroke: #10251d;
+}
+
+.vector-handle-line,
+.pen-preview-line {
+  pointer-events: none;
+  stroke: #59dca3;
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+.vector-handle {
+  fill: #ffffff;
+  stroke: #238a62;
+  stroke-width: 1.5;
+  cursor: crosshair;
+}
+
+.pen-tool-overlay {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.knife-tool-overlay {
+  z-index: 6;
+  cursor: crosshair;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.knife-gesture-line {
+  pointer-events: none;
+  stroke: #ff6b7a;
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+}
+
+.pen-preview-line {
+  opacity: 0.7;
 }
 
 .text-content-input {

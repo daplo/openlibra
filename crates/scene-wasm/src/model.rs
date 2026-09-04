@@ -429,12 +429,16 @@ pub enum VectorGeometry {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VectorContour {
+    #[serde(default = "Uuid::now_v7")]
+    pub(crate) id: EntityId,
     pub(crate) points: Vec<VectorPoint>,
     pub(crate) closed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VectorPoint {
+    #[serde(default = "Uuid::now_v7")]
+    pub(crate) id: EntityId,
     pub(crate) position: [f32; 2],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) handle_in: Option<[f32; 2]>,

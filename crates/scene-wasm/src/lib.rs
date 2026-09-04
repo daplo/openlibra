@@ -20,13 +20,13 @@ mod model;
 mod scene;
 
 use color::{normalize_hex_color, parse_hex_color};
-use geometry::point_in_rotated_node;
+use geometry::{point_in_rotated_node, point_in_vector_node};
 use model::*;
 use scene::ordered_nodes;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 const FLOATS_PER_RECT: usize = 24;
 
 #[derive(serde::Deserialize)]
@@ -77,6 +77,17 @@ struct FigmaImportNode {
     text: Option<TextStyle>,
     #[serde(default)]
     asset_source_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct VectorPathInputPoint {
+    position: [f32; 2],
+    #[serde(default)]
+    handle_in: Option<[f32; 2]>,
+    #[serde(default)]
+    handle_out: Option<[f32; 2]>,
+    #[serde(default)]
+    point_type: VectorPointType,
 }
 
 fn parse_entity_id(value: &str) -> EntityId {
@@ -174,6 +185,50 @@ fn migrate_legacy_document_ids(value: &mut serde_json::Value) {
                             for (shadow, id) in shadows.iter_mut().zip(shadow_ids) {
                                 if shadow.get("id").is_none() {
                                     shadow["id"] = serde_json::Value::String(id);
+                                }
+                            }
+                        }
+                    }
+                    let vector_node_id = node
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .unwrap_or("missing-node")
+                        .to_owned();
+                    if let Some(contours) = node
+                        .get_mut("vector")
+                        .and_then(|vector| vector.get_mut("geometry"))
+                        .filter(|geometry| {
+                            geometry.get("type").and_then(|kind| kind.as_str()) == Some("path")
+                        })
+                        .and_then(|geometry| geometry.get_mut("contours"))
+                        .and_then(|contours| contours.as_array_mut())
+                    {
+                        for (contour_index, contour) in contours.iter_mut().enumerate() {
+                            if contour.get("id").is_none() {
+                                contour["id"] = serde_json::Value::String(
+                                    Uuid::new_v5(
+                                        &Uuid::NAMESPACE_OID,
+                                        format!("open-libra-vector-contour:{vector_node_id}:{contour_index}")
+                                            .as_bytes(),
+                                    )
+                                    .to_string(),
+                                );
+                            }
+                            if let Some(points) = contour
+                                .get_mut("points")
+                                .and_then(|points| points.as_array_mut())
+                            {
+                                for (point_index, point) in points.iter_mut().enumerate() {
+                                    if point.get("id").is_none() {
+                                        point["id"] = serde_json::Value::String(
+                                            Uuid::new_v5(
+                                                &Uuid::NAMESPACE_OID,
+                                                format!("open-libra-vector-point:{vector_node_id}:{contour_index}:{point_index}")
+                                                    .as_bytes(),
+                                            )
+                                            .to_string(),
+                                        );
+                                    }
                                 }
                             }
                         }

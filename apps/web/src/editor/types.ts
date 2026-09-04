@@ -115,11 +115,13 @@ export type VectorData = {
 };
 
 export type VectorContour = {
+  id: EntityId;
   points: VectorPoint[];
   closed: boolean;
 };
 
 export type VectorPoint = {
+  id: EntityId;
   position: [number, number];
   handle_in?: [number, number];
   handle_out?: [number, number];

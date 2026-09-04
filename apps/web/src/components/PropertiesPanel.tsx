@@ -92,6 +92,9 @@ export function Properties(props: {
   hasSelectedVectorPoint: boolean;
   onVectorEditToggle: (node: NodeSummary) => void;
   onVectorPointDelete: () => void;
+  onVectorPointTypeChange: (
+    pointType: "corner" | "smooth" | "symmetric",
+  ) => void;
   onVectorCut: (node: NodeSummary) => void;
   onVectorJoin: (node: NodeSummary) => void;
   onExportVector: (node: NodeSummary) => void;
@@ -346,28 +349,55 @@ export function Properties(props: {
                   {props.vectorEditing ? "Done editing" : "Edit points"}
                 </button>
                 {node.vector.geometry.type === "path" && (
-                  <div className="vector-path-actions">
-                    <button
-                      type="button"
-                      disabled={!props.hasSelectedVectorPoint}
-                      onClick={() => props.onVectorCut(node)}
-                    >
-                      Cut at point
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => props.onVectorJoin(node)}
-                    >
-                      Join / close
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!props.hasSelectedVectorPoint}
-                      onClick={props.onVectorPointDelete}
-                    >
-                      Delete point
-                    </button>
-                  </div>
+                  <>
+                    <div className="segmented-control vector-point-types">
+                      <button
+                        type="button"
+                        disabled={!props.hasSelectedVectorPoint}
+                        onClick={() => props.onVectorPointTypeChange("corner")}
+                      >
+                        Corner
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!props.hasSelectedVectorPoint}
+                        onClick={() => props.onVectorPointTypeChange("smooth")}
+                      >
+                        Smooth
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!props.hasSelectedVectorPoint}
+                        onClick={() =>
+                          props.onVectorPointTypeChange("symmetric")
+                        }
+                      >
+                        Mirror
+                      </button>
+                    </div>
+                    <div className="vector-path-actions">
+                      <button
+                        type="button"
+                        disabled={!props.hasSelectedVectorPoint}
+                        onClick={() => props.onVectorCut(node)}
+                      >
+                        Cut at point
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => props.onVectorJoin(node)}
+                      >
+                        Join / close
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!props.hasSelectedVectorPoint}
+                        onClick={props.onVectorPointDelete}
+                      >
+                        Delete point
+                      </button>
+                    </div>
+                  </>
                 )}
                 <button
                   type="button"
@@ -650,6 +680,7 @@ function TypographyControls({
         />
       </PropertySection>
       <PropertySection title="Typography">
+        <div className="typography-fields">
         <div className="token-assignment-row">
           <label className="select-control">
             <span>Text style</span>
@@ -802,6 +833,7 @@ function TypographyControls({
           }}
           onChange={(vertical_align) => onChange({ vertical_align })}
         />
+        </div>
       </PropertySection>
     </>
   );

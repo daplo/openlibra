@@ -25,7 +25,7 @@ export type InteractionHandlers = {
   ) => void;
 };
 
-export type CanvasTool = "select" | "hand";
+export type CanvasTool = "select" | "direct" | "pen" | "knife" | "hand";
 export type ColorTheme = "dark" | "light";
 export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
@@ -521,18 +521,23 @@ export class OpenLibraRenderer {
   }) {
     const world = this.worldPointFromClient(input.clientX, input.clientY);
     const shouldPan = this.tool === "hand" || input.button === 1;
+    const canTransform = this.tool === "select";
     this.resizingHandle =
-      !shouldPan && input.button === 0
+      canTransform && !shouldPan && input.button === 0
         ? this.hitResizeHandle(world.x, world.y)
         : undefined;
     const hit =
-      !shouldPan && !this.resizingHandle && input.button === 0
+      canTransform && !shouldPan && !this.resizingHandle && input.button === 0
         ? this.interactions?.hitTest(world.x, world.y)
         : undefined;
     this.draggingSelection = hit !== undefined;
     this.dragging = shouldPan;
     this.marqueeStart =
-      !shouldPan && !this.resizingHandle && !hit && input.button === 0
+      canTransform &&
+      !shouldPan &&
+      !this.resizingHandle &&
+      !hit &&
+      input.button === 0
         ? {
             clientX: input.clientX,
             clientY: input.clientY,

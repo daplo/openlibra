@@ -90,10 +90,10 @@ export function useVectorCommands({
     position: [number, number],
   ) {
     if (
-      engineRef.current?.move_vector_point(
+      engineRef.current?.move_vector_point_by_id(
         selection.nodeId,
-        selection.contourIndex,
-        selection.pointIndex,
+        selection.contourId,
+        selection.pointId,
         position[0],
         position[1],
       )
@@ -101,44 +101,213 @@ export function useVectorCommands({
       refreshDocument([selection.nodeId]);
   }
 
+  function moveVectorHandle(
+    selection: VectorPointSelection,
+    handle: "in" | "out",
+    position: [number, number],
+  ) {
+    if (
+      engineRef.current?.move_vector_handle_by_id(
+        selection.nodeId,
+        selection.contourId,
+        selection.pointId,
+        handle,
+        position[0],
+        position[1],
+      )
+    )
+      refreshDocument([selection.nodeId]);
+  }
+
+  function setVectorPointType(
+    selection: VectorPointSelection,
+    pointType: "corner" | "smooth" | "symmetric",
+  ) {
+    engineRef.current?.begin_transaction();
+    const changed = Boolean(
+      engineRef.current?.set_vector_point_type_by_id(
+        selection.nodeId,
+        selection.contourId,
+        selection.pointId,
+        pointType,
+      ),
+    );
+    if (changed) engineRef.current?.reframe_vector_path(selection.nodeId);
+    engineRef.current?.end_transaction();
+    if (changed) refreshDocument([selection.nodeId]);
+  }
+
+  function insertVectorPoint(
+    node: NodeSummary,
+    contourId: string,
+    startPointId: string,
+    t: number,
+  ) {
+    engineRef.current?.begin_transaction();
+    const pointId = engineRef.current?.insert_vector_point_by_id(
+      node.id,
+      contourId,
+      startPointId,
+      t,
+    );
+    if (!pointId) {
+      engineRef.current?.end_transaction();
+      return;
+    }
+    engineRef.current?.reframe_vector_path(node.id);
+    engineRef.current?.end_transaction();
+    refreshDocument([node.id]);
+    const nextNode = JSON.parse(
+      engineRef.current!.node_json(node.id),
+    ) as NodeSummary;
+    const contour =
+      nextNode.vector?.geometry.type === "path"
+        ? nextNode.vector.geometry.contours.find(
+            (item) => item.id === contourId,
+          )
+        : undefined;
+    const pointIndex =
+      contour?.points.findIndex((point) => point.id === pointId) ?? -1;
+    if (contour && pointIndex >= 0)
+      setSelectedVectorPoint({
+        nodeId: node.id,
+        contourId,
+        pointId,
+        contourIndex:
+          nextNode.vector!.geometry.type === "path"
+            ? nextNode.vector!.geometry.contours.findIndex(
+                (item) => item.id === contourId,
+              )
+            : 0,
+        pointIndex,
+      });
+  }
+
+  function cutVectorSegment(
+    node: NodeSummary,
+    contourId: string,
+    startPointId: string,
+    t: number,
+  ) {
+    engineRef.current?.begin_transaction();
+    const changed = Boolean(
+      engineRef.current?.cut_vector_segment_by_id(
+        node.id,
+        contourId,
+        startPointId,
+        t,
+      ),
+    );
+    if (changed) {
+      engineRef.current?.reframe_vector_path(node.id);
+      setSelectedVectorPoint(undefined);
+    }
+    engineRef.current?.end_transaction();
+    if (changed) refreshDocument([node.id]);
+  }
+
+  function createVectorPath(
+    points: Array<{
+      position: [number, number];
+      handle_in?: [number, number];
+      handle_out?: [number, number];
+      point_type: "corner" | "smooth" | "symmetric";
+    }>,
+    closed: boolean,
+  ) {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const parentId = preferredArtboardId(
+      documentModel.nodes,
+      selectedNodeIdsRef.current,
+    );
+    try {
+      const id = engine.add_vector_path(
+        JSON.stringify(points),
+        closed,
+        parentId ?? "",
+      );
+      refreshDocument([id]);
+      return id;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  function knifeVectorPath(
+    node: NodeSummary,
+    start: [number, number],
+    end: [number, number],
+  ) {
+    engineRef.current?.begin_transaction();
+    const changed = Boolean(
+      engineRef.current?.knife_vector_path(
+        node.id,
+        start[0],
+        start[1],
+        end[0],
+        end[1],
+      ),
+    );
+    engineRef.current?.end_transaction();
+    if (changed) {
+      setSelectedVectorPoint(undefined);
+      refreshDocument([node.id]);
+    }
+  }
+
   function endVectorPointMove() {
+    if (editingVectorId)
+      engineRef.current?.reframe_vector_path(editingVectorId);
     engineRef.current?.end_transaction();
     refreshDocument(selectedNodeIdsRef.current);
   }
 
   function deleteVectorPoint(selection = selectedVectorPoint) {
     if (!selection) return;
-    if (
-      engineRef.current?.delete_vector_point(
+    engineRef.current?.begin_transaction();
+    const changed = Boolean(
+      engineRef.current?.delete_vector_point_by_id(
         selection.nodeId,
-        selection.contourIndex,
-        selection.pointIndex,
-      )
-    ) {
+        selection.contourId,
+        selection.pointId,
+      ),
+    );
+    if (changed) {
+      engineRef.current?.reframe_vector_path(selection.nodeId);
       setSelectedVectorPoint(undefined);
-      refreshDocument([selection.nodeId]);
     }
+    engineRef.current?.end_transaction();
+    if (changed) refreshDocument([selection.nodeId]);
   }
 
   function cutVectorPath(node: NodeSummary) {
     if (!selectedVectorPoint || selectedVectorPoint.nodeId !== node.id) return;
-    if (
-      engineRef.current?.cut_vector_path(
+    engineRef.current?.begin_transaction();
+    const changed = Boolean(
+      engineRef.current?.cut_vector_path_by_id(
         node.id,
-        selectedVectorPoint.contourIndex,
-        selectedVectorPoint.pointIndex,
-      )
-    ) {
+        selectedVectorPoint.contourId,
+        selectedVectorPoint.pointId,
+      ),
+    );
+    if (changed) {
+      engineRef.current?.reframe_vector_path(node.id);
       setSelectedVectorPoint(undefined);
-      refreshDocument([node.id]);
     }
+    engineRef.current?.end_transaction();
+    if (changed) refreshDocument([node.id]);
   }
 
   function joinVectorPath(node: NodeSummary) {
-    if (engineRef.current?.join_vector_path(node.id)) {
+    engineRef.current?.begin_transaction();
+    const changed = Boolean(engineRef.current?.join_vector_path(node.id));
+    if (changed) {
+      engineRef.current?.reframe_vector_path(node.id);
       setSelectedVectorPoint(undefined);
-      refreshDocument([node.id]);
     }
+    engineRef.current?.end_transaction();
+    if (changed) refreshDocument([node.id]);
   }
 
   function exportSelectedVector(node: NodeSummary) {
@@ -157,6 +326,12 @@ export function useVectorCommands({
     toggleVectorEditing,
     beginVectorPointMove,
     moveVectorPoint,
+    moveVectorHandle,
+    setVectorPointType,
+    insertVectorPoint,
+    cutVectorSegment,
+    createVectorPath,
+    knifeVectorPath,
     endVectorPointMove,
     deleteVectorPoint,
     cutVectorPath,

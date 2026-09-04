@@ -848,6 +848,159 @@ fn vector_points_can_be_moved_cut_joined_and_deleted() {
 }
 
 #[test]
+fn vector_anchor_ids_support_handle_edits_and_curve_preserving_insertion() {
+    let mut engine = DocumentEngine::new_blank();
+    let id = engine.add_vector_shape("ellipse".into(), String::new());
+    assert!(engine.convert_vector_to_path(id.clone()));
+    let before: Node = serde_json::from_str(&engine.node_json(id.clone())).unwrap();
+    let VectorGeometry::Path { contours } = before.vector.unwrap().geometry else {
+        panic!("ellipse should convert to a path");
+    };
+    let contour_id = contours[0].id.to_string();
+    let point_id = contours[0].points[0].id.to_string();
+    let next_id = contours[0].points[1].id.to_string();
+    assert!(engine.set_vector_point_type_by_id(
+        id.clone(),
+        contour_id.clone(),
+        point_id.clone(),
+        "symmetric".into(),
+    ));
+    assert!(engine.move_vector_handle_by_id(
+        id.clone(),
+        contour_id.clone(),
+        point_id.clone(),
+        "out".into(),
+        0.8,
+        0.1,
+    ));
+    let inserted = engine.insert_vector_point_by_id(id.clone(), contour_id.clone(), point_id, 0.5);
+    assert!(!inserted.is_empty());
+    let edited: Node = serde_json::from_str(&engine.node_json(id)).unwrap();
+    let VectorGeometry::Path { contours } = edited.vector.unwrap().geometry else {
+        panic!("edited ellipse should remain a path");
+    };
+    assert_eq!(contours[0].points.len(), 5);
+    let ids: std::collections::HashSet<_> =
+        contours[0].points.iter().map(|point| point.id).collect();
+    assert_eq!(ids.len(), 5);
+    assert!(ids.contains(&parse_entity_id(&inserted)));
+    assert!(ids.contains(&parse_entity_id(&next_id)));
+}
+
+#[test]
+fn pen_paths_use_world_bounds_and_are_undoable() {
+    let mut engine = DocumentEngine::new_blank();
+    let points = serde_json::json!([
+        {"position": [10.0, 20.0], "point_type": "corner"},
+        {
+            "position": [60.0, 80.0],
+            "handle_in": [40.0, 80.0],
+            "handle_out": [80.0, 80.0],
+            "point_type": "symmetric"
+        },
+        {"position": [110.0, 20.0], "point_type": "corner"}
+    ]);
+    let id = engine
+        .add_vector_path(points.to_string(), true, String::new())
+        .unwrap();
+    let node: Node = serde_json::from_str(&engine.node_json(id.clone())).unwrap();
+    assert_eq!(
+        (node.x, node.y, node.width, node.height),
+        (10.0, 20.0, 100.0, 60.0)
+    );
+    let VectorGeometry::Path { contours } = node.vector.unwrap().geometry else {
+        panic!("pen should create path geometry");
+    };
+    assert!(contours[0].closed);
+    assert_eq!(contours[0].points.len(), 3);
+    assert!(engine.undo());
+    assert!(engine.node_json(id).is_empty());
+}
+
+#[test]
+fn schema_nine_vector_ids_migrate_deterministically() {
+    let mut engine = DocumentEngine::new_blank();
+    let id = engine.add_vector_shape("star".into(), String::new());
+    assert!(engine.convert_vector_to_path(id));
+    let mut value: serde_json::Value = serde_json::from_str(&engine.document_json()).unwrap();
+    value["schema_version"] = serde_json::Value::from(9);
+    let contours = value["pages"][0]["nodes"][0]["vector"]["geometry"]["contours"]
+        .as_array_mut()
+        .unwrap();
+    for contour in contours {
+        contour.as_object_mut().unwrap().remove("id");
+        for point in contour["points"].as_array_mut().unwrap() {
+            point.as_object_mut().unwrap().remove("id");
+        }
+    }
+    let legacy = value.to_string();
+    let first = DocumentEngine::load_json(&legacy).unwrap().document_json();
+    let second = DocumentEngine::load_json(&legacy).unwrap().document_json();
+    assert_eq!(first, second);
+    let document: Document = serde_json::from_str(&first).unwrap();
+    document.validate().unwrap();
+    assert_eq!(document.schema_version, SCHEMA_VERSION);
+}
+
+#[test]
+fn vector_hit_testing_uses_visible_fill_and_stroke_geometry() {
+    let mut engine = DocumentEngine::new_blank();
+    let star_id = engine.add_vector_shape("star".into(), String::new());
+    let star: Node = serde_json::from_str(&engine.node_json(star_id.clone())).unwrap();
+    assert_eq!(
+        engine.hit_test(star.x + star.width / 2.0, star.y + star.height / 2.0),
+        star_id
+    );
+    assert_eq!(engine.hit_test(star.x + 2.0, star.y + 2.0), "");
+
+    let mut line_engine = DocumentEngine::new_blank();
+    let line_id = line_engine.add_vector_shape("line".into(), String::new());
+    let line: Node = serde_json::from_str(&line_engine.node_json(line_id.clone())).unwrap();
+    assert_eq!(
+        line_engine.hit_test(line.x + line.width / 2.0, line.y + line.height / 2.0),
+        line_id
+    );
+    assert_eq!(
+        line_engine.hit_test(line.x + line.width / 2.0, line.y + 20.0),
+        ""
+    );
+}
+
+#[test]
+fn knife_gesture_splits_a_closed_contour_into_two_closed_contours() {
+    let mut engine = DocumentEngine::new_blank();
+    let points = serde_json::json!([
+        {"position": [10.0, 10.0], "point_type": "corner"},
+        {"position": [110.0, 10.0], "point_type": "corner"},
+        {"position": [110.0, 110.0], "point_type": "corner"},
+        {"position": [10.0, 110.0], "point_type": "corner"}
+    ]);
+    let id = engine
+        .add_vector_path(points.to_string(), true, String::new())
+        .unwrap();
+    assert!(engine.knife_vector_path(id.clone(), 0.0, 60.0, 120.0, 60.0));
+    let node: Node = serde_json::from_str(&engine.node_json(id.clone())).unwrap();
+    let VectorGeometry::Path { contours } = node.vector.unwrap().geometry else {
+        panic!("knife result should remain path geometry");
+    };
+    assert_eq!(contours.len(), 2);
+    assert!(contours.iter().all(|contour| contour.closed));
+    assert!(contours.iter().all(|contour| contour.points.len() == 4));
+    let ids: std::collections::HashSet<_> = contours
+        .iter()
+        .flat_map(|contour| contour.points.iter().map(|point| point.id))
+        .collect();
+    assert_eq!(ids.len(), 8);
+    assert!(engine.undo());
+    let restored: Node = serde_json::from_str(&engine.node_json(id)).unwrap();
+    let VectorGeometry::Path { contours } = restored.vector.unwrap().geometry else {
+        panic!("undo should restore original path");
+    };
+    assert_eq!(contours.len(), 1);
+    assert_eq!(contours[0].points.len(), 4);
+}
+
+#[test]
 fn text_nodes_are_created_editable_serialized_and_undoable() {
     let mut engine = DocumentEngine::new();
     let id = engine.add_text();

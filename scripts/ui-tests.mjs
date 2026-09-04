@@ -768,8 +768,79 @@ try {
   await anchors.first().click();
   await page.getByRole("button", { name: "Delete point" }).click();
   assert.equal(await anchors.count(), 15);
+  await anchors.first().click();
+  await page.getByRole("button", { name: "Smooth" }).click();
+  const handles = pointEditor.locator("circle[data-vector-handle]");
+  assert.equal(await handles.count(), 2);
+  const handleBounds = await handles.last().boundingBox();
+  assert.ok(handleBounds);
+  await page.mouse.move(
+    handleBounds.x + handleBounds.width / 2,
+    handleBounds.y + handleBounds.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    handleBounds.x + handleBounds.width / 2 + 10,
+    handleBounds.y + handleBounds.height / 2 - 6,
+  );
+  await page.mouse.up();
+  const segment = pointEditor.locator("path.vector-segment-hit").first();
+  await segment.dblclick({ force: true });
+  assert.equal(await anchors.count(), 16);
+  await page.getByTitle("Pen and vector tools").click();
+  await page
+    .getByRole("dialog", { name: "Vector tools" })
+    .getByRole("button", { name: "Knife (K)" })
+    .click();
+  await waitForTool("knife");
+  const anchorBoxes = [];
+  for (let index = 0; index < (await anchors.count()); index += 1) {
+    const bounds = await anchors.nth(index).boundingBox();
+    if (bounds) anchorBoxes.push(bounds);
+  }
+  const minAnchorX = Math.min(...anchorBoxes.map((bounds) => bounds.x));
+  const maxAnchorX = Math.max(
+    ...anchorBoxes.map((bounds) => bounds.x + bounds.width),
+  );
+  const minAnchorY = Math.min(...anchorBoxes.map((bounds) => bounds.y));
+  const maxAnchorY = Math.max(
+    ...anchorBoxes.map((bounds) => bounds.y + bounds.height),
+  );
+  const knifeY = (minAnchorY + maxAnchorY) / 2;
+  await page.mouse.move(minAnchorX - 12, knifeY);
+  await page.mouse.down();
+  await page.mouse.move(maxAnchorX + 12, knifeY);
+  await page.mouse.up();
+  assert.equal(await anchors.count(), 20);
   await page.getByRole("button", { name: "Done editing" }).click();
   await pointEditor.waitFor({ state: "detached" });
+
+  const layerCountBeforePen = await page.getByTestId(/^layer-node-/).count();
+  await page.getByTitle("Pen and vector tools").click();
+  await page
+    .getByRole("dialog", { name: "Vector tools" })
+    .getByRole("button", { name: "Pen (P)" })
+    .click();
+  await waitForTool("pen");
+  const penOverlay = page.getByLabel("Pen tool canvas");
+  const penBounds = await penOverlay.boundingBox();
+  assert.ok(penBounds);
+  const penPoints = [
+    [penBounds.x + 180, penBounds.y + 180],
+    [penBounds.x + 280, penBounds.y + 180],
+    [penBounds.x + 230, penBounds.y + 270],
+  ];
+  for (const [x, y] of penPoints) await page.mouse.click(x, y);
+  await page.mouse.click(penPoints[0][0], penPoints[0][1]);
+  await page.waitForFunction(
+    (before) =>
+      document.querySelectorAll('[data-testid^="layer-node-"]').length ===
+      before + 1,
+    layerCountBeforePen,
+  );
+  assert.equal(await penOverlay.locator("[data-pen-anchor]").count(), 0);
+  await page.keyboard.press("v");
+  await waitForTool("select");
 
   const benchmarkPage = page
     .getByTestId(/^page-node-/)

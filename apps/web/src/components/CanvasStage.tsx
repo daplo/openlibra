@@ -1,12 +1,14 @@
-import type { DragEvent, RefObject } from "react";
+import { useEffect, useState, type DragEvent, type RefObject } from "react";
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   Component,
   Frame,
   Hand,
   MessageCircle,
   MousePointer2,
+  PenTool,
   Square,
   Shapes,
   Type,
@@ -29,6 +31,9 @@ import {
   VectorPointOverlay,
   type VectorPointSelection,
 } from "./VectorPointOverlay";
+import { PenToolOverlay, type PenPathPoint } from "./PenToolOverlay";
+import { KnifeToolOverlay } from "./KnifeToolOverlay";
+import { VectorToolMenu } from "./VectorToolMenu";
 import { textEditorStyle } from "../editor/app-utils";
 import type {
   DocumentReadModel,
@@ -71,8 +76,31 @@ type CanvasStageProps = {
     selection: VectorPointSelection,
     position: [number, number],
   ) => void;
+  moveVectorHandle: (
+    selection: VectorPointSelection,
+    handle: "in" | "out",
+    position: [number, number],
+  ) => void;
   endVectorPointMove: () => void;
   deleteVectorPoint: (selection: VectorPointSelection) => void;
+  insertVectorPoint: (
+    node: NodeSummary,
+    contourId: string,
+    startPointId: string,
+    t: number,
+  ) => void;
+  cutVectorSegment: (
+    node: NodeSummary,
+    contourId: string,
+    startPointId: string,
+    t: number,
+  ) => void;
+  createVectorPath: (points: PenPathPoint[], closed: boolean) => void;
+  knifeVectorPath: (
+    node: NodeSummary,
+    start: [number, number],
+    end: [number, number],
+  ) => void;
   editingTextId?: string;
   isolationRoot?: NodeSummary;
   componentWorkspace?: {
@@ -121,8 +149,13 @@ export function CanvasStage({
   setSelectedVectorPoint,
   beginVectorPointMove,
   moveVectorPoint,
+  moveVectorHandle,
   endVectorPointMove,
   deleteVectorPoint,
+  insertVectorPoint,
+  cutVectorSegment,
+  createVectorPath,
+  knifeVectorPath,
   editingTextId,
   isolationRoot,
   componentWorkspace,
@@ -140,6 +173,12 @@ export function CanvasStage({
   dismissCanvasContextMenu,
   zoom,
 }: CanvasStageProps) {
+  const [vectorToolMenuOpen, setVectorToolMenuOpen] = useState(false);
+  const vectorToolActive =
+    canvasTool === "direct" || canvasTool === "pen" || canvasTool === "knife";
+  const knifeEnabled =
+    selectedNodes.length === 1 && selectedNodes[0].kind === "vector";
+  useEffect(() => setVectorToolMenuOpen(false), [canvasTool]);
   return (
     <section
       className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
@@ -150,13 +189,35 @@ export function CanvasStage({
           icon={<MousePointer2 />}
           active={canvasTool === "select"}
           disabled={mode !== "design"}
-          onClick={() => setCanvasTool("select")}
+          onClick={() => {
+            setVectorToolMenuOpen(false);
+            setCanvasTool("select");
+          }}
+        />
+        <ToolButton
+          label="Pen and vector tools"
+          icon={
+            <span className="vector-tool-icon">
+              <PenTool />
+              <ChevronDown />
+            </span>
+          }
+          active={vectorToolMenuOpen || vectorToolActive}
+          disabled={mode !== "design"}
+          onClick={() => {
+            setArtboardMenuOpen(false);
+            setShapeMenuOpen(false);
+            setVectorToolMenuOpen((open) => !open);
+          }}
         />
         <ToolButton
           label="Hand (H)"
           icon={<Hand />}
           active={canvasTool === "hand"}
-          onClick={() => setCanvasTool("hand")}
+          onClick={() => {
+            setVectorToolMenuOpen(false);
+            setCanvasTool("hand");
+          }}
         />
         <ToolButton
           label="Artboard"
@@ -164,6 +225,7 @@ export function CanvasStage({
           disabled={mode !== "design"}
           active={artboardMenuOpen}
           onClick={() => {
+            setVectorToolMenuOpen(false);
             setShapeMenuOpen(false);
             setArtboardMenuOpen((open) => !open);
           }}
@@ -172,7 +234,10 @@ export function CanvasStage({
           label="Rectangle"
           icon={<Square />}
           disabled={mode !== "design"}
-          onClick={() => addNode("rectangle")}
+          onClick={() => {
+            setVectorToolMenuOpen(false);
+            addNode("rectangle");
+          }}
         />
         <ToolButton
           label="Shapes"
@@ -180,6 +245,7 @@ export function CanvasStage({
           active={shapeMenuOpen}
           disabled={mode !== "design"}
           onClick={() => {
+            setVectorToolMenuOpen(false);
             setArtboardMenuOpen(false);
             setShapeMenuOpen((open) => !open);
           }}
@@ -188,7 +254,10 @@ export function CanvasStage({
           label="Text"
           icon={<Type />}
           disabled={mode !== "design"}
-          onClick={() => addNode("text")}
+          onClick={() => {
+            setVectorToolMenuOpen(false);
+            addNode("text");
+          }}
         />
         <ToolButton
           label="Comment"
@@ -196,6 +265,18 @@ export function CanvasStage({
           disabled={mode === "developer"}
         />
       </div>
+
+      {vectorToolMenuOpen && (
+        <VectorToolMenu
+          activeTool={canvasTool}
+          knifeEnabled={knifeEnabled}
+          onChoose={(tool) => {
+            setCanvasTool(tool);
+            setVectorToolMenuOpen(false);
+          }}
+          onClose={() => setVectorToolMenuOpen(false)}
+        />
+      )}
 
       {artboardMenuOpen && (
         <ArtboardMenu
@@ -243,6 +324,22 @@ export function CanvasStage({
           assets={documentModel.media_assets}
         />
         <VectorOverlay rendererRef={rendererRef} nodes={documentModel.nodes} />
+        {canvasTool === "pen" && (
+          <PenToolOverlay
+            rendererRef={rendererRef}
+            onCreatePath={createVectorPath}
+          />
+        )}
+        {canvasTool === "knife" &&
+          selectedNodes.length === 1 &&
+          selectedNodes[0].kind === "vector" && (
+            <KnifeToolOverlay
+              rendererRef={rendererRef}
+              onCut={(start, end) =>
+                knifeVectorPath(selectedNodes[0], start, end)
+              }
+            />
+          )}
         {editingVectorId &&
           selectedNodes.length === 1 &&
           selectedNodes[0].id === editingVectorId &&
@@ -250,12 +347,16 @@ export function CanvasStage({
             <VectorPointOverlay
               rendererRef={rendererRef}
               node={selectedNodes[0]}
+              tool={canvasTool}
               selectedPoint={selectedVectorPoint}
               onSelectPoint={setSelectedVectorPoint}
               onBeginMove={beginVectorPointMove}
               onMovePoint={moveVectorPoint}
+              onMoveHandle={moveVectorHandle}
               onEndMove={endVectorPointMove}
               onDeletePoint={deleteVectorPoint}
+              onInsertPoint={insertVectorPoint}
+              onCutSegment={cutVectorSegment}
             />
           )}
         <TextOverlay

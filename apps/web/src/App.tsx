@@ -190,6 +190,12 @@ function EditorApp() {
     toggleVectorEditing,
     beginVectorPointMove,
     moveVectorPoint,
+    moveVectorHandle,
+    setVectorPointType,
+    insertVectorPoint,
+    cutVectorSegment,
+    createVectorPath,
+    knifeVectorPath,
     endVectorPointMove,
     deleteVectorPoint,
     cutVectorPath,
@@ -322,6 +328,21 @@ function EditorApp() {
       setSelectedVectorPoint(undefined);
     }
   }, [editingVectorId, selectedNodeIds]);
+
+  useEffect(() => {
+    if (canvasTool !== "direct" && canvasTool !== "knife") return;
+    const node = selectedNodes[0];
+    if (selectedNodes.length !== 1 || node?.kind !== "vector") return;
+    if (node.vector?.geometry.type !== "path") {
+      if (engineRef.current?.convert_vector_to_path(node.id))
+        refreshDocument([node.id]);
+      return;
+    }
+    setEditingVectorId(node.id);
+    // The refs and refresh command are stable editor infrastructure; selectedNodes
+    // is the read-model signal that should re-run this transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasTool, selectedNodes]);
 
   useEffect(() => {
     if (!editingVectorId) return;
@@ -703,6 +724,30 @@ function EditorApp() {
   }
 
   function createInputHandlers(): EditorInputHandlers {
+    const deleteCurrentSelection = () => {
+      if (editingVectorId && selectedVectorPoint) deleteVectorPoint();
+      else deleteSelected();
+    };
+    const nudgeCurrentSelection = (dx: number, dy: number) => {
+      if (!editingVectorId || !selectedVectorPoint) {
+        moveSelection(dx, dy);
+        return;
+      }
+      const node = documentModelRef.current?.nodes.find(
+        (item) => item.id === selectedVectorPoint.nodeId,
+      );
+      const point =
+        node?.vector?.geometry.type === "path"
+          ? node.vector.geometry.contours
+              .find((contour) => contour.id === selectedVectorPoint.contourId)
+              ?.points.find((item) => item.id === selectedVectorPoint.pointId)
+          : undefined;
+      if (!node || !point) return;
+      moveVectorPoint(selectedVectorPoint, [
+        point.position[0] + dx / node.width,
+        point.position[1] + dy / node.height,
+      ]);
+    };
     return {
       selectCanvasPoint,
       setMode,
@@ -717,12 +762,12 @@ function EditorApp() {
       newDocument,
       openDocument: requestOpenDocument,
       saveDocument,
-      deleteSelection: deleteSelected,
+      deleteSelection: deleteCurrentSelection,
       undo,
       redo,
       copySelection,
       pasteSelection,
-      nudgeSelection: moveSelection,
+      nudgeSelection: nudgeCurrentSelection,
       beginTextEdit: (clientX, clientY) => {
         const renderer = rendererRef.current;
         const engine = engineRef.current;
@@ -744,6 +789,7 @@ function EditorApp() {
         } else if (node?.kind === "vector" && node.vector && !node.locked) {
           applySelection([node.id]);
           toggleVectorEditing(node);
+          setCanvasTool("direct");
         }
       },
     };
@@ -1109,8 +1155,13 @@ function EditorApp() {
           setSelectedVectorPoint={setSelectedVectorPoint}
           beginVectorPointMove={beginVectorPointMove}
           moveVectorPoint={moveVectorPoint}
+          moveVectorHandle={moveVectorHandle}
           endVectorPointMove={endVectorPointMove}
           deleteVectorPoint={deleteVectorPoint}
+          insertVectorPoint={insertVectorPoint}
+          cutVectorSegment={cutVectorSegment}
+          createVectorPath={createVectorPath}
+          knifeVectorPath={knifeVectorPath}
           editingTextId={editingTextId}
           isolationRoot={isolationRoot}
           componentWorkspace={componentWorkspace}
@@ -1191,6 +1242,10 @@ function EditorApp() {
                 }
                 onVectorEditToggle={toggleVectorEditing}
                 onVectorPointDelete={() => deleteVectorPoint()}
+                onVectorPointTypeChange={(pointType) => {
+                  if (selectedVectorPoint)
+                    setVectorPointType(selectedVectorPoint, pointType);
+                }}
                 onVectorCut={cutVectorPath}
                 onVectorJoin={joinVectorPath}
                 onExportVector={exportSelectedVector}

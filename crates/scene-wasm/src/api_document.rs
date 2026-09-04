@@ -84,7 +84,13 @@ impl DocumentEngine {
             .into_iter()
             .rev()
             .find(|node| {
-                node.kind != NodeKind::Group && !node.locked && point_in_rotated_node(node, x, y)
+                node.kind != NodeKind::Group
+                    && !node.locked
+                    && if node.kind == NodeKind::Vector {
+                        point_in_vector_node(node, x, y)
+                    } else {
+                        point_in_rotated_node(node, x, y)
+                    }
             })
             .map_or_else(String::new, |node| node.id.to_string())
     }

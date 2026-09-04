@@ -169,15 +169,19 @@ fn validate_vector(node_id: EntityId, vector: &VectorData) -> Result<(), String>
             return Err(format!("Vector node {node_id} has invalid star geometry"));
         }
         VectorGeometry::Path { contours } => {
+            let mut contour_ids = std::collections::HashSet::new();
+            let mut point_ids = std::collections::HashSet::new();
             for contour in contours {
-                if contour.points.len() < 2
+                if !contour_ids.insert(contour.id)
+                    || contour.points.len() < 2
                     || contour.points.iter().any(|point| {
-                        point
-                            .position
-                            .iter()
-                            .chain(point.handle_in.iter().flatten())
-                            .chain(point.handle_out.iter().flatten())
-                            .any(|value| !value.is_finite())
+                        !point_ids.insert(point.id)
+                            || point
+                                .position
+                                .iter()
+                                .chain(point.handle_in.iter().flatten())
+                                .chain(point.handle_out.iter().flatten())
+                                .any(|value| !value.is_finite())
                     })
                 {
                     return Err(format!("Vector node {node_id} has an invalid contour"));

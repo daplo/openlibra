@@ -122,6 +122,7 @@ export class EditorInputController {
   };
 
   private onKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented) return;
     if (isEditableTarget(event.target)) return;
     const key = event.key.toLowerCase();
     if ((event.metaKey || event.ctrlKey) && key === "n") {
@@ -140,6 +141,9 @@ export class EditorInputController {
       return;
     }
     if (key === "v") this.handlers.setTool("select");
+    if (key === "a") this.handlers.setTool("direct");
+    if (key === "p") this.handlers.setTool("pen");
+    if (key === "k") this.handlers.setTool("knife");
     if (key === "h") this.handlers.setTool("hand");
     if (event.code === "Space" && !event.repeat) {
       event.preventDefault();

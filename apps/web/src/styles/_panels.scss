@@ -268,7 +268,7 @@
   display: grid;
   grid-template-columns: 62px 1fr;
   align-items: center;
-  gap: 0;
+  gap: 8px;
   margin-top: 8px;
 }
 
@@ -348,6 +348,7 @@
   outline: none;
   color: #e1e3e8;
   background: #202228;
+  box-sizing: border-box;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
@@ -895,7 +896,11 @@
   grid-template-columns: 62px 1fr;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 10px;
+}
+
+.select-control > span {
+  color: #8f949f;
 }
 
 .select-control select {
@@ -904,7 +909,7 @@
   padding: 0 6px;
   border: 1px solid var(--control-border);
   border-radius: var(--control-radius);
-  color: inherit;
+  color: #e1e3e8;
   background: var(--control-surface);
 }
 
@@ -947,6 +952,22 @@
 
 .text-style-create {
   grid-template-columns: minmax(0, 1fr) var(--control-width);
+}
+
+.typography-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.typography-fields .segmented-control {
+  margin-top: 0;
+}
+
+.typography-number-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .typography-number-grid .number-control {

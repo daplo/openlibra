@@ -10,7 +10,7 @@ Version 1 is a UTF-8 JSON envelope:
   "format": "open-libra-project",
   "format_version": 1,
   "document": {
-    "schema_version": 9,
+    "schema_version": 10,
     "active_page_id": "…",
     "pages": []
   }

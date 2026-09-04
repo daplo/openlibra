@@ -64,6 +64,20 @@ canvas[data-tool="hand"]:active {
   cursor: grabbing;
 }
 
+canvas[data-tool="direct"] {
+  cursor: default;
+}
+
+canvas[data-tool="pen"],
+.pen-tool-overlay {
+  cursor: crosshair;
+}
+
+canvas[data-tool="knife"],
+.vector-point-overlay.tool-knife .vector-segment-hit {
+  cursor: crosshair;
+}
+
 .snap-guide {
   position: fixed;
   z-index: 6;
@@ -246,6 +260,20 @@ canvas[data-tool="hand"]:active {
   height: 15px;
 }
 
+.tool-rail .vector-tool-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.tool-rail .vector-tool-icon svg:last-child {
+  position: absolute;
+  right: -8px;
+  bottom: -6px;
+  width: 8px;
+  height: 8px;
+}
+
 .tool-rail button.active {
   color: #101713;
   background: #82e6b8;
@@ -276,8 +304,18 @@ canvas[data-tool="hand"]:active {
   top: calc(var(--ruler-size) + 54px);
 }
 
+.stage.with-rulers .vector-tool-menu {
+  top: calc(var(--ruler-size) + 54px);
+}
+
 .stage.toolbar-bottom .shape-menu,
 .stage.with-rulers.toolbar-bottom .shape-menu {
+  top: auto;
+  bottom: 54px;
+}
+
+.stage.toolbar-bottom .vector-tool-menu,
+.stage.with-rulers.toolbar-bottom .vector-tool-menu {
   top: auto;
   bottom: 54px;
 }

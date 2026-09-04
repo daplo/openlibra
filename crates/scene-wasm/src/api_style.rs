@@ -66,6 +66,142 @@ impl DocumentEngine {
         self.mutate(|document| document.join_vector_path(node_id))
     }
 
+    pub fn move_vector_point_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        point_id: String,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&point_id),
+        );
+        self.mutate(|document| document.move_vector_point_by_id(ids.0, ids.1, ids.2, x, y))
+    }
+
+    pub fn move_vector_handle_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        point_id: String,
+        handle: String,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&point_id),
+        );
+        self.mutate(|document| {
+            document.move_vector_handle_by_id(ids.0, ids.1, ids.2, handle == "out", x, y)
+        })
+    }
+
+    pub fn set_vector_point_type_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        point_id: String,
+        point_type: String,
+    ) -> bool {
+        let point_type = match point_type.as_str() {
+            "smooth" => VectorPointType::Smooth,
+            "symmetric" => VectorPointType::Symmetric,
+            _ => VectorPointType::Corner,
+        };
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&point_id),
+        );
+        self.mutate(|document| {
+            document.set_vector_point_type_by_id(ids.0, ids.1, ids.2, point_type)
+        })
+    }
+
+    pub fn delete_vector_point_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        point_id: String,
+    ) -> bool {
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&point_id),
+        );
+        self.mutate(|document| document.delete_vector_point_by_id(ids.0, ids.1, ids.2))
+    }
+
+    pub fn cut_vector_path_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        point_id: String,
+    ) -> bool {
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&point_id),
+        );
+        self.mutate(|document| document.cut_vector_path_by_id(ids.0, ids.1, ids.2))
+    }
+
+    pub fn insert_vector_point_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        start_point_id: String,
+        t: f32,
+    ) -> String {
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&start_point_id),
+        );
+        self.mutate(|document| document.insert_vector_point_by_id(ids.0, ids.1, ids.2, t))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn cut_vector_segment_by_id(
+        &mut self,
+        node_id: String,
+        contour_id: String,
+        start_point_id: String,
+        t: f32,
+    ) -> String {
+        let ids = (
+            parse_entity_id(&node_id),
+            parse_entity_id(&contour_id),
+            parse_entity_id(&start_point_id),
+        );
+        self.mutate(|document| document.cut_vector_segment_by_id(ids.0, ids.1, ids.2, t))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn reframe_vector_path(&mut self, node_id: String) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| document.reframe_vector_path(node_id))
+    }
+
+    pub fn knife_vector_path(
+        &mut self,
+        node_id: String,
+        start_x: f32,
+        start_y: f32,
+        end_x: f32,
+        end_y: f32,
+    ) -> bool {
+        let node_id = parse_entity_id(&node_id);
+        self.mutate(|document| {
+            document.knife_vector_path(node_id, [start_x, start_y], [end_x, end_y])
+        })
+    }
+
     // Kept flat because wasm-bindgen exposes this method directly to JavaScript.
     #[allow(clippy::too_many_arguments)]
     pub fn set_node_style(

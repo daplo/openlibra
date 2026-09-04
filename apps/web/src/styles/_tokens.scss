@@ -74,7 +74,8 @@
 :root[data-theme="light"] .empty-state,
 :root[data-theme="light"] .property span,
 :root[data-theme="light"] .color-control,
-:root[data-theme="light"] .number-control {
+:root[data-theme="light"] .number-control,
+:root[data-theme="light"] .select-control > span {
   color: #676d78;
 }
 
@@ -165,7 +166,8 @@
 :root[data-theme="light"] .tool-rail,
 :root[data-theme="light"] .zoom-controls,
 :root[data-theme="light"] .artboard-menu,
-:root[data-theme="light"] .shape-menu {
+:root[data-theme="light"] .shape-menu,
+:root[data-theme="light"] .vector-tool-menu {
   border-color: #d0d3d9;
   background: #ffffffee;
   box-shadow: 0 8px 24px #66708532;
@@ -183,13 +185,21 @@
 }
 
 :root[data-theme="light"] .artboard-menu section > button,
-:root[data-theme="light"] .shape-menu-grid button {
+:root[data-theme="light"] .shape-menu-grid button,
+:root[data-theme="light"] .vector-tool-list > button {
   color: #30343c;
 }
 
 :root[data-theme="light"] .artboard-menu section > button:hover,
-:root[data-theme="light"] .shape-menu-grid button:hover {
+:root[data-theme="light"] .shape-menu-grid button:hover,
+:root[data-theme="light"] .vector-tool-list > button:hover,
+:root[data-theme="light"] .vector-tool-list > button.active {
   background: #eceef2;
+}
+
+:root[data-theme="light"] .vector-tool-list small,
+:root[data-theme="light"] .vector-tool-list kbd {
+  color: #676d78;
 }
 
 :root[data-theme="light"] .property-section summary {

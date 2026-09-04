@@ -48,6 +48,24 @@ impl DocumentEngine {
         .to_string()
     }
 
+    pub fn add_vector_path(
+        &mut self,
+        points_json: String,
+        closed: bool,
+        parent_id: String,
+    ) -> Result<String, JsValue> {
+        let points: Vec<VectorPathInputPoint> = serde_json::from_str(&points_json)
+            .map_err(|error| JsValue::from_str(&format!("Invalid vector path: {error}")))?;
+        let parent_id = parse_entity_id(&parent_id);
+        self.mutate(|document| {
+            document.add_vector_path(points, closed, (!parent_id.is_nil()).then_some(parent_id))
+        })
+        .map(|id| id.to_string())
+        .ok_or_else(|| {
+            JsValue::from_str("A closed path needs three points; an open path needs two")
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn add_media_asset_node(
         &mut self,
