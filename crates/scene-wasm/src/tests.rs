@@ -4,8 +4,11 @@ use crate::geometry::rotate_around;
 #[test]
 fn demo_document_has_stable_renderable_nodes() {
     let engine = DocumentEngine::new();
-    assert_eq!(engine.rect_count(), 31);
-    assert_eq!(engine.scene_data().len(), 31 * FLOATS_PER_RECT);
+    assert!(engine.rect_count() >= 40);
+    assert_eq!(
+        engine.scene_data().len(),
+        engine.rect_count() * FLOATS_PER_RECT
+    );
     assert_eq!(engine.document.pages.len(), 5);
     for name in [
         "Finance · Welcome",
@@ -22,9 +25,9 @@ fn demo_document_has_stable_renderable_nodes() {
                 .any(|node| node.name == name && node.kind == NodeKind::Frame)
         );
     }
-    assert_eq!(engine.document.text_styles.len(), 4);
-    assert_eq!(engine.document.media_assets.len(), 7);
-    assert_eq!(engine.document.components.len(), 3);
+    assert_eq!(engine.document.text_styles.len(), 8);
+    assert_eq!(engine.document.media_assets.len(), 18);
+    assert_eq!(engine.document.components.len(), 6);
     for name in [
         "Button / Primary",
         "Card / Spending summary",
@@ -954,7 +957,16 @@ fn document_round_trip_is_lossless() {
 
 #[test]
 fn deleting_a_frame_removes_its_direct_children() {
-    let mut document = Document::demo();
+    let mut document = Document::blank();
+    let parent = document.add_artboard("Finance · Wallet".into(), 360.0, 780.0);
+    let group = document.insert_node(
+        "Content",
+        NodeKind::Group,
+        Some(parent),
+        [20.0, 20.0, 200.0, 200.0],
+        [0.0; 4],
+    );
+    document.add_rectangle_to(Some(group));
     let frame = document
         .active_page()
         .nodes
@@ -974,7 +986,16 @@ fn deleting_a_frame_removes_its_direct_children() {
 
 #[test]
 fn deleting_a_container_removes_its_full_descendant_subtree() {
-    let mut document = Document::demo();
+    let mut document = Document::blank();
+    let parent = document.add_artboard("Finance · Wallet".into(), 360.0, 780.0);
+    let group = document.insert_node(
+        "Content",
+        NodeKind::Group,
+        Some(parent),
+        [20.0, 20.0, 200.0, 200.0],
+        [0.0; 4],
+    );
+    document.add_rectangle_to(Some(group));
     let frame = document
         .active_page()
         .nodes
@@ -1139,7 +1160,11 @@ fn layers_can_be_reordered_above_and_below_siblings() {
 
 #[test]
 fn hit_testing_returns_the_topmost_node() {
-    let engine = DocumentEngine::new();
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    let b = engine.add_rectangle();
+    engine.set_node_bounds(a, 100.0, 180.0, 80.0, 80.0);
+    engine.set_node_bounds(b, 110.0, 190.0, 80.0, 80.0);
     let hit = engine.hit_test(130.0, 210.0);
     let expected = ordered_nodes(engine.document.active_page())
         .into_iter()
@@ -2038,4 +2063,255 @@ fn locked_component_instance_cannot_be_replaced() {
     );
     assert_eq!(document.active_page().nodes.len(), node_count);
     assert!(document.active_node(instance).is_some());
+}
+
+fn transform_fixture() -> (DocumentEngine, EntityId, EntityId, EntityId) {
+    let mut engine = DocumentEngine::new();
+    engine.document.add_page("Transform fixtures".into());
+    let root = engine.document.insert_node(
+        "Root",
+        NodeKind::Frame,
+        None,
+        [0.0, 0.0, 200.0, 200.0],
+        [1.0; 4],
+    );
+    let group = engine.document.insert_node(
+        "Nested",
+        NodeKind::Group,
+        Some(root),
+        [20.0, 20.0, 80.0, 80.0],
+        [0.0; 4],
+    );
+    let child = engine.document.insert_node(
+        "Child",
+        NodeKind::Rectangle,
+        Some(group),
+        [30.0, 40.0, 20.0, 10.0],
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    (engine, root, group, child)
+}
+
+#[test]
+fn container_transform_propagates_through_nested_groups_and_undo() {
+    let (mut engine, root, group, child) = transform_fixture();
+    let before = engine.document.clone();
+    assert!(engine.set_node_transform(root.to_string(), 90.0, false, false));
+    let child_node = engine.document.active_node(child).unwrap();
+    assert!((child_node.x - 145.0).abs() < 0.001);
+    assert!((child_node.y - 35.0).abs() < 0.001);
+    assert!((child_node.rotation - 90.0).abs() < 0.001);
+    assert_eq!(engine.hit_test(155.0, 40.0), child.to_string());
+    assert!(engine.set_node_transform(group.to_string(), 180.0, true, false));
+    let transformed = engine.document.clone();
+    assert!(engine.undo());
+    assert!(engine.undo());
+    assert_eq!(engine.document, before);
+    assert!(engine.redo());
+    assert!(engine.redo());
+    assert_eq!(engine.document, transformed);
+    let restored: Document =
+        serde_json::from_str(&serde_json::to_string(&engine.document).unwrap()).unwrap();
+    assert_eq!(restored, transformed);
+    engine.document.validate().unwrap();
+}
+
+#[test]
+fn container_transform_roundtrip_preserves_descendant_orientation_and_locked_children() {
+    let (mut engine, root, _, child) = transform_fixture();
+    engine.document.set_node_transform(child, 23.0, true, false);
+    engine.document.active_node_mut(child).unwrap().locked = true;
+    let before = engine.document.active_node(child).unwrap().clone();
+    for (angle, fx, fy) in [
+        (71.0, true, false),
+        (181.0, false, true),
+        (315.0, true, true),
+        (0.0, false, false),
+    ] {
+        assert!(engine.document.set_node_transform(root, angle, fx, fy));
+    }
+    let after = engine.document.active_node(child).unwrap();
+    assert!((after.x - before.x).abs() < 0.001 && (after.y - before.y).abs() < 0.001);
+    assert!((after.rotation - before.rotation).abs() < 0.001);
+    assert_eq!((after.flip_x, after.flip_y), (before.flip_x, before.flip_y));
+    assert!(!engine.document.set_node_transform(root, 0.0, false, false));
+    assert!(
+        !engine
+            .document
+            .set_node_transform(root, f32::NAN, false, false)
+    );
+}
+
+#[test]
+fn rotated_auto_layout_positions_children_in_container_axes() {
+    let (mut engine, root, _, child) = transform_fixture();
+    engine.document.set_node_layout(
+        root,
+        LayoutMode::Column,
+        LayoutAlign::Start,
+        LayoutAlign::Start,
+        12.0,
+        [10.0; 4],
+    );
+    engine.document.set_node_transform(root, 90.0, true, false);
+    engine.document.set_node_layout(
+        root,
+        LayoutMode::Column,
+        LayoutAlign::Start,
+        LayoutAlign::Start,
+        20.0,
+        [20.0; 4],
+    );
+    engine.document.set_node_transform(root, 0.0, false, false);
+    let parent = engine
+        .document
+        .active_node(
+            engine
+                .document
+                .active_node(child)
+                .unwrap()
+                .parent_id
+                .unwrap(),
+        )
+        .unwrap();
+    assert!((parent.x - 20.0).abs() < 0.001 && (parent.y - 20.0).abs() < 0.001);
+    assert!((engine.document.active_node(child).unwrap().rotation).abs() < 0.001);
+}
+
+#[test]
+fn hit_testing_respects_rounded_frame_clipping_and_ancestor_opacity() {
+    let (mut engine, root, _, child) = transform_fixture();
+    engine.document.active_node_mut(root).unwrap().corner_radii = [40.0; 4];
+    let node = engine.document.active_node_mut(child).unwrap();
+    node.x = -10.0;
+    node.y = -10.0;
+    node.width = 50.0;
+    node.height = 50.0;
+    assert_eq!(engine.hit_test(-5.0, 5.0), "");
+    assert_eq!(engine.hit_test(1.0, 1.0), "");
+    assert_eq!(engine.hit_test(30.0, 30.0), child.to_string());
+    engine.document.active_node_mut(root).unwrap().opacity = 0.0;
+    assert_eq!(engine.hit_test(30.0, 30.0), "");
+}
+
+#[test]
+fn transformed_component_instance_keeps_its_frame_after_master_edit() {
+    let (mut engine, root, _, child) = transform_fixture();
+    let component = engine
+        .document
+        .create_component(root, "Fixture".into())
+        .unwrap();
+    let variant = engine
+        .document
+        .components
+        .iter()
+        .find(|item| item.id == component)
+        .unwrap()
+        .variants[0]
+        .id;
+    let instance = parse_entity_id(&engine.create_component_instance(
+        component.to_string(),
+        variant.to_string(),
+        String::new(),
+    ));
+    engine.set_node_transform(instance.to_string(), 90.0, true, false);
+    let before: Vec<_> = engine
+        .document
+        .active_page()
+        .nodes
+        .iter()
+        .filter(|node| node.instance_root_id == Some(instance))
+        .cloned()
+        .collect();
+    // A style change triggers component sync without changing geometry.
+    engine.set_node_opacity(child.to_string(), 0.7);
+    for old in before {
+        let new = engine.document.active_node(old.id).unwrap();
+        assert!((new.x - old.x).abs() < 0.001 && (new.y - old.y).abs() < 0.001);
+        assert!((new.rotation - old.rotation).abs() < 0.001);
+        assert_eq!((new.flip_x, new.flip_y), (old.flip_x, old.flip_y));
+    }
+}
+
+#[test]
+fn new_children_inherit_transformed_container_and_numeric_moves_keep_hierarchy() {
+    let (mut engine, root, _, child) = transform_fixture();
+    engine.document.set_node_transform(root, 90.0, true, false);
+    let added = engine.document.add_rectangle_to(Some(root));
+    let node = engine.document.active_node(added).unwrap();
+    assert!((node.rotation - 90.0).abs() < 0.001 && node.flip_x);
+    let before = engine.document.active_node(child).unwrap().clone();
+    engine
+        .document
+        .set_node_bounds(root, 40.0, 30.0, 200.0, 200.0);
+    let after = engine.document.active_node(child).unwrap();
+    assert!((after.x - before.x - 40.0).abs() < 0.001 && (after.y - before.y - 30.0).abs() < 0.001);
+}
+
+#[test]
+fn finance_starter_layouts_fit_and_instances_reuse_real_content() {
+    let document = Document::demo();
+    document.validate().unwrap();
+    let nodes = &document.active_page().nodes;
+    for node in nodes.iter().filter(|node| node.name == "Action label") {
+        let text = node.text.as_ref().unwrap();
+        assert_eq!(text.vertical_align, TextVerticalAlign::Middle);
+        assert_eq!(text.sizing, TextSizing::Fixed);
+        assert!(node.height >= text.font_size * text.line_height);
+    }
+    for parent in nodes.iter().filter(|n| n.layout_mode != LayoutMode::None) {
+        for child in nodes.iter().filter(|n| n.parent_id == Some(parent.id)) {
+            assert!(
+                child.x >= parent.x + parent.layout_padding[3] - 1.0,
+                "{} left overflow in {}",
+                child.name,
+                parent.name
+            );
+            assert!(
+                child.y >= parent.y + parent.layout_padding[0] - 1.0,
+                "{} top overflow in {}",
+                child.name,
+                parent.name
+            );
+            assert!(
+                child.x + child.width <= parent.x + parent.width - parent.layout_padding[1] + 1.0,
+                "{} right overflow in {}",
+                child.name,
+                parent.name
+            );
+            assert!(
+                child.y + child.height <= parent.y + parent.height - parent.layout_padding[2] + 1.0,
+                "{} bottom overflow in {}",
+                child.name,
+                parent.name
+            );
+        }
+    }
+    assert!(
+        nodes
+            .iter()
+            .filter(|n| n.instance_root_id == Some(n.id))
+            .count()
+            >= 6
+    );
+    for node in nodes.iter().filter(|n| n.kind == NodeKind::Text) {
+        let text = node.text.as_ref().unwrap();
+        assert!(
+            !text.content.contains("   "),
+            "Text must not fake column spacing"
+        );
+        assert!(!text.content.contains(['█', '░', '╭', '▁']));
+    }
+    let navigation = document
+        .components
+        .iter()
+        .find(|c| c.name == "Navigation / Bottom bar")
+        .unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|n| n.component_id == Some(navigation.id) && n.instance_root_id == Some(n.id))
+            .count(),
+        2
+    );
 }

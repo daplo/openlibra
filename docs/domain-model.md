@@ -1,5 +1,7 @@
 # Domain model
 
+This document describes target entities and invariants. The current Rust schema is version 9; workspaces, durable comments, presence and network operation envelopes remain planned. The [audit and TODO](TODO.md) distinguishes implemented fields from target behavior.
+
 ## Ownership hierarchy
 
 ```text
@@ -33,7 +35,7 @@ A named canvas and root node list. Only active-page geometry needs to be materia
 
 ### Node
 
-All visible and structural objects derive from a common node identity. Initial node kinds are frame, group, rectangle, and text placeholder; additional kinds can be introduced through a versioned schema.
+All visible and structural objects derive from a common node identity. Current node kinds are frame, group, rectangle, text, image, icon and vector. Vector geometry includes ellipses, lines, polygons, stars and paths with Bezier handles. Path editing tools and stable sub-element identities remain planned.
 
 A node has a client-generated UUIDv7 ID, parent/order information, transform,
 visibility, lock state, style references, and kind-specific properties. Pages and
@@ -94,5 +96,20 @@ Initial payload families include creating/deleting nodes, setting node propertie
 - Unknown schema fields survive a read/write cycle when feasible.
 - Serialized documents carry an explicit schema version.
 - Loading schema 1 deterministically migrates numeric IDs and their references
-  to UUIDs; schema 2 writes UUID strings.
+  to UUIDs; UUID strings were introduced in schema 2. Current writes use schema 9,
+  with later migrations adding typography, resources, components and vector data.
 - Invalid ownership graphs are rejected when a document is loaded.
+
+## Resolved hierarchy transforms
+
+Node bounds, rotation and flips are stored in world space. Rotating or flipping a frame/group applies its old-to-new frame transform to every descendant center and orientation, including nested containers. The command is atomic and undoable. Renderers consume the resolved values without applying ancestor rotation a second time. This preserves existing files and visual placement when reparenting or ungrouping. Auto-layout temporarily resolves descendants into the container's axes before placement and maps them back afterward; new children inherit those axes. This supports translation, rotation and reflection, not arbitrary shear matrices.
+
+## Prototype room access and presence
+
+The local collaboration prototype now persists a room-scoped owner plus editor/viewer
+capability sessions. Session actor IDs own operation history; display names are
+mutable metadata, not authenticated account identities. Invitations grant editor or
+viewer roles until expiry/revocation for new joins. Changing/revoking a session is
+a separate owner action enforced immediately by the server. Cursors, selections
+and online state are ephemeral, expire independently, and never enter the document
+journal. These prototype entities do not complete workspace/account authorization.

@@ -28,3 +28,84 @@ files for backward compatibility.
 
 Local autosaves and recovery snapshots are browser-owned IndexedDB records. They
 are not part of a downloaded `.libra` file.
+
+## Browser storage and recovery
+
+All browser projects remain stored until explicitly deleted; quick-switcher recency
+limits do not remove documents. The Library lists all active browser projects and
+provides a separate archive view. No storage schema migration is required for this
+retention change; documents already deleted by older versions cannot be recreated.
+
+The editor distinguishes saving in this browser, saved, pending and failed states.
+File saving requests a `.libra` download; it does not confirm disk completion or write
+back to an originally opened file. Failed browser saves retain the last committed
+copy and offer retry/download. Closing with unpersisted changes triggers the browser
+warning. Browser storage can still be cleared or evicted, so downloaded files remain
+important independent copies.
+
+Autosave keeps up to five recovery snapshots per project, normally at least five
+minutes apart. Recovery opens the selected snapshot as a new `recovered.libra`
+project, preserving the source project's latest state and history. Snapshot failures
+are reported separately from primary save failures. A damaged startup project is
+preserved rather than overwritten by the sample document.
+
+Permanent deletion asks for confirmation and deletes that project's recovery
+snapshots too. Same-tab document saves are serialized. Recovery history shows dates, page counts,
+simplified active-page thumbnails and page names before opening a selected snapshot
+as a separate project. Previews are structural approximations, not full-fidelity
+image/effect renders. Damaged or unsupported snapshots are disabled; loading, empty
+and read-failure states offer cancellation or retry without changing the project.
+
+## Cross-tab conflict protection
+
+Browser project records carry a storage `revision`, separate from both the `.libra`
+container version and the Rust document schema. Legacy records without a revision
+are read as revision zero; their next changed save writes revision one. No IndexedDB
+schema migration or change to exported project files is needed.
+
+A save compares its loaded revision and commits the next revision within one
+IndexedDB read/write transaction. Metadata changes and deletion also check revisions.
+An unchanged save does not increment the revision. A stale save is rejected even
+when cross-tab notifications are unavailable, including after another tab deletes
+the record; stale tabs cannot recreate it under its old ID.
+
+BroadcastChannel notifies other tabs to check stored state. Focus/visibility changes
+also check it. Notifications are a convenience; transactional checks enforce safety.
+After a conflict, autosave pauses for that document until the user chooses:
+
+- **Reload latest:** confirm discarding this tab's changes and load the current saved
+  revision. If the project was deleted, keep the in-memory work and offer a copy.
+- **Save as a copy:** preserve this tab's current work under a new project ID without
+  changing the other tab's saved project.
+
+Recovery likewise opens a separate project. These checks protect current-version
+tabs sharing the same browser/origin storage; they do not implement cloud collaboration
+or merge concurrent edits. Refresh old editor tabs after upgrading the application.
+
+### Transform compatibility
+
+The hierarchy-transform implementation retains schema 9 and resolved world-space bounds/orientation. Opening an existing document does not reinterpret stored ancestor rotations. Subsequent container rotation/flip commands transform descendant geometry atomically. Selected-frame PNG applies the inverse of the frame's rotation/reflections to all descendants so the exported image uses the frame's own axes. No extra matrix or local-coordinate field is written.
+
+## Operation history
+
+Current editor saves include an optional `operation_history` object inside the
+native document: journal version, document lineage UUID, validated baseline and
+ordered entries (envelope, revision, resolved changes). The document remains schema
+9 and the outer `.libra` container remains version 1. Loading verifies replay and
+head equality; a malformed journal rejects the file rather than silently losing
+history. Legacy files without this field remain supported. See
+[edit operations](edit-operations.md) for compatibility, actor ownership, undo,
+retained deleted content and current unbounded-history costs. Storage revisions
+and operation revisions serve different purposes and must not be interchanged.
+
+## Shared-room files and backup restoration
+
+The local collaboration service stores a separate version-1 room envelope containing
+the native document JSON/journal, room UUID, participant credentials/roles/names and
+expiring invitations. These private service files are not `.libra` exports. Room
+backup downloads contain only the ordinary `.libra` envelope and native document;
+credentials and presence are excluded. Restoring validates the source journal, then
+creates a new room/document lineage with a fresh baseline, owner and invitations.
+Source node IDs are retained but old actor history is not inherited. Current shared
+restoration is limited to single-page flat rectangle documents. See
+[the collaboration storage contract](collaboration-prototype.md#persistence-contract).

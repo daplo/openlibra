@@ -2,6 +2,40 @@ use crate::*;
 
 impl Document {
     pub(crate) fn relayout_container(&mut self, node_id: EntityId) {
+        let Some(before) = self.active_node(node_id).cloned() else {
+            return;
+        };
+        if before.layout_mode == LayoutMode::None {
+            return;
+        }
+        if before.rotation == 0.0 && !before.flip_x && !before.flip_y {
+            self.relayout_in_axes(node_id);
+            return;
+        }
+        let ids = self.descendant_ids_including(node_id);
+        let mut axes = before.clone();
+        axes.rotation = 0.0;
+        axes.flip_x = false;
+        axes.flip_y = false;
+        for node in &mut self.active_page_mut().nodes {
+            if node.id != node_id && ids.contains(&node.id) {
+                crate::geometry::transform_between(node, &before, &axes);
+            }
+        }
+        self.relayout_in_axes(node_id);
+        let after = self.active_node(node_id).unwrap().clone();
+        axes.x = after.x;
+        axes.y = after.y;
+        axes.width = after.width;
+        axes.height = after.height;
+        for node in &mut self.active_page_mut().nodes {
+            if node.id != node_id && ids.contains(&node.id) {
+                crate::geometry::transform_between(node, &axes, &after);
+            }
+        }
+    }
+
+    fn relayout_in_axes(&mut self, node_id: EntityId) {
         let Some(mut container) = self
             .active_page()
             .nodes

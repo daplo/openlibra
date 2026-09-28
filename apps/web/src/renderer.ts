@@ -415,6 +415,27 @@ export class OpenLibraRenderer {
         : { r: 0.075, g: 0.08, b: 0.095, a: 1 };
   }
 
+  private sceneRenderingEnabled = false;
+  private contentStats = { objects: 0, visibleObjects: 0 };
+  setContentStats(
+    objects: number,
+    visibleObjects: number,
+    bounds?: { left: number; top: number; right: number; bottom: number },
+  ) {
+    this.contentStats = { objects, visibleObjects };
+    if (bounds)
+      this.sceneBounds = {
+        x: bounds.left,
+        y: bounds.top,
+        width: bounds.right - bounds.left,
+        height: bounds.bottom - bounds.top,
+      };
+  }
+
+  setSceneRenderingEnabled(enabled: boolean) {
+    this.sceneRenderingEnabled = enabled;
+  }
+
   getViewState() {
     return { pan: { ...this.pan }, zoom: this.zoom };
   }
@@ -654,7 +675,7 @@ export class OpenLibraRenderer {
     pass.setBindGroup(0, this.bindGroup);
     pass.setVertexBuffer(0, this.vertexBuffer);
     pass.setVertexBuffer(1, this.instanceBuffer);
-    pass.draw(6, this.objectCount);
+    if (this.sceneRenderingEnabled) pass.draw(6, this.objectCount);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
     for (const listener of this.frameListeners) listener();
@@ -668,8 +689,12 @@ export class OpenLibraRenderer {
         frameMs: this.frameTotal / this.frameCount,
         sceneBuildMs: this.sceneBuildMs,
         uploadMs: this.uploadMs,
-        objects: this.totalObjectCount,
-        visibleObjects: this.objectCount,
+        objects: this.sceneRenderingEnabled
+          ? this.totalObjectCount
+          : this.contentStats.objects,
+        visibleObjects: this.sceneRenderingEnabled
+          ? this.objectCount
+          : this.contentStats.visibleObjects,
         zoom: this.zoom,
       });
       this.lastSample = time;
@@ -681,6 +706,7 @@ export class OpenLibraRenderer {
   };
 
   private updateVisibleInstances(force: boolean) {
+    if (!force && !this.sceneRenderingEnabled) return;
     const previous = this.lastCullingView;
     if (
       !force &&

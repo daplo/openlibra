@@ -1,6 +1,11 @@
 export type Mode = "design" | "developer" | "review";
 export type EntityId = string;
-export type PageSummary = { id: EntityId; name: string; description: string };
+export type PageSummary = {
+  id: EntityId;
+  name: string;
+  description: string;
+  benchmark_node_count?: number | null;
+};
 export type ColorAsset = { id: EntityId; name: string; value: string };
 export type NumberVariable = { id: EntityId; name: string; value: number };
 export type TypographyStyle = Omit<TextStyleSummary, "content">;

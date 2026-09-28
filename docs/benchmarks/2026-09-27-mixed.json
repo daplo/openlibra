@@ -1,0 +1,37 @@
+{
+  "hardware": "Apple M1 Max",
+  "memoryGiB": 64,
+  "platform": "darwin 25.6.0 arm64",
+  "browser": "153.0.8010.54",
+  "headless": false,
+  "results": [
+    {
+      "nodes": 1000,
+      "coldMaxPaintMs": 13.799999952316284,
+      "coldTileBuilds": 0,
+      "maxTileCacheMiB": 0,
+      "samples": 357,
+      "meanMs": 5.350420167132252,
+      "p95Ms": 6,
+      "maxMs": 6.799999952316284,
+      "peakOpacityMiB": 0.012828826904296875,
+      "meanCulled": 0.24649859943977592,
+      "viewport": "1720x900",
+      "targetPaintP95Ms": 16.7
+    },
+    {
+      "nodes": 10000,
+      "coldMaxPaintMs": 162.09999990463257,
+      "coldTileBuilds": 84,
+      "maxTileCacheMiB": 32,
+      "samples": 365,
+      "meanMs": 2.0243835677839304,
+      "p95Ms": 2.1000001430511475,
+      "maxMs": 2.299999952316284,
+      "peakOpacityMiB": 0,
+      "meanCulled": 4.421917808219178,
+      "viewport": "1720x900",
+      "targetPaintP95Ms": 33.3
+    }
+  ]
+}

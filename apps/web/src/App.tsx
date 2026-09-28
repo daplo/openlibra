@@ -1,3 +1,8 @@
+import { SharedPresence } from "./components/SharedPresence";
+import type { SharedEditorBridge } from "./editor/shared-editor";
+import { ShareDocument } from "./components/ShareDocument";
+import { SceneCanvas } from "./components/SceneCanvas";
+import { RecoveryDialog } from "./components/RecoveryDialog";
 import {
   useEffect,
   useMemo,
@@ -37,12 +42,9 @@ import {
   ArtboardGuides,
   CanvasGrid,
   IsolationOverlay,
-  MediaOverlay,
   Rulers,
   SelectionOverlay,
   SpacingOverlay,
-  TextOverlay,
-  VectorOverlay,
 } from "./components/CanvasOverlays";
 import { ArtboardMenu } from "./components/ArtboardMenu";
 import { ShapeMenu, type VectorShape } from "./components/ShapeMenu";
@@ -66,17 +68,19 @@ import {
   rgbaToHex,
 } from "./editor/model-utils";
 import {
+  ProjectConflictError,
+  subscribeToProjectChanges,
   createProjectPreview,
   getLastDocumentId,
   getRecentDocument,
   listArchivedDocuments,
-  listRecoverySnapshots,
-  listRecentDocuments,
+  listStoredDocuments,
   removeRecentDocument,
   storeRecentDocument,
   storeRecoverySnapshot,
   setLastDocumentId,
   type RecentDocument,
+  type RecoverySnapshot,
 } from "./editor/recent-documents";
 import {
   OPEN_LIBRA_PROJECT_MIME,
@@ -100,7 +104,8 @@ import {
   type ResizeHandle,
 } from "./renderer";
 
-export function App() {
+export function App({ shared }: { shared?: SharedEditorBridge }) {
+  const [shareOpen, setShareOpen] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<OpenLibraRenderer | undefined>(undefined);
   const engineRef = useRef<DocumentEngine | undefined>(undefined);
@@ -158,9 +163,25 @@ export function App() {
   });
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
+  const [operationError, setOperationError] = useState<string>();
   const [documentName, setDocumentName] = useState("Engine study.libra");
   const [isDocumentDirty, setIsDocumentDirty] = useState(false);
   const savedDocumentJsonRef = useRef<string | undefined>(undefined);
+  const browserSavedRef = useRef<{ json: string; name: string } | undefined>(
+    undefined,
+  );
+  const persistenceIdRef = useRef<string | undefined>(undefined);
+  const projectSessionsRef = useRef(
+    new WeakMap<
+      DocumentEngine,
+      { revision: number | null; conflicted: boolean }
+    >(),
+  );
+  const [projectConflict, setProjectConflict] = useState(false);
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const [downloadRequested, setDownloadRequested] = useState(false);
+  const [recoveryProject, setRecoveryProject] = useState<RecentDocument>();
+  const [recoveryWarning, setRecoveryWarning] = useState<string>();
   const lastRecoverySnapshotAtRef = useRef(new Map<string, number>());
   const [autosaveState, setAutosaveState] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -180,7 +201,7 @@ export function App() {
     media_assets: [],
     components: [],
   });
-  const [, setModelPatchVersion] = useState(0);
+  const [modelPatchVersion, setModelPatchVersion] = useState(0);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [historyState, setHistoryState] = useState({
     canUndo: false,
@@ -287,7 +308,13 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!isDocumentDirty || !engineRef.current) return;
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (
+      browserSavedRef.current?.json === engine.document_json() &&
+      browserSavedRef.current?.name === documentName
+    )
+      return;
     const timeout = window.setTimeout(() => void autosaveDocument(), 800);
     return () => window.clearTimeout(timeout);
     // documentModel changes after every committed engine mutation.
@@ -296,19 +323,40 @@ export function App() {
 
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!isDocumentDirty) return;
+      if (shared) return;
+      const engine = engineRef.current;
+      if (
+        !engine ||
+        (browserSavedRef.current?.json === engine.document_json() &&
+          browserSavedRef.current?.name === documentName)
+      )
+        return;
       event.preventDefault();
     };
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [isDocumentDirty]);
+  }, [documentName, shared]);
+
+  useEffect(() => {
+    shared?.client.updatePresence({
+      page_id: documentModel.active_page_id,
+      selection: selectedNodeIds,
+      cursor: null,
+    });
+  }, [shared, documentModel.active_page_id, selectedNodeIds]);
 
   function refreshDocument(selection = selectedNodeIdsRef.current) {
     const engine = engineRef.current;
     if (!engine) return;
+    const operationState = JSON.parse(engine.operation_state_json()) as {
+      error?: string;
+    } | null;
+    if (engineRef.current === engine)
+      setOperationError(operationState?.error ?? undefined);
     const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
-    const validSelection = selection.filter((id) =>
-      model.nodes.some((node) => node.id === id),
+    const validSelection = selection.filter(
+      (id) =>
+        model.nodes.some((node) => node.id === id) || !!shared?.client.pending,
     );
     const currentSelection = selectedNodeIdsRef.current;
     if (
@@ -319,6 +367,13 @@ export function App() {
       setSelectedNodeIds(validSelection);
     }
     setDocumentModel(model);
+    setDownloadRequested(false);
+    setAutosaveState(
+      browserSavedRef.current?.json === engine.document_json() &&
+        browserSavedRef.current?.name === documentName
+        ? "saved"
+        : "idle",
+    );
     if (savedDocumentJsonRef.current !== undefined)
       setIsDocumentDirty(
         engine.document_json() !== savedDocumentJsonRef.current,
@@ -349,7 +404,8 @@ export function App() {
   function refreshVisibleScene() {
     const engine = engineRef.current;
     const renderer = rendererRef.current;
-    if (!engine || !renderer) return;
+    if (!engine || !renderer || !usesGpuBenchmark(documentModelRef.current))
+      return;
     const bounds = renderer.getVisibleWorldBounds();
     const sceneStarted = performance.now();
     const scene = engine.scene_data_for_view(
@@ -412,15 +468,29 @@ export function App() {
     engine: DocumentEngine,
     name: string,
     recentDocumentId?: string,
+    revision: number | null = null,
   ) {
     flushPendingSceneRefresh();
+    if (shared) {
+      engine.free();
+      setError(
+        "Make a local copy or open the local editor to switch documents.",
+      );
+      return;
+    }
     const previous = engineRef.current;
+    engine.enable_operations(operationActor());
     engineRef.current = engine;
+    projectSessionsRef.current.set(engine, { revision, conflicted: false });
+    setProjectConflict(false);
     savedDocumentJsonRef.current = engine.document_json();
     setDocumentName(name);
+    persistenceIdRef.current = recentDocumentId;
+    browserSavedRef.current = undefined;
     setCurrentRecentDocumentId(recentDocumentId);
-    setLastDocumentId(recentDocumentId);
-    setAutosaveState("saved");
+    setAutosaveState("idle");
+    setDownloadRequested(false);
+    setRecoveryWarning(undefined);
     setIsDocumentDirty(false);
     setIsolationRootId(undefined);
     setEditingTextId(undefined);
@@ -428,15 +498,24 @@ export function App() {
     setLibraryComponentId(undefined);
     copiedNodeIdsRef.current = [];
     setError(undefined);
+    setOperationError(undefined);
     refreshDocument([]);
     rendererRef.current?.resetView();
     previous?.free();
   }
 
   async function preserveCurrentDocument() {
+    if (shared) {
+      setError(
+        "Make a local copy or open the local editor to switch documents.",
+      );
+      return false;
+    }
     const engine = engineRef.current;
     if (!engine) return true;
-    const id = currentRecentDocumentId ?? crypto.randomUUID();
+    const id =
+      persistenceIdRef.current ??
+      (persistenceIdRef.current = crypto.randomUUID());
     const stored = await rememberDocument(engine, documentName, id);
     return (
       stored ||
@@ -444,6 +523,21 @@ export function App() {
         "This document could not be stored locally. Continue and discard it?",
       )
     );
+  }
+
+  async function openStarterDesign() {
+    setFileMenuOpen(false);
+    if (!(await preserveCurrentDocument())) return;
+    try {
+      await init();
+      const engine = new DocumentEngine();
+      const id = crypto.randomUUID();
+      const name = "Moss finance · Starter.libra";
+      replaceDocumentEngine(engine, name, id);
+      await rememberDocument(engine, name, id);
+    } catch (cause) {
+      setError(`Could not open starter: ${String(cause)}`);
+    }
   }
 
   async function newDocument() {
@@ -501,17 +595,19 @@ export function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
     savedDocumentJsonRef.current = json;
     setIsDocumentDirty(false);
+    setDownloadRequested(true);
     void rememberDocument(
       engine,
       documentName,
-      currentRecentDocumentId ?? crypto.randomUUID(),
+      persistenceIdRef.current ??
+        (persistenceIdRef.current = crypto.randomUUID()),
     );
   }
 
   async function refreshRecentDocuments() {
     try {
       const [recent, archived] = await Promise.all([
-        listRecentDocuments(),
+        listStoredDocuments(),
         listArchivedDocuments(),
       ]);
       setRecentDocuments(recent);
@@ -523,49 +619,160 @@ export function App() {
     }
   }
 
+  function showProjectConflict(engine: DocumentEngine) {
+    const session = projectSessionsRef.current.get(engine);
+    if (session) session.conflicted = true;
+    if (engineRef.current === engine) {
+      setProjectConflict(true);
+      setAutosaveState("error");
+    }
+  }
+
+  useEffect(() => {
+    async function checkProject(id = persistenceIdRef.current) {
+      void refreshRecentDocuments();
+      const engine = engineRef.current;
+      if (!engine || !id || id !== persistenceIdRef.current) return;
+      const session = projectSessionsRef.current.get(engine);
+      if (!session || session.revision === null) return;
+      const expectedRevision = session.revision;
+      try {
+        const latest = await getRecentDocument(id);
+        if (
+          engineRef.current !== engine ||
+          session.revision !== expectedRevision
+        )
+          return;
+        if (!latest || (latest.revision ?? 0) !== session.revision)
+          showProjectConflict(engine);
+      } catch {
+        // Atomic revision checks still protect writes when notification reads fail.
+      }
+    }
+    const unsubscribe = subscribeToProjectChanges(
+      (id) => void checkProject(id),
+    );
+    const refresh = () => {
+      void checkProject();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
+  async function reloadLatestProject() {
+    const previous = engineRef.current;
+    const id = persistenceIdRef.current;
+    if (!previous || !id) return;
+    if (
+      !window.confirm(
+        "Reload the latest browser version and discard this tab's unsaved changes? Save as a copy first to keep them.",
+      )
+    )
+      return;
+    await saveQueueRef.current;
+    try {
+      const latest = await getRecentDocument(id);
+      if (engineRef.current !== previous) return;
+      if (!latest) {
+        setError(
+          "This project was deleted. Save your work as a copy to keep it.",
+        );
+        return;
+      }
+      const engine = DocumentEngine.load_json(latest.json);
+      replaceDocumentEngine(engine, latest.name, id, latest.revision ?? 0);
+      browserSavedRef.current = {
+        json: engine.document_json(),
+        name: latest.name,
+      };
+      setAutosaveState("saved");
+      setLastDocumentId(id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function saveConflictCopy() {
+    const current = engineRef.current;
+    if (!current) return;
+    const engine = DocumentEngine.load_json(current.document_json());
+    const name = `${documentName.replace(/\.(libra|olibra|json)$/i, "")} copy.libra`;
+    const id = crypto.randomUUID();
+    replaceDocumentEngine(engine, name, id);
+    await rememberDocument(engine, name, id);
+  }
+
   async function rememberDocument(
     engine: DocumentEngine,
     name: string,
     id: string,
   ) {
+    if (shared) return true;
+    const session = projectSessionsRef.current.get(engine)!;
+    if (session.conflicted) return false;
     const json = engine.document_json();
+    const operationState = JSON.parse(engine.operation_state_json()) as {
+      error?: string;
+    } | null;
+    if (engineRef.current === engine)
+      setOperationError(operationState?.error ?? undefined);
     const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
-    try {
-      const existing = await getRecentDocument(id);
-      if (engineRef.current !== engine) return false;
-      await storeRecentDocument({
-        id,
-        name,
-        json,
-        updatedAt: Date.now(),
-        pageCount: model.pages.length,
-        objectCount: model.nodes.length,
-        preview:
-          !existing || existing.coverPageId === model.active_page_id
-            ? createProjectPreview(model)
-            : existing.preview,
-        pages: model.pages,
-        coverPageId: existing?.coverPageId ?? model.active_page_id,
-        archivedAt: existing?.archivedAt,
-      });
-      if (engineRef.current === engine) {
-        setCurrentRecentDocumentId(id);
-        setLastDocumentId(id);
+    persistenceIdRef.current = id;
+    if (engineRef.current === engine) setAutosaveState("saving");
+    // Preserve invocation order so a slower earlier save cannot overwrite a newer edit.
+    const save = saveQueueRef.current.then(async () => {
+      if (session.conflicted) return false;
+      try {
+        const existing = await getRecentDocument(id);
+        const saved = await storeRecentDocument(
+          {
+            id,
+            name,
+            json,
+            updatedAt: Date.now(),
+            pageCount: model.pages.length,
+            objectCount: model.nodes.length,
+            preview:
+              !existing || existing.coverPageId === model.active_page_id
+                ? createProjectPreview(model)
+                : existing.preview,
+            pages: model.pages,
+            coverPageId: existing?.coverPageId ?? model.active_page_id,
+            archivedAt: existing?.archivedAt,
+          },
+          session.revision,
+        );
+        session.revision = saved.revision ?? 0;
+        if (engineRef.current === engine) {
+          browserSavedRef.current = { json, name };
+          setCurrentRecentDocumentId(id);
+          setLastDocumentId(id);
+          setAutosaveState(engine.document_json() === json ? "saved" : "idle");
+        }
+        await refreshRecentDocuments();
+        return true;
+      } catch (cause) {
+        if (cause instanceof ProjectConflictError) showProjectConflict(engine);
+        else if (engineRef.current === engine) setAutosaveState("error");
+        return false;
       }
-      await refreshRecentDocuments();
-      return true;
-    } catch {
-      setError(
-        "The document is available, but its recent-project preview could not be stored.",
-      );
-      return false;
-    }
+    });
+    saveQueueRef.current = save;
+    return save;
   }
 
   async function autosaveDocument() {
+    if (shared) return;
     const engine = engineRef.current;
     if (!engine) return;
-    const id = currentRecentDocumentId ?? crypto.randomUUID();
+    const id =
+      persistenceIdRef.current ??
+      (persistenceIdRef.current = crypto.randomUUID());
     const name = documentName;
     const snapshotJson = engine.document_json();
     setAutosaveState("saving");
@@ -587,12 +794,20 @@ export function App() {
           createdAt: now,
         });
         lastRecoverySnapshotAtRef.current.set(id, now);
+        if (engineRef.current === engine) setRecoveryWarning(undefined);
       } catch {
-        // The primary autosave succeeded, so snapshot failure is non-fatal.
+        if (engineRef.current === engine)
+          setRecoveryWarning(
+            "Project saved in this browser, but its recovery snapshot failed. Download a copy or retry.",
+          );
       }
     }
     if (engineRef.current !== engine) return;
-    setAutosaveState("saved");
+    setAutosaveState(
+      browserSavedRef.current?.json === engine.document_json()
+        ? "saved"
+        : "idle",
+    );
   }
 
   function nextUntitledDocumentName() {
@@ -617,8 +832,13 @@ export function App() {
     if (!(await preserveCurrentDocument())) return;
     try {
       const engine = DocumentEngine.load_json(document.json);
-      replaceDocumentEngine(engine, document.name, document.id);
-      void touchRecentDocument(document);
+      replaceDocumentEngine(
+        engine,
+        document.name,
+        document.id,
+        document.revision ?? 0,
+      );
+      void rememberDocument(engine, document.name, document.id);
       setLibraryOpen(false);
     } catch (cause) {
       setError(
@@ -629,25 +849,85 @@ export function App() {
     }
   }
 
-  async function touchRecentDocument(document: RecentDocument) {
+  async function removeRecentProject(id: string) {
+    if (
+      !window.confirm(
+        "Permanently delete this browser project and its recovery snapshots? Downloaded files are not affected.",
+      )
+    )
+      return;
+    const engine = engineRef.current;
+    const active = persistenceIdRef.current === id;
+    const listed = [...recentDocuments, ...archivedDocuments].find(
+      (item) => item.id === id,
+    );
+    await saveQueueRef.current;
     try {
-      await storeRecentDocument({ ...document, updatedAt: Date.now() });
+      const session = engine && projectSessionsRef.current.get(engine);
+      const revision = active
+        ? session?.revision
+        : (listed?.revision ?? (listed ? 0 : null));
+      if (revision == null || (active && session?.conflicted))
+        throw new ProjectConflictError();
+      await removeRecentDocument(id, revision);
+      if (active && engineRef.current === engine) {
+        const next = DocumentEngine.new_blank();
+        const nextId = crypto.randomUUID();
+        const name = nextUntitledDocumentName();
+        replaceDocumentEngine(next, name, nextId);
+        await rememberDocument(next, name, nextId);
+      }
       await refreshRecentDocuments();
-    } catch {
-      // Opening the stored project succeeded; a recency update is optional.
+    } catch (cause) {
+      if (active && engine && cause instanceof ProjectConflictError)
+        showProjectConflict(engine);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not delete the browser project. Please retry.",
+      );
     }
   }
 
-  async function removeRecentProject(id: string) {
+  async function updateProjectMetadata(document: RecentDocument) {
     try {
-      await removeRecentDocument(id);
-      if (currentRecentDocumentId === id) {
-        setCurrentRecentDocumentId(undefined);
-        setLastDocumentId(undefined);
+      const active = engineRef.current;
+      const loaded = active && projectSessionsRef.current.get(active);
+      if (
+        loaded &&
+        persistenceIdRef.current === document.id &&
+        (loaded.conflicted || loaded.revision !== (document.revision ?? 0))
+      )
+        throw new ProjectConflictError();
+      const saved = await storeRecentDocument(document);
+      const engine = engineRef.current;
+      const session = engine && projectSessionsRef.current.get(engine);
+      if (
+        engine &&
+        session &&
+        persistenceIdRef.current === document.id &&
+        session.revision === (document.revision ?? 0) &&
+        !session.conflicted
+      ) {
+        session.revision = saved.revision ?? 0;
+        browserSavedRef.current = { json: saved.json, name: saved.name };
       }
       await refreshRecentDocuments();
-    } catch {
-      setError("Could not remove the project from recent documents.");
+      return true;
+    } catch (cause) {
+      if (
+        cause instanceof ProjectConflictError &&
+        engineRef.current &&
+        persistenceIdRef.current === document.id
+      )
+        showProjectConflict(engineRef.current);
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not update this project.",
+      );
+      await refreshRecentDocuments();
+      return false;
     }
   }
 
@@ -655,7 +935,7 @@ export function App() {
     const name = window.prompt("Project name", document.name)?.trim();
     if (!name || name === document.name) return;
     const renamed = { ...document, name, updatedAt: Date.now() };
-    await storeRecentDocument(renamed);
+    if (!(await updateProjectMetadata(renamed))) return;
     if (currentRecentDocumentId === document.id) setDocumentName(name);
     await refreshRecentDocuments();
   }
@@ -669,8 +949,12 @@ export function App() {
       updatedAt: Date.now(),
       archivedAt: undefined,
     };
-    await storeRecentDocument(copy);
-    await refreshRecentDocuments();
+    try {
+      await storeRecentDocument(copy, null);
+      await refreshRecentDocuments();
+    } catch {
+      setError("Could not save the duplicated project.");
+    }
   }
 
   async function archiveRecentProject(document: RecentDocument) {
@@ -683,23 +967,26 @@ export function App() {
         return;
       const currentDocument =
         (await getRecentDocument(document.id)) ?? document;
-      await storeRecentDocument({
-        ...currentDocument,
-        archivedAt: Date.now(),
-      });
+      if (
+        !(await updateProjectMetadata({
+          ...currentDocument,
+          archivedAt: Date.now(),
+        }))
+      )
+        return;
       const id = crypto.randomUUID();
       const name = nextUntitledDocumentName();
       const engine = DocumentEngine.new_blank();
       replaceDocumentEngine(engine, name, id);
       await rememberDocument(engine, name, id);
     } else {
-      await storeRecentDocument({ ...document, archivedAt: Date.now() });
+      await updateProjectMetadata({ ...document, archivedAt: Date.now() });
     }
     await refreshRecentDocuments();
   }
 
   async function restoreRecentProject(document: RecentDocument) {
-    await storeRecentDocument({
+    await updateProjectMetadata({
       ...document,
       archivedAt: undefined,
       updatedAt: Date.now(),
@@ -712,8 +999,13 @@ export function App() {
     try {
       engine = DocumentEngine.load_json(document.json);
       if (!engine.set_active_page(pageId)) return;
+      const operationState = JSON.parse(engine.operation_state_json()) as {
+        error?: string;
+      } | null;
+      if (engineRef.current === engine)
+        setOperationError(operationState?.error ?? undefined);
       const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
-      await storeRecentDocument({
+      await updateProjectMetadata({
         ...document,
         coverPageId: pageId,
         preview: createProjectPreview(model),
@@ -726,37 +1018,16 @@ export function App() {
     }
   }
 
-  async function recoverRecentProject(document: RecentDocument) {
-    try {
-      const snapshots = await listRecoverySnapshots(document.id);
-      if (snapshots.length === 0) {
-        setError("No recovery snapshots are available for this project yet.");
-        return;
-      }
-      const choices = snapshots
-        .map(
-          (snapshot, index) =>
-            `${index + 1}. ${new Date(snapshot.createdAt).toLocaleString()}`,
-        )
-        .join("\n");
-      const choice = window.prompt(
-        `Choose a recovery snapshot (1-${snapshots.length}):\n${choices}`,
-        "1",
-      );
-      if (!choice) return;
-      const snapshot = snapshots[Number.parseInt(choice, 10) - 1];
-      if (!snapshot) {
-        setError("That recovery snapshot does not exist.");
-        return;
-      }
-      if (!(await preserveCurrentDocument())) return;
-      const engine = DocumentEngine.load_json(snapshot.json);
-      replaceDocumentEngine(engine, document.name, document.id);
-      setLibraryOpen(false);
-      setIsDocumentDirty(true);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
+  async function restoreRecoverySnapshot(snapshot: RecoverySnapshot) {
+    if (!recoveryProject || !(await preserveCurrentDocument())) return false;
+    const engine = DocumentEngine.load_json(snapshot.json);
+    const recoveredId = crypto.randomUUID();
+    const recoveredName = `${recoveryProject.name.replace(/\.(libra|olibra|json)$/i, "")} recovered.libra`;
+    replaceDocumentEngine(engine, recoveredName, recoveredId);
+    await rememberDocument(engine, recoveredName, recoveredId);
+    setLibraryOpen(false);
+    setIsDocumentDirty(true);
+    return true;
   }
 
   function flushPendingSceneRefresh() {
@@ -858,6 +1129,11 @@ export function App() {
     try {
       const id = engine.add_artboard(preset.name, preset.width, preset.height);
       refreshDocument([id]);
+      const operationState = JSON.parse(engine.operation_state_json()) as {
+        error?: string;
+      } | null;
+      if (engineRef.current === engine)
+        setOperationError(operationState?.error ?? undefined);
       const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
       const node = model.nodes.find((candidate) => candidate.id === id);
       if (node) rendererRef.current?.centerOnBounds(node);
@@ -1200,6 +1476,7 @@ export function App() {
     const localDx = dx * Math.cos(angle) - dy * Math.sin(angle);
     const localDy = dx * Math.sin(angle) + dy * Math.cos(angle);
     if (engineRef.current.resize_node(selection[0], handle, localDx, localDy)) {
+      refreshDocument(selection);
       refreshLiveSelectionBounds();
       refreshVisibleScene();
     }
@@ -1254,6 +1531,10 @@ export function App() {
         change.strokeJoin ?? node.stroke_join,
       );
       if (!changed) return;
+      if (!usesGpuBenchmark(documentModelRef.current)) {
+        refreshDocument();
+        return;
+      }
       const updated: NodeSummary = {
         ...node,
         fill: change.fill
@@ -1503,6 +1784,7 @@ export function App() {
         }
       }
       setError(undefined);
+      setOperationError(undefined);
       refreshDocument([id]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -1518,6 +1800,7 @@ export function App() {
     }
     try {
       setError(undefined);
+      setOperationError(undefined);
       const payload = await figmaFileToImport(file);
       const pageId = engine.import_figma_json(JSON.stringify(payload));
       setIsolationRootId(undefined);
@@ -1694,6 +1977,11 @@ export function App() {
         JSON.stringify(style),
       );
       if (changed) {
+        const operationState = JSON.parse(engine.operation_state_json()) as {
+          error?: string;
+        } | null;
+        if (engineRef.current === engine)
+          setOperationError(operationState?.error ?? undefined);
         const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
         for (const node of model.nodes) {
           if (node.text_style_id !== asset.id || !node.text) continue;
@@ -1806,11 +2094,17 @@ export function App() {
   }
 
   function undo() {
-    if (engineRef.current?.undo()) refreshDocument();
+    if (engineRef.current) {
+      engineRef.current.undo();
+      refreshDocument();
+    }
   }
 
   function redo() {
-    if (engineRef.current?.redo()) refreshDocument();
+    if (engineRef.current) {
+      engineRef.current.redo();
+      refreshDocument();
+    }
   }
 
   function alignSelected(alignment: string) {
@@ -1912,6 +2206,7 @@ export function App() {
     let disposed = false;
     let localRenderer: OpenLibraRenderer | undefined;
     let localInputController: EditorInputController | undefined;
+    let unsubscribeShared: (() => void) | undefined;
 
     async function start() {
       if (!navigator.gpu) {
@@ -1922,26 +2217,46 @@ export function App() {
       await init();
       if (disposed) return;
       const startedAt = performance.now();
-      const lastDocumentId = getLastDocumentId();
-      const storedDocument = lastDocumentId
+      const lastDocumentId = shared ? undefined : getLastDocumentId();
+      let storedDocument = lastDocumentId
         ? await getRecentDocument(lastDocumentId).catch(() => undefined)
         : undefined;
       let engine: DocumentEngine;
       try {
-        engine = storedDocument
-          ? DocumentEngine.load_json(storedDocument.json)
-          : new DocumentEngine();
+        engine =
+          shared?.engine ??
+          (storedDocument
+            ? DocumentEngine.load_json(storedDocument.json)
+            : new DocumentEngine());
       } catch {
+        storedDocument = undefined;
+        setError(
+          "The last project could not be opened. Its stored copy and recovery history have been preserved in the Library.",
+        );
         engine = new DocumentEngine();
       }
+      engine.enable_operations(operationActor());
       engineRef.current = engine;
+      setHistoryState({
+        canUndo: engine.can_undo(),
+        canRedo: engine.can_redo(),
+      });
+      projectSessionsRef.current.set(engine, {
+        revision: storedDocument ? (storedDocument.revision ?? 0) : null,
+        conflicted: false,
+      });
       savedDocumentJsonRef.current = engine.document_json();
       const initialDocumentId = storedDocument?.id ?? crypto.randomUUID();
-      const initialDocumentName = storedDocument?.name ?? "Engine study.libra";
+      const initialDocumentName = shared
+        ? "Shared document.libra"
+        : (storedDocument?.name ?? "Engine study.libra");
       setCurrentRecentDocumentId(initialDocumentId);
-      setLastDocumentId(initialDocumentId);
+      persistenceIdRef.current = initialDocumentId;
+      browserSavedRef.current = storedDocument
+        ? { json: engine.document_json(), name: initialDocumentName }
+        : undefined;
       setDocumentName(initialDocumentName);
-      setAutosaveState("saved");
+      setAutosaveState(storedDocument ? "saved" : "idle");
       setDocumentModel(
         JSON.parse(engine.read_model_json()) as DocumentReadModel,
       );
@@ -1980,8 +2295,7 @@ export function App() {
         endEdit: () => {
           setSnapGuides({});
           flushPendingSceneRefresh();
-          const isBenchmark =
-            (documentModelRef.current?.nodes.length ?? 0) >= 1_000;
+          const isBenchmark = usesGpuBenchmark(documentModelRef.current);
           if (!isBenchmark) {
             engineRef.current?.reparent_nodes_to_artboards(
               JSON.stringify(selectedNodeIdsRef.current),
@@ -2042,7 +2356,13 @@ export function App() {
       localInputController = inputController;
       inputControllerRef.current = inputController;
       renderer.start();
-      if (!storedDocument)
+      if (shared) {
+        unsubscribeShared = shared.subscribe(() => {
+          refreshDocument();
+        });
+        refreshDocument();
+      }
+      if (!shared && !storedDocument)
         void rememberDocument(engine, initialDocumentName, initialDocumentId);
     }
 
@@ -2051,6 +2371,7 @@ export function App() {
     );
     return () => {
       disposed = true;
+      unsubscribeShared?.();
       localInputController?.dispose();
       localRenderer?.dispose();
       engineRef.current?.free();
@@ -2163,7 +2484,13 @@ export function App() {
   }, [theme]);
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${shared ? "is-shared" : ""}`}>
+      {shareOpen && (
+        <ShareDocument
+          documentJson={() => engineRef.current!.document_json()}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
       <header className="topbar">
         <div className="brand">
           <span className="mark">OL</span>
@@ -2182,7 +2509,11 @@ export function App() {
               {isDocumentDirty ? " •" : ""}
               <span
                 className={`autosave-indicator ${autosaveState}`}
-                title={autosaveLabel(autosaveState, isDocumentDirty)}
+                title={
+                  shared
+                    ? "Shared document"
+                    : autosaveLabel(autosaveState, isDocumentDirty)
+                }
               />
               <ChevronRight aria-hidden="true" />
             </button>
@@ -2198,7 +2529,9 @@ export function App() {
                   <span>
                     <strong>{documentName}</strong>
                     <small>
-                      {autosaveLabel(autosaveState, isDocumentDirty)}
+                      {shared
+                        ? "Shared document"
+                        : autosaveLabel(autosaveState, isDocumentDirty)}
                     </small>
                   </span>
                 </button>
@@ -2248,6 +2581,43 @@ export function App() {
               </div>
             )}
           </div>
+          {recoveryProject && (
+            <RecoveryDialog
+              project={recoveryProject}
+              onClose={() => setRecoveryProject(undefined)}
+              onRestore={restoreRecoverySnapshot}
+            />
+          )}
+          <div className="save-status" role="status" aria-live="polite">
+            <span>
+              {projectConflict
+                ? "Project changed in another tab"
+                : shared
+                  ? "Shared document"
+                  : autosaveLabel(autosaveState, isDocumentDirty)}
+            </span>
+            {projectConflict && (
+              <>
+                <button onClick={() => void reloadLatestProject()}>
+                  Reload latest
+                </button>
+                <button onClick={() => void saveConflictCopy()}>
+                  Save as a copy
+                </button>
+              </>
+            )}
+            {downloadRequested && <small>Download requested</small>}
+            {recoveryWarning && <small>{recoveryWarning}</small>}
+            {!projectConflict &&
+              (autosaveState === "error" || recoveryWarning) && (
+                <>
+                  <button onClick={() => void autosaveDocument()}>
+                    Retry save
+                  </button>
+                  <button onClick={saveDocument}>Download .libra</button>
+                </>
+              )}
+          </div>
           <div className="menu-anchor" ref={fileMenuRef}>
             <button
               className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
@@ -2268,6 +2638,15 @@ export function App() {
                   <span>New document</span>
                   <kbd>⌘N</kbd>
                 </button>
+                {!shared && (
+                  <button
+                    role="menuitem"
+                    onClick={() => void openStarterDesign()}
+                  >
+                    <Shapes />
+                    <span>Open starter design</span>
+                  </button>
+                )}
                 <button role="menuitem" onClick={requestOpenDocument}>
                   <FolderOpen />
                   <span>Open…</span>
@@ -2453,7 +2832,16 @@ export function App() {
           >
             {theme === "dark" ? <Sun /> : <Moon />}
           </button>
-          <button className="share-button">Share</button>
+          {!shared && (
+            <button
+              className="share-button"
+              onClick={async () => {
+                if (await preserveCurrentDocument()) setShareOpen(true);
+              }}
+            >
+              Share document
+            </button>
+          )}
         </div>
       </header>
 
@@ -2479,7 +2867,7 @@ export function App() {
           onSetProjectCover={(document, pageId) =>
             void setProjectCover(document, pageId)
           }
-          onRecoverRecent={(document) => void recoverRecentProject(document)}
+          onRecoverRecent={setRecoveryProject}
           onInsert={createComponentInstance}
           onEditMain={editMainComponent}
           onAddVariant={duplicateComponentVariant}
@@ -2594,7 +2982,7 @@ export function App() {
             <ToolButton
               label="Artboard"
               icon={<Frame />}
-              disabled={mode !== "design"}
+              disabled={mode !== "design" || !!shared?.blocked}
               active={artboardMenuOpen}
               onClick={() => {
                 setShapeMenuOpen(false);
@@ -2604,14 +2992,14 @@ export function App() {
             <ToolButton
               label="Rectangle"
               icon={<Square />}
-              disabled={mode !== "design"}
+              disabled={mode !== "design" || !!shared?.blocked}
               onClick={() => addNode("rectangle")}
             />
             <ToolButton
               label="Shapes"
               icon={<Shapes />}
               active={shapeMenuOpen}
-              disabled={mode !== "design"}
+              disabled={mode !== "design" || !!shared?.blocked}
               onClick={() => {
                 setArtboardMenuOpen(false);
                 setShapeMenuOpen((open) => !open);
@@ -2620,7 +3008,7 @@ export function App() {
             <ToolButton
               label="Text"
               icon={<Type />}
-              disabled={mode !== "design"}
+              disabled={mode !== "design" || !!shared?.blocked}
               onClick={() => addNode("text")}
             />
             <ToolButton
@@ -2647,6 +3035,16 @@ export function App() {
             <canvas
               ref={canvasRef}
               aria-label="Open Libra WebGPU editor canvas"
+              onPointerMove={(event) => {
+                const cursor = rendererRef.current?.worldPointFromClient(
+                  event.clientX,
+                  event.clientY,
+                );
+                if (cursor) shared?.client.updatePresence({ cursor });
+              }}
+              onPointerLeave={() =>
+                shared?.client.updatePresence({ cursor: null })
+              }
               onContextMenu={(event) => {
                 event.preventDefault();
                 openCanvasComponentMenu(event.clientX, event.clientY);
@@ -2664,27 +3062,29 @@ export function App() {
               }}
               onDrop={dropAssetOnCanvas}
             />
+            {shared && (
+              <SharedPresence
+                client={shared.client}
+                pageId={documentModel.active_page_id}
+                nodes={documentModel.nodes}
+                rendererRef={rendererRef}
+              />
+            )}
             {gridVisible && (
               <CanvasGrid rendererRef={rendererRef} theme={theme} />
             )}
+            <SceneCanvas
+              revision={modelPatchVersion}
+              rendererRef={rendererRef}
+              nodes={documentModel.nodes}
+              assets={documentModel.media_assets}
+              editingTextId={editingTextId}
+              gpuBenchmark={usesGpuBenchmark(documentModel)}
+            />
             <ArtboardGuides
               rendererRef={rendererRef}
               nodes={documentModel.nodes}
               artboards={guidedArtboards}
-            />
-            <MediaOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              assets={documentModel.media_assets}
-            />
-            <VectorOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-            />
-            <TextOverlay
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              editingTextId={editingTextId}
             />
             {isolationRoot && (
               <IsolationOverlay
@@ -2751,6 +3151,8 @@ export function App() {
             {editingTextNode?.text && (
               <textarea
                 className="text-editor-overlay"
+                readOnly={shared?.blocked}
+                onFocus={() => shared?.engine.begin_transaction()}
                 defaultValue={editingTextNode.text.content}
                 autoFocus
                 wrap={
@@ -2766,18 +3168,22 @@ export function App() {
                       ...editingTextNode.text!,
                       content: event.currentTarget.value,
                     });
+                  shared?.engine.end_transaction();
                   setEditingTextId(undefined);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Escape") setEditingTextId(undefined);
+                  if (event.key === "Escape") {
+                    shared?.engine.end_transaction();
+                    setEditingTextId(undefined);
+                  }
                 }}
                 aria-label="Edit text content"
               />
             )}
-            {error && (
+            {(error || operationError) && (
               <div className="error-card">
-                <strong>Renderer unavailable</strong>
-                <span>{error}</span>
+                <strong>Editor error</strong>
+                <span>{error || operationError}</span>
               </div>
             )}
             {canvasContextMenu && (
@@ -2858,47 +3264,52 @@ export function App() {
                 </button>
               </div>
             ) : (
-              <Properties
-                selected={editableSelectedNodes}
-                documentColors={documentColors}
-                numberVariables={documentModel.number_variables}
-                textStyles={documentModel.text_styles}
-                mediaAssets={documentModel.media_assets}
-                components={documentModel.components}
-                onAddDocumentColor={addDocumentColor}
-                onAlign={alignSelected}
-                onDelete={deleteSelected}
-                onGroup={groupSelected}
-                onUngroup={ungroupSelected}
-                onExportFrame={(node, scale) =>
-                  void exportSelectedFrame(node, scale)
-                }
-                onCreateComponent={createComponent}
-                onInstanceVariantChange={changeInstanceVariant}
-                onInstanceReset={resetComponentInstance}
-                onInstanceDetach={detachComponentInstance}
-                onInstanceSwap={swapComponentInstance}
-                onGoToMainComponent={goToMainComponent}
-                onVectorParametersChange={updateVectorParameters}
-                onVectorFillRuleChange={updateVectorFillRule}
-                onVectorConvertToPath={convertVectorToPath}
-                onExportVector={exportSelectedVector}
-                onStyleChange={updateNodeStyle}
-                onBoundsChange={updateNodeBounds}
-                onOpacityChange={updateNodeOpacity}
-                onShadowsChange={updateNodeShadows}
-                onTextChange={updateNodeText}
-                onVariableBind={bindNodeVariable}
-                onTextStyleBind={bindNodeTextStyle}
-                onCreateVariable={createAndBindVariable}
-                onCreateTextStyle={createAndBindTextStyle}
-                onImageFitChange={updateNodeImageFit}
-                onAssetChange={updateNodeAsset}
-                onTransformChange={updateNodeTransform}
-                onLayoutChange={updateNodeLayout}
-                onWidthSizingChange={updateNodeWidthSizing}
-                onArtboardGuideChange={updateArtboardGuide}
-              />
+              <fieldset
+                disabled={shared?.blocked}
+                className="property-controls"
+              >
+                <Properties
+                  selected={editableSelectedNodes}
+                  documentColors={documentColors}
+                  numberVariables={documentModel.number_variables}
+                  textStyles={documentModel.text_styles}
+                  mediaAssets={documentModel.media_assets}
+                  components={documentModel.components}
+                  onAddDocumentColor={addDocumentColor}
+                  onAlign={alignSelected}
+                  onDelete={deleteSelected}
+                  onGroup={groupSelected}
+                  onUngroup={ungroupSelected}
+                  onExportFrame={(node, scale) =>
+                    void exportSelectedFrame(node, scale)
+                  }
+                  onCreateComponent={createComponent}
+                  onInstanceVariantChange={changeInstanceVariant}
+                  onInstanceReset={resetComponentInstance}
+                  onInstanceDetach={detachComponentInstance}
+                  onInstanceSwap={swapComponentInstance}
+                  onGoToMainComponent={goToMainComponent}
+                  onVectorParametersChange={updateVectorParameters}
+                  onVectorFillRuleChange={updateVectorFillRule}
+                  onVectorConvertToPath={convertVectorToPath}
+                  onExportVector={exportSelectedVector}
+                  onStyleChange={updateNodeStyle}
+                  onBoundsChange={updateNodeBounds}
+                  onOpacityChange={updateNodeOpacity}
+                  onShadowsChange={updateNodeShadows}
+                  onTextChange={updateNodeText}
+                  onVariableBind={bindNodeVariable}
+                  onTextStyleBind={bindNodeTextStyle}
+                  onCreateVariable={createAndBindVariable}
+                  onCreateTextStyle={createAndBindTextStyle}
+                  onImageFitChange={updateNodeImageFit}
+                  onAssetChange={updateNodeAsset}
+                  onTransformChange={updateNodeTransform}
+                  onLayoutChange={updateNodeLayout}
+                  onWidthSizingChange={updateNodeWidthSizing}
+                  onArtboardGuideChange={updateArtboardGuide}
+                />
+              </fieldset>
             ))}
           {mode === "developer" && (
             <Inspect
@@ -2967,6 +3378,8 @@ function textEditorStyle(node: NodeSummary, renderer?: OpenLibraRenderer) {
     top: node.y * view.zoom + view.pan.y,
     width: node.width * view.zoom,
     height: node.height * view.zoom,
+    transform: `rotate(${node.rotation}deg) scale(${node.flip_x ? -1 : 1}, ${node.flip_y ? -1 : 1})`,
+    transformOrigin: "center",
     fontFamily: text.font_family,
     fontWeight: text.font_weight,
     fontStyle: text.font_style,
@@ -3139,11 +3552,12 @@ function autosaveLabel(
   state: "idle" | "saving" | "saved" | "error",
   dirty: boolean,
 ) {
-  if (state === "saving") return "Saving locally…";
-  if (state === "error") return "Local save failed";
-  if (state === "saved" && dirty) return "Saved locally · file not downloaded";
-  if (state === "saved") return "Saved locally";
-  return "Current";
+  if (state === "saving") return "Saving in this browser…";
+  if (state === "error") return "Browser save failed · changes are not saved";
+  if (state === "saved" && dirty)
+    return "Saved in this browser · download to keep a file";
+  if (state === "saved") return "Saved in this browser";
+  return "Changes waiting to save";
 }
 
 function nearestSnap(moving: number[], targets: number[], threshold: number) {
@@ -3159,4 +3573,25 @@ function nearestSnap(moving: number[], targets: number[], threshold: number) {
     }
   }
   return best;
+}
+
+function usesGpuBenchmark(model?: DocumentReadModel) {
+  return (
+    !!model?.pages.find((page) => page.id === model.active_page_id)
+      ?.benchmark_node_count &&
+    model.nodes.every((node) => node.kind === "rectangle" && !node.parent_id)
+  );
+}
+
+function operationActor(): string {
+  const key = "open-libra-operation-actor";
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const actor = crypto.randomUUID();
+    sessionStorage.setItem(key, actor);
+    return actor;
+  } catch {
+    return crypto.randomUUID();
+  }
 }

@@ -1,4 +1,4 @@
-use crate::geometry::{point_in_rotated_node, rotate_around};
+use crate::geometry::{point_in_rotated_node, rotate_around, transform_between};
 use crate::*;
 use std::collections::{HashMap, HashSet};
 
@@ -110,12 +110,14 @@ impl Document {
                     Some((
                         node.id,
                         node.component_variant_id?,
-                        node.x - source.x,
-                        node.y - source.y,
+                        node.clone(),
+                        source.clone(),
                     ))
                 })
                 .collect();
-            for (root_id, variant_id, dx, dy) in instance_roots {
+            for (root_id, variant_id, mut instance_frame, source_root) in instance_roots {
+                instance_frame.width = source_root.width;
+                instance_frame.height = source_root.height;
                 let Some(sources) = variant_sources.get(&variant_id) else {
                     continue;
                 };
@@ -137,12 +139,12 @@ impl Document {
                         continue;
                     }
                     let mut clone = source.clone();
-                    clone.id = uuid::Uuid::now_v7();
+                    // The same source slot in the same instance has a stable identity on replay.
+                    clone.id = uuid::Uuid::new_v5(&root_id, source.id.as_bytes());
                     clone.parent_id = source
                         .parent_id
                         .and_then(|parent| instance_by_slot.get(&parent).copied());
-                    clone.x = source.x + dx;
-                    clone.y = source.y + dy;
+                    transform_between(&mut clone, &source_root, &instance_frame);
                     clone.component_id = None;
                     clone.component_variant_id = None;
                     clone.component_slot_id = Some(source.id);
@@ -169,8 +171,17 @@ impl Document {
                     node.name = source.name.clone();
                     node.width = source.width;
                     node.height = source.height;
-                    node.x = source.x + dx;
-                    node.y = source.y + dy;
+                    let mut resolved = source.clone();
+                    transform_between(&mut resolved, &source_root, &instance_frame);
+                    node.x = resolved.x;
+                    node.y = resolved.y;
+                    node.rotation = resolved.rotation;
+                    node.flip_x = resolved.flip_x;
+                    node.flip_y = resolved.flip_y;
+                    node.opacity = source.opacity;
+                    node.shadows = source.shadows.clone();
+                    node.stroke_align = source.stroke_align;
+                    node.stroke_join = source.stroke_join;
                     node.fill = source.fill;
                     node.stroke = source.stroke;
                     node.stroke_width = source.stroke_width;
@@ -477,7 +488,7 @@ impl Document {
         true
     }
 
-    fn descendant_ids_including(&self, root_id: EntityId) -> HashSet<EntityId> {
+    pub(crate) fn descendant_ids_including(&self, root_id: EntityId) -> HashSet<EntityId> {
         let mut ids = HashSet::from([root_id]);
         loop {
             let before = ids.len();
@@ -927,16 +938,30 @@ impl Document {
         if !rotation.is_finite() {
             return false;
         }
-        self.mark_benchmark_node_modified(node_id);
-        let Some(node) = self.active_node_mut(node_id) else {
+        let Some(before) = self.active_node(node_id).cloned() else {
             return false;
         };
-        if node.locked {
+        if before.locked {
             return false;
         }
-        node.rotation = rotation.rem_euclid(360.0);
-        node.flip_x = flip_x;
-        node.flip_y = flip_y;
+        let mut after = before.clone();
+        after.rotation = rotation.rem_euclid(360.0);
+        after.flip_x = flip_x;
+        after.flip_y = flip_y;
+        if before == after {
+            return false;
+        }
+        self.mark_benchmark_node_modified(node_id);
+        let ids = self.descendant_ids_including(node_id);
+        for node in &mut self.active_page_mut().nodes {
+            if node.id == node_id {
+                node.rotation = after.rotation;
+                node.flip_x = after.flip_x;
+                node.flip_y = after.flip_y;
+            } else if ids.contains(&node.id) {
+                transform_between(node, &before, &after);
+            }
+        }
         true
     }
 
@@ -1126,6 +1151,7 @@ impl Document {
         if (node.height - height.round().max(8.0)).abs() > f32::EPSILON {
             node.variable_bindings.height = None;
         }
+        let translation = (x - node.x, y - node.y);
         node.x = x;
         node.y = y;
         node.width = width.round().max(8.0);
@@ -1134,6 +1160,15 @@ impl Document {
         node.corner_radii = node.corner_radii.map(|radius| radius.min(max_radius));
         let parent_id = node.parent_id;
         let relayout_self = node.auto_height && node.layout_mode != LayoutMode::None;
+        if translation.0 != 0.0 || translation.1 != 0.0 {
+            let ids = self.descendant_ids_including(node_id);
+            for child in &mut self.active_page_mut().nodes {
+                if child.id != node_id && ids.contains(&child.id) {
+                    child.x += translation.0;
+                    child.y += translation.1;
+                }
+            }
+        }
         if relayout_self {
             self.relayout_container(node_id);
         }

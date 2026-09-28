@@ -1,93 +1,126 @@
 # Product brief
 
-## Working name
-
-Open Libra
-
 ## Vision
 
-Open Libra is a browser-based environment where product designers, developers, and product teams work on the same product definition through different modes. These modes share one document and one engine, but expose tools and information appropriate to each job.
+Open Libra combines interface design and vector illustration in one browser editor.
+A designer should be able to draw an icon or logo, refine its paths, reuse it in a
+responsive component, prototype a screen, and review the result with a team without
+flattening the artwork or moving between incompatible documents.
 
-The long-term goal is to shorten the feedback loop between interface design, design systems, implementation, and review.
+Figma-like UI composition and collaboration and Illustrator-like vector authoring
+are the product direction, not a claim of current feature parity. The
+[implementation audit and TODO](TODO.md) is the active scope and completion record.
 
 ## Target users
 
-- Professional product designers creating web and mobile applications
-- Developers translating designs into production code
-- Product teams reviewing work and giving feedback
+- Product designers building responsive web/mobile interfaces and design systems
+- Vector and brand designers creating icons, logos, diagrams and digital artwork
+- Developers inspecting approved designs, tokens, components and export assets
+- Product teams and clients discussing, comparing and approving revisions
 
 ## Product principles
 
-1. One source of truth, multiple modes. Modes change the workflow, not the underlying artifact.
-2. Components and tokens are first-class data, not conventions layered on top of drawings.
-3. Collaboration is part of the document architecture from the beginning.
-4. Design libraries can exist, evolve, and be published independently of design documents.
-5. The first prototype favors a coherent vertical slice over broad feature coverage.
+1. One document model supports structured UI and freeform vector artwork.
+2. Files belong to users: local editing and native project export require no account.
+3. Collaboration is optional to use, but its operation semantics shape the engine.
+4. Components, tokens, vector geometry and assets stay editable and traceable.
+5. Canvas, saved files and exports should agree; limitations and substitutions are visible.
+6. Permissions are enforced independently of the selected UI mode.
+7. Ship complete workflows with demonstrable exit criteria before expanding tool breadth.
 
-## Product modes
+## Workspaces and workflows
 
-### Design mode
+### Design
 
-Create application screens using frames, tokens, layouts, constraints, layers, groups, and transforms.
+Use frames, auto layout, constraints, layers, components, tokens and reusable assets
+to compose screens. Vector tools belong in the same workspace: pen/direct selection,
+curves, compound paths, boolean shapes, gradients and masks. A separate illustration
+preset may customize panels and shortcuts without changing the document format.
 
-### Developer mode
+### Developer
 
-Inspect dimensions, spacing, layout behavior, constraints, tokens, CSS-like values, and exportable assets. A later version will map design components and variants to real code components and typed props.
+Inspect dimensions, layout, tokens and assets at a named revision. CSS-like output
+must describe its limitations. Later, map stable component properties to repository
+components; general code generation is not an initial release requirement.
 
-### Review mode
+### Review
 
-Navigate designs, observe presence, leave comments, and participate in feedback without exposing the full editing interface.
+Navigate designs and prototypes, leave anchored threads, compare revisions and
+record approval or requested changes. Shared cursors and follow-user controls aid
+live reviews. An approval belongs to a particular revision and becomes outdated
+when that design changes.
 
-Mode names and exact boundaries remain hypotheses to validate during prototyping.
+## Current implementation
 
-## First prototype scope
+The repository contains a local editor with Rust/WASM document state, basic layout,
+text and numeric variables, local components/named variants, vector primitives and
+path data, image/icon assets, `.libra` downloads, browser autosave/recovery, partial
+`.fig` import, frame PNG export and single-vector SVG export.
 
-### Included
+It does not yet provide a pen/anchor editor, a collaboration backend, working comment
+threads, account permissions or interactive prototypes. Review mode is a placeholder.
+See [TODO.md](TODO.md#what-is-implemented) for source evidence and precise boundaries.
 
-- Cloud-hosted user documents
-- Multiple pages per document
-- Infinite canvas rendered in the browser
-- Frames for web and mobile screens
-- Design tokens
-- Stack/flex-style layouts
-- Responsive constraints
-- Layer tree and grouping
-- Selection, move, resize, and basic transforms
-- Command-based undo and redo
-- Comments attached to canvas positions or objects
-- Multiplayer presence and cursors
-- Developer inspection of CSS-like layout and token values
-- Approximately 1,000 simultaneously visible objects on a typical laptop
+## First useful hybrid release
 
-### Designed for, but not necessarily complete
+- Trustworthy account-free project save, reopen, recovery and portable assets
+- Responsive frame layout and constraints with linked design tokens
+- Pen and direct-selection tools, editable booleans, gradients and supported SVG interchange
+- Components that reuse both UI structure and vector artwork with explicit overrides
+- Reliable fonts, text layout and mixed-content rendering/export
+- Optional shared documents with authorized edits, presence, reconnect and per-user undo
+- Anchored review threads and developer inspection of the same document
 
-- A document asset vault containing images, local components, and reusable resources
-- Export definitions with format, scale, density, theme, platform, and state variations
-- Separately published, versioned component libraries
-- Stable component identities for future mapping to code
+A subsequent product-team milestone adds shared library upgrades, revision-based
+approval/diffs, interactive prototypes, broader export and static review publishing.
+Advanced brushes, tracing and professional print production follow separately.
 
-### Not in the first prototype
+## Ownership and hosting
 
-- Figma file compatibility
-- Full vector pen tooling or illustration workflows
-- Interactive prototyping
-- Complete asset processing and export matrix
-- Offline-first synchronization
-- Production-grade permissions, billing, or organization administration
-- Code-component linking or code generation
-- Safari, Firefox, tablet, or WebGL compatibility guarantees
-- Documents substantially beyond the initial 1,000-visible-object target
+Local `.libra` files remain portable and downloadable. Optional managed or self-hosted
+services provide private shared documents, real-time editing, history and review.
+Ending hosted access must not disable local files or core export.
 
-## Prototype success criteria
+Public read-only bundles may run on any static host, including GitHub Pages. Static
+hosting alone does not supply live editing, access-controlled private review or
+persistent comments; those require a backend or an explicitly linked issue workflow.
 
-A solo user can create a cloud document, add pages, compose a small responsive application screen from token-driven frames and layouts, reorganize and transform layers, undo edits, and inspect implementation-oriented values. Opening the same document in a second browser session shows live edits and cursors, and a reviewer can attach a comment to an object.
+Local editing is distinct from seamless offline collaborative synchronization. Until
+reconciliation is implemented, disconnected shared work needs a recoverable local
+copy and an explicit rejoin/fork workflow.
 
-Canvas interactions should feel immediate. The working target is 60 frames per second during pan, zoom, selection, and simple transforms with roughly 1,000 visible objects on the reference development laptop.
+## Community and business model
 
-## Open product questions
+The agreed Community edition is a complete open-source editor with useful
+self-hosted collaboration, including commercial use. Core authoring, standard
+exports, basic review and security remain Community capabilities.
 
-- Should tokens and components be owned by a document, workspace vault, library, or all three through explicit promotion?
-- What publishing and update workflow should govern component libraries?
-- Which layout semantics should deliberately match CSS, and where should the design model diverge?
-- Are designer, developer, and review modes fixed roles or user-selectable workspaces independent of permissions?
-- What is the smallest useful asset-variation model?
+Optional revenue comes from managed hosting, support and organization-level features
+such as enforced approval/library policies, enterprise identity and audit reporting.
+Private self-hosting remains available without buying managed Cloud access. See the
+[community and business plan](community-and-business.md) for the agreed boundary
+and outstanding licensing, governance and pricing decisions.
+
+## Success criteria
+
+1. Draw a curved icon, combine it with a boolean shape and use it inside a responsive,
+   token-driven component without losing its editable paths.
+2. Save and reopen the project with its resources and matching appearance; export
+   supported artwork with clear handling of missing fonts or unsupported effects.
+3. Two authorized browser sessions edit one shared document, survive reconnects,
+   converge and undo their own work without removing unrelated remote edits.
+4. A reviewer leaves feedback anchored to an object/revision; a developer inspects
+   that same design and downloads its assets.
+5. Pan, zoom and basic transforms meet the 1K-visible-object/60-FPS target on named
+   hardware, with mixed text/image/vector fixtures in addition to simple rectangles.
+
+## Deferred commitments and open decisions
+
+- Full Figma/Illustrator native-file compatibility is not promised; prioritize `.libra`,
+  editable SVG and explicit import conversion reports.
+- Professional CMYK/spot-color/print-PDF workflows require a separate color-management milestone.
+- Safari/Firefox/tablet and larger-document guarantees require measured support work.
+- Decide component materialization and override semantics before library publishing.
+- Decide vector sub-element identities and concurrent path-edit behavior before multiplayer vectors.
+- Choose a shared rendering/export contract before expanding effects and typography.
+- Validate whether illustration needs a dedicated panel preset; keep the underlying model shared.

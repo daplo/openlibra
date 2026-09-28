@@ -85,11 +85,11 @@ export function LibraryView({
         <div>
           <span className="eyebrow">Library</span>
           <h1>
-            {activeSection === "projects" ? "Recent projects" : "Components"}
+            {activeSection === "projects" ? "Browser projects" : "Components"}
           </h1>
           <p>
             {activeSection === "projects"
-              ? "Continue working from a recent local project."
+              ? "All projects saved in this browser. Download files to keep a separate copy."
               : "Reusable definitions, variants, and live previews."}
           </p>
         </div>
@@ -185,7 +185,7 @@ function ProjectLibrary({
           className={!showArchived ? "active" : ""}
           onClick={() => setShowArchived(false)}
         >
-          Recent
+          All projects
         </button>
         <button
           className={showArchived ? "active" : ""}
@@ -224,8 +224,8 @@ function ProjectLibrary({
             </button>
             <button
               className="project-card-remove"
-              aria-label={`Remove ${document.name} from recent projects`}
-              title="Remove from recent projects"
+              aria-label={`Delete ${document.name} permanently`}
+              title="Delete project and recovery snapshots"
               onClick={() => onRemove(document.id)}
             >
               <Trash2 aria-hidden="true" />
@@ -290,11 +290,19 @@ function ProjectLibrary({
   );
 }
 
-function ProjectPreviewImage({ preview }: { preview: ProjectPreview }) {
+export function ProjectPreviewImage({
+  preview,
+  width = 280,
+  height = 160,
+}: {
+  preview: ProjectPreview;
+  width?: number;
+  height?: number;
+}) {
   const scale = Math.min(
     1,
-    280 / preview.bounds.width,
-    160 / preview.bounds.height,
+    width / preview.bounds.width,
+    height / preview.bounds.height,
   );
   return (
     <span className="project-preview">

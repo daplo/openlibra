@@ -1,4 +1,9 @@
+import { testOperations } from "./operation-tests.mjs";
+import { testRenderingInteraction } from "./rendering-interaction-tests.mjs";
+import { testRendering } from "./rendering-tests.mjs";
 import assert from "node:assert/strict";
+import { testCrossTab } from "./cross-tab-tests.mjs";
+import { testProjectSafety } from "./project-safety-tests.mjs";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -113,11 +118,11 @@ try {
   await waitForTool("select");
   const requestAction = page
     .locator('[data-testid^="layer-node-"][data-node-kind="group"]')
-    .filter({ hasText: "Request" })
+    .filter({ hasText: "Payment card / Savings" })
     .first();
   const sendAction = page
     .locator('[data-testid^="layer-node-"][data-node-kind="group"]')
-    .filter({ hasText: "Send" })
+    .filter({ hasText: "Payment card / Everyday" })
     .first();
   await requestAction.locator(".layer-main").dblclick();
   await page.waitForTimeout(350);
@@ -571,8 +576,10 @@ try {
     .getByRole("button", { name: "Insert Default" })
     .click();
   await page.getByRole("button", { name: "Layers" }).click();
+  const createdComponentId =
+    await componentSource.getAttribute("data-component-id");
   const componentInstance = page.locator(
-    '[data-testid^="layer-node-"][data-instance-root-id]:not([data-instance-root-id=""])',
+    `[data-testid^="layer-node-"][data-component-id="${createdComponentId}"][data-instance-root-id]:not([data-instance-root-id=""])`,
   );
   await componentInstance.first().waitFor();
   await componentInstance.first().locator(".layer-main").click();
@@ -661,7 +668,7 @@ try {
   await archivedProject.waitFor();
   await archivedProject.getByRole("button", { name: /Restore/ }).click();
   await archivedProject.waitFor({ state: "detached" });
-  await projectLibrary.getByRole("button", { name: "Recent" }).click();
+  await projectLibrary.getByRole("button", { name: "All projects" }).click();
   await duplicatedProject.waitFor();
   await page.getByRole("button", { name: "Editor", exact: true }).click();
 
@@ -704,7 +711,7 @@ try {
 
   const fileChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "File", exact: true }).click();
-  await page.getByRole("menuitem", { name: /^Open/ }).click();
+  await page.getByRole("menuitem", { name: /^Open…/ }).click();
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles({
     name: "Engine study.libra",
@@ -752,6 +759,12 @@ try {
     [],
     `browser errors: ${browserErrors.join("\n")}`,
   );
+
+  await testOperations(browser, url);
+  await testRendering(browser, url);
+  await testRenderingInteraction(browser, url);
+  await testProjectSafety(browser, url);
+  await testCrossTab(browser, url);
 
   console.log(
     "UI smoke tests passed (typography, variables, vectors, SVG export, images, icons, corner and border controls, input routing, selection, rename, lock, create/delete, pages, 1K scene).",

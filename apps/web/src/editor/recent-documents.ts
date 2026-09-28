@@ -3,7 +3,6 @@ import type { DocumentReadModel, NodeSummary, PageSummary } from "./types";
 const DATABASE_NAME = "open-libra-documents";
 const STORE_NAME = "recent-documents";
 const SNAPSHOT_STORE_NAME = "recovery-snapshots";
-const MAX_RECENT_DOCUMENTS = 12;
 const MAX_SNAPSHOTS_PER_DOCUMENT = 5;
 const LAST_DOCUMENT_KEY = "open-libra-last-document-id";
 
@@ -18,6 +17,8 @@ export type ProjectPreview = {
 };
 
 export type RecentDocument = {
+  /** Missing revisions on legacy records are read as zero. */
+  revision?: number;
   id: string;
   name: string;
   json: string;
@@ -72,7 +73,7 @@ export function createProjectPreview(model: DocumentReadModel): ProjectPreview {
   };
 }
 
-export async function listRecentDocuments(): Promise<RecentDocument[]> {
+export async function listStoredDocuments(): Promise<RecentDocument[]> {
   const database = await openDatabase();
   const records = await requestResult<RecentDocument[]>(
     database.transaction(STORE_NAME).objectStore(STORE_NAME).getAll(),
@@ -80,8 +81,7 @@ export async function listRecentDocuments(): Promise<RecentDocument[]> {
   database.close();
   return records
     .filter((record) => !record.archivedAt)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_RECENT_DOCUMENTS);
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function listArchivedDocuments(): Promise<RecentDocument[]> {
@@ -105,86 +105,207 @@ export async function getRecentDocument(id: string) {
 }
 
 export function getLastDocumentId() {
-  return localStorage.getItem(LAST_DOCUMENT_KEY) ?? undefined;
+  try {
+    return localStorage.getItem(LAST_DOCUMENT_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function setLastDocumentId(id?: string) {
-  if (id) localStorage.setItem(LAST_DOCUMENT_KEY, id);
-  else localStorage.removeItem(LAST_DOCUMENT_KEY);
+  try {
+    if (id) localStorage.setItem(LAST_DOCUMENT_KEY, id);
+    else localStorage.removeItem(LAST_DOCUMENT_KEY);
+  } catch {
+    // The last-opened shortcut is optional; IndexedDB owns saved projects.
+  }
 }
 
-export async function storeRecentDocument(document: RecentDocument) {
-  const database = await openDatabase();
-  const transaction = database.transaction(
-    [STORE_NAME, SNAPSHOT_STORE_NAME],
-    "readwrite",
-  );
-  transaction.objectStore(STORE_NAME).put(document);
-  await transactionComplete(transaction);
-  const records = await requestResult<RecentDocument[]>(
-    database.transaction(STORE_NAME).objectStore(STORE_NAME).getAll(),
-  );
-  const stale = records
-    .filter((record) => !record.archivedAt)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(MAX_RECENT_DOCUMENTS);
-  database.close();
-  await Promise.all(stale.map((record) => removeRecentDocument(record.id)));
+export class ProjectConflictError extends Error {
+  constructor() {
+    super(
+      "This project changed or was deleted in another tab. Reload it or save your work as a copy.",
+    );
+    this.name = "ProjectConflictError";
+  }
 }
 
-export async function removeRecentDocument(id: string) {
+const projectChannel =
+  typeof BroadcastChannel === "undefined"
+    ? undefined
+    : new BroadcastChannel("open-libra-project-changes");
+
+export function subscribeToProjectChanges(listener: (id: string) => void) {
+  const handler = (event: MessageEvent) => {
+    if (typeof event.data?.id === "string") listener(event.data.id);
+  };
+  projectChannel?.addEventListener("message", handler);
+  return () => projectChannel?.removeEventListener("message", handler);
+}
+
+function projectContent(document: RecentDocument) {
+  return JSON.stringify([
+    document.name,
+    document.json,
+    document.pageCount,
+    document.objectCount,
+    document.preview,
+    document.pages,
+    document.coverPageId,
+    document.archivedAt,
+  ]);
+}
+
+export async function storeRecentDocument(
+  document: RecentDocument,
+  expectedRevision: number | null = document.revision ?? 0,
+): Promise<RecentDocument> {
   const database = await openDatabase();
-  const transaction = database.transaction(
-    [STORE_NAME, SNAPSHOT_STORE_NAME],
-    "readwrite",
-  );
-  transaction.objectStore(STORE_NAME).delete(id);
-  const snapshots = transaction
-    .objectStore(SNAPSHOT_STORE_NAME)
-    .index("documentId");
-  for (const key of await requestResult<IDBValidKey[]>(
-    snapshots.getAllKeys(id),
-  ))
-    transaction.objectStore(SNAPSHOT_STORE_NAME).delete(key);
-  await transactionComplete(transaction);
-  database.close();
+  try {
+    let changed = false;
+    const saved = await new Promise<RecentDocument>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      let result: RecentDocument;
+      let failure: unknown;
+      transaction.oncomplete = () => resolve(result);
+      transaction.onabort = () => reject(failure ?? transaction.error);
+      transaction.onerror = () => {
+        failure ??= transaction.error;
+      };
+      const request = store.get(document.id);
+      request.onsuccess = () => {
+        const previous = request.result as RecentDocument | undefined;
+        // Compare and write in one transaction, serialized across browser tabs.
+        if ((previous ? (previous.revision ?? 0) : null) !== expectedRevision) {
+          failure = new ProjectConflictError();
+          transaction.abort();
+          return;
+        }
+        const unchanged =
+          previous && projectContent(previous) === projectContent(document);
+        // Opening a project updates recency without invalidating other editors.
+        result = unchanged
+          ? {
+              ...previous,
+              updatedAt: Math.max(previous.updatedAt, document.updatedAt),
+            }
+          : { ...document, revision: (previous?.revision ?? 0) + 1 };
+        try {
+          store.put(result);
+          changed = !unchanged;
+        } catch (cause) {
+          failure = cause;
+          transaction.abort();
+        }
+      };
+    });
+    if (changed) projectChannel?.postMessage({ id: document.id });
+    return saved;
+  } finally {
+    database.close();
+  }
+}
+
+export async function removeRecentDocument(
+  id: string,
+  expectedRevision: number,
+) {
+  const database = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(
+        [STORE_NAME, SNAPSHOT_STORE_NAME],
+        "readwrite",
+      );
+      let failure: unknown;
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(failure ?? transaction.error);
+      transaction.onerror = () => {
+        failure ??= transaction.error;
+      };
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(id);
+      request.onsuccess = () => {
+        if (
+          !request.result ||
+          (request.result.revision ?? 0) !== expectedRevision
+        ) {
+          failure = new ProjectConflictError();
+          transaction.abort();
+          return;
+        }
+        store.delete(id);
+        const snapshots = transaction.objectStore(SNAPSHOT_STORE_NAME);
+        const keys = snapshots.index("documentId").getAllKeys(id);
+        keys.onsuccess = () => {
+          for (const key of keys.result) snapshots.delete(key);
+        };
+      };
+    });
+    projectChannel?.postMessage({ id });
+  } finally {
+    database.close();
+  }
 }
 
 export async function storeRecoverySnapshot(snapshot: RecoverySnapshot) {
   const database = await openDatabase();
-  const transaction = database.transaction(SNAPSHOT_STORE_NAME, "readwrite");
-  transaction.objectStore(SNAPSHOT_STORE_NAME).put(snapshot);
-  await transactionComplete(transaction);
-  const snapshots = await requestResult<RecoverySnapshot[]>(
-    database
-      .transaction(SNAPSHOT_STORE_NAME)
-      .objectStore(SNAPSHOT_STORE_NAME)
-      .index("documentId")
-      .getAll(snapshot.documentId),
-  );
-  const stale = snapshots
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(MAX_SNAPSHOTS_PER_DOCUMENT);
-  if (stale.length > 0) {
-    const prune = database.transaction(SNAPSHOT_STORE_NAME, "readwrite");
-    for (const item of stale)
-      prune.objectStore(SNAPSHOT_STORE_NAME).delete(item.id);
-    await transactionComplete(prune);
+  try {
+    const transaction = database.transaction(
+      [STORE_NAME, SNAPSHOT_STORE_NAME],
+      "readwrite",
+    );
+    const completed = transactionComplete(transaction);
+    // Deletion and snapshot creation share a transaction scope: never recreate
+    // recovery history for a project that has already been deliberately deleted.
+    const project = transaction
+      .objectStore(STORE_NAME)
+      .get(snapshot.documentId);
+    project.onsuccess = () => {
+      try {
+        if (project.result)
+          transaction.objectStore(SNAPSHOT_STORE_NAME).put(snapshot);
+      } catch {
+        transaction.abort();
+      }
+    };
+    await completed;
+    const snapshots = await requestResult<RecoverySnapshot[]>(
+      database
+        .transaction(SNAPSHOT_STORE_NAME)
+        .objectStore(SNAPSHOT_STORE_NAME)
+        .index("documentId")
+        .getAll(snapshot.documentId),
+    );
+    const stale = snapshots
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(MAX_SNAPSHOTS_PER_DOCUMENT);
+    if (stale.length > 0) {
+      const prune = database.transaction(SNAPSHOT_STORE_NAME, "readwrite");
+      for (const item of stale)
+        prune.objectStore(SNAPSHOT_STORE_NAME).delete(item.id);
+      await transactionComplete(prune);
+    }
+  } finally {
+    database.close();
   }
-  database.close();
 }
 
 export async function listRecoverySnapshots(documentId: string) {
   const database = await openDatabase();
-  const snapshots = await requestResult<RecoverySnapshot[]>(
-    database
-      .transaction(SNAPSHOT_STORE_NAME)
-      .objectStore(SNAPSHOT_STORE_NAME)
-      .index("documentId")
-      .getAll(documentId),
-  );
-  database.close();
-  return snapshots.sort((a, b) => b.createdAt - a.createdAt);
+  try {
+    const snapshots = await requestResult<RecoverySnapshot[]>(
+      database
+        .transaction(SNAPSHOT_STORE_NAME)
+        .objectStore(SNAPSHOT_STORE_NAME)
+        .index("documentId")
+        .getAll(documentId),
+    );
+    return snapshots.sort((a, b) => b.createdAt - a.createdAt);
+  } finally {
+    database.close();
+  }
 }
 
 function openDatabase(): Promise<IDBDatabase> {

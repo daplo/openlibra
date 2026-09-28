@@ -1,9 +1,12 @@
 mod color;
 mod document;
 mod edit;
+mod finance_demo;
 mod geometry;
 mod layout;
 mod model;
+mod operation_patch;
+mod operations;
 mod scene;
 
 use color::{normalize_hex_color, parse_hex_color};
@@ -347,6 +350,8 @@ pub struct DocumentEngine {
     redo_stack: Vec<HistoryEntry>,
     transaction_start: Option<Document>,
     geometry_transaction_start: Option<HistoryEntry>,
+    operation_session: Option<operations::Session>,
+    operation_error: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -360,6 +365,8 @@ impl DocumentEngine {
             redo_stack: Vec::new(),
             transaction_start: None,
             geometry_transaction_start: None,
+            operation_session: None,
+            operation_error: None,
         }
     }
 
@@ -371,6 +378,8 @@ impl DocumentEngine {
             redo_stack: Vec::new(),
             transaction_start: None,
             geometry_transaction_start: None,
+            operation_session: None,
+            operation_error: None,
         }
     }
 
@@ -391,7 +400,72 @@ impl DocumentEngine {
     }
 
     pub fn document_json(&self) -> String {
-        serde_json::to_string(&self.document).expect("document is serializable")
+        let mut value = serde_json::to_value(if self.operation_session.is_some() {
+            self.transaction_start.as_ref().unwrap_or(&self.document)
+        } else {
+            &self.document
+        })
+        .expect("document is serializable");
+        if let Some(session) = &self.operation_session {
+            value["operation_history"] = serde_json::to_value(&session.journal).unwrap();
+        }
+        value.to_string()
+    }
+
+    pub fn enable_operations(&mut self, actor_id: &str) -> Result<(), JsValue> {
+        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
+            return Err(JsValue::from_str(
+                "Finish the active transaction before changing actor",
+            ));
+        }
+        let actor =
+            Uuid::parse_str(actor_id).map_err(|_| JsValue::from_str("Invalid actor identity"))?;
+        if actor.is_nil() {
+            return Err(JsValue::from_str("Actor identity must not be nil"));
+        }
+        if let Some(session) = &mut self.operation_session {
+            session.actor = actor;
+        } else {
+            self.operation_session = Some(operations::Session::new(&self.document, actor));
+        }
+        Ok(())
+    }
+
+    pub fn operation_state_json(&self) -> String {
+        match &self.operation_session {
+            Some(s) => serde_json::json!({"document_id":s.journal.document_id,"actor_id":s.actor,"revision":s.revision(),"next_sequence":s.sequences.get(&s.actor).copied().unwrap_or(0)+1,"undo_operation_id":s.undo.get(&s.actor).and_then(|v|v.last()),"redo_operation_id":s.redo.get(&s.actor).and_then(|v|v.last()),"error":self.operation_error}).to_string(),
+            None => "null".into()
+        }
+    }
+
+    /// Build resolved entity/property intent from a committed editor transaction.
+    /// Both inputs are validated; session history and active-page navigation are excluded.
+    pub fn document_changes_json(&self, baseline_json: &str) -> Result<String, JsValue> {
+        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
+            return Err(JsValue::from_str("Finish the active transaction first"));
+        }
+        let baseline = Self::load_json(baseline_json)?;
+        self.document
+            .validate()
+            .map_err(|e| JsValue::from_str(&e))?;
+        let changes = operation_patch::diff(&baseline.document, &self.document);
+        Ok(serde_json::to_string(&changes).unwrap())
+    }
+
+    pub fn apply_operation_json(&mut self, json: &str) -> Result<String, JsValue> {
+        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
+            return Err(JsValue::from_str("Finish the active transaction first"));
+        }
+        let envelope = operations::parse_envelope(json).map_err(|e| JsValue::from_str(&e))?;
+        let session = self
+            .operation_session
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("Operations are not enabled"))?;
+        let receipt = session
+            .apply(&mut self.document, envelope, false)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.operation_error = None;
+        Ok(serde_json::to_string(&receipt).unwrap())
     }
 
     pub fn node_json(&self, node_id: String) -> String {
@@ -645,7 +719,7 @@ impl DocumentEngine {
     }
 
     pub fn set_active_page(&mut self, page_id: String) -> bool {
-        self.document.set_active_page(parse_entity_id(&page_id))
+        self.mutate(|document| document.set_active_page(parse_entity_id(&page_id)))
     }
 
     pub fn delete_node(&mut self, node_id: String) -> bool {
@@ -654,12 +728,28 @@ impl DocumentEngine {
         // exist when it ends. Finish it before a structural deletion so the
         // move and deletion receive independent, complete history entries.
         self.end_transaction();
-        self.mutate(|document| document.delete_node(node_id))
+        self.edit_command(
+            operations::Command::DeleteNode {
+                page_id: self.document.active_page_id,
+                node_id,
+            },
+            |document| document.delete_node(node_id),
+        )
     }
 
     pub fn rename_node(&mut self, node_id: String, name: String) -> bool {
         let node_id = parse_entity_id(&node_id);
-        self.mutate(|document| document.rename_node(node_id, name))
+        self.edit_command(
+            operations::Command::SetProperties {
+                page_id: self.document.active_page_id,
+                node_id,
+                properties: Box::new(operations::Properties {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }),
+            },
+            |document| document.rename_node(node_id, name),
+        )
     }
 
     pub fn group_nodes(&mut self, node_ids_json: &str) -> Result<String, JsValue> {
@@ -767,13 +857,29 @@ impl DocumentEngine {
     pub fn move_nodes(&mut self, node_ids_json: &str, dx: f32, dy: f32) -> Result<bool, JsValue> {
         let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
-        Ok(self.mutate(|document| document.move_nodes(&node_ids, dx, dy)))
+        Ok(self.edit_command(
+            operations::Command::MoveNodes {
+                page_id: self.document.active_page_id,
+                node_ids: node_ids.clone(),
+                dx,
+                dy,
+            },
+            |document| document.move_nodes(&node_ids, dx, dy),
+        ))
     }
 
     pub fn reorder_node(&mut self, dragged_id: String, target_id: String, before: bool) -> bool {
         let dragged_id = parse_entity_id(&dragged_id);
         let target_id = parse_entity_id(&target_id);
-        self.mutate(|document| document.reorder_node(dragged_id, target_id, before))
+        self.edit_command(
+            operations::Command::ReorderNode {
+                page_id: self.document.active_page_id,
+                node_id: dragged_id,
+                target_id,
+                before,
+            },
+            |document| document.reorder_node(dragged_id, target_id, before),
+        )
     }
 
     pub fn reparent_nodes_to_artboards(&mut self, node_ids_json: &str) -> Result<bool, JsValue> {
@@ -818,6 +924,34 @@ impl DocumentEngine {
             .ok_or_else(|| JsValue::from_str("Fill must be a six-digit hex color"))?;
         let stroke = parse_hex_color(&stroke_hex)
             .ok_or_else(|| JsValue::from_str("Border must be a six-digit hex color"))?;
+        if self.operation_session.is_some() {
+            return Ok(self.edit_command(
+                operations::Command::SetProperties {
+                    page_id: self.document.active_page_id,
+                    node_id,
+                    properties: Box::new(operations::Properties {
+                        fill: Some(fill),
+                        stroke: Some(stroke),
+                        stroke_width: Some(stroke_width),
+                        corner_radii: Some(corner_radii),
+                        stroke_align: Some(stroke_align),
+                        stroke_join: Some(stroke_join),
+                        ..Default::default()
+                    }),
+                },
+                |document| {
+                    document.set_node_style(
+                        node_id,
+                        fill,
+                        stroke,
+                        stroke_width,
+                        corner_radii,
+                        stroke_align,
+                        stroke_join,
+                    )
+                },
+            ));
+        }
         if self.transaction_start.is_some() {
             return Ok(self.document.set_node_style(
                 node_id,
@@ -867,19 +1001,48 @@ impl DocumentEngine {
 
     pub fn resize_node(&mut self, node_id: String, handle: String, dx: f32, dy: f32) -> bool {
         let node_id = parse_entity_id(&node_id);
-        self.mutate(|document| document.resize_node(node_id, &handle, dx, dy))
+        self.edit_command(
+            operations::Command::ResizeNode {
+                page_id: self.document.active_page_id,
+                node_id,
+                handle: handle.clone(),
+                dx,
+                dy,
+            },
+            |document| document.resize_node(node_id, &handle, dx, dy),
+        )
     }
 
     pub fn set_node_locked(&mut self, node_id: String, locked: bool) -> bool {
         let node_id = parse_entity_id(&node_id);
-        self.mutate(|document| document.set_node_locked(node_id, locked))
+        self.edit_command(
+            operations::Command::SetProperties {
+                page_id: self.document.active_page_id,
+                node_id,
+                properties: Box::new(operations::Properties {
+                    locked: Some(locked),
+                    ..Default::default()
+                }),
+            },
+            |document| document.set_node_locked(node_id, locked),
+        )
     }
 
     pub fn set_node_text(&mut self, node_id: String, text_json: &str) -> Result<bool, JsValue> {
         let text: TextStyle = serde_json::from_str(text_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid text style: {error}")))?;
         let node_id = parse_entity_id(&node_id);
-        Ok(self.mutate(|document| document.set_node_text(node_id, text)))
+        Ok(self.edit_command(
+            operations::Command::SetProperties {
+                page_id: self.document.active_page_id,
+                node_id,
+                properties: Box::new(operations::Properties {
+                    text: Some(text.clone()),
+                    ..Default::default()
+                }),
+            },
+            |document| document.set_node_text(node_id, text),
+        ))
     }
 
     pub fn set_node_image_fit(&mut self, node_id: String, fit: String) -> bool {
@@ -900,7 +1063,17 @@ impl DocumentEngine {
 
     pub fn set_node_opacity(&mut self, node_id: String, opacity: f32) -> bool {
         let node_id = parse_entity_id(&node_id);
-        self.mutate(|document| document.set_node_opacity(node_id, opacity))
+        self.edit_command(
+            operations::Command::SetProperties {
+                page_id: self.document.active_page_id,
+                node_id,
+                properties: Box::new(operations::Properties {
+                    opacity: Some(opacity),
+                    ..Default::default()
+                }),
+            },
+            |document| document.set_node_opacity(node_id, opacity),
+        )
     }
 
     pub fn set_node_shadows(
@@ -911,7 +1084,17 @@ impl DocumentEngine {
         let node_id = parse_entity_id(&node_id);
         let shadows: Vec<Shadow> = serde_json::from_str(shadows_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid shadows: {error}")))?;
-        Ok(self.mutate(|document| document.set_node_shadows(node_id, shadows)))
+        Ok(self.edit_command(
+            operations::Command::SetProperties {
+                page_id: self.document.active_page_id,
+                node_id,
+                properties: Box::new(operations::Properties {
+                    shadows: Some(shadows.clone()),
+                    ..Default::default()
+                }),
+            },
+            |document| document.set_node_shadows(node_id, shadows),
+        ))
     }
 
     pub fn set_node_transform(
@@ -922,7 +1105,16 @@ impl DocumentEngine {
         flip_y: bool,
     ) -> bool {
         let node_id = parse_entity_id(&node_id);
-        self.mutate(|document| document.set_node_transform(node_id, rotation, flip_x, flip_y))
+        self.edit_command(
+            operations::Command::SetTransform {
+                page_id: self.document.active_page_id,
+                node_id,
+                rotation,
+                flip_x,
+                flip_y,
+            },
+            |document| document.set_node_transform(node_id, rotation, flip_x, flip_y),
+        )
     }
 
     // Keep scalar arguments at the WASM boundary so JavaScript callers do not
@@ -1102,7 +1294,17 @@ impl DocumentEngine {
         height: f32,
     ) -> bool {
         let node_id = parse_entity_id(&node_id);
-        self.mutate(|document| document.set_node_bounds(node_id, x, y, width, height))
+        self.edit_command(
+            operations::Command::SetBounds {
+                page_id: self.document.active_page_id,
+                node_id,
+                x,
+                y,
+                width,
+                height,
+            },
+            |document| document.set_node_bounds(node_id, x, y, width, height),
+        )
     }
 
     pub fn begin_transaction(&mut self) {
@@ -1117,7 +1319,9 @@ impl DocumentEngine {
         }
         let node_ids: Vec<EntityId> = serde_json::from_str(node_ids_json)
             .map_err(|error| JsValue::from_str(&format!("Invalid node selection: {error}")))?;
-        if self.document.active_page().benchmark_node_count.is_none() {
+        if self.operation_session.is_some()
+            || self.document.active_page().benchmark_node_count.is_none()
+        {
             self.begin_transaction();
             return Ok(());
         }
@@ -1167,6 +1371,10 @@ impl DocumentEngine {
             if component_source_changed(&before, &self.document) {
                 self.document.sync_component_instances();
             }
+            if self.operation_session.is_some() {
+                self.record_operation(&before);
+                return;
+            }
             if before != self.document {
                 self.push_undo(HistoryEntry::Document(before));
                 self.redo_stack.clear();
@@ -1198,15 +1406,26 @@ impl DocumentEngine {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.operation_session
+            .as_ref()
+            .map_or(!self.undo_stack.is_empty(), |s| {
+                s.undo.get(&s.actor).is_some_and(|v| !v.is_empty())
+            })
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.operation_session
+            .as_ref()
+            .map_or(!self.redo_stack.is_empty(), |s| {
+                s.redo.get(&s.actor).is_some_and(|v| !v.is_empty())
+            })
     }
 
     pub fn undo(&mut self) -> bool {
         self.end_transaction();
+        if self.operation_session.is_some() {
+            return self.operation_history(false);
+        }
         let Some(previous) = self.undo_stack.pop() else {
             return false;
         };
@@ -1220,6 +1439,9 @@ impl DocumentEngine {
 
     pub fn redo(&mut self) -> bool {
         self.end_transaction();
+        if self.operation_session.is_some() {
+            return self.operation_history(true);
+        }
         let Some(next) = self.redo_stack.pop() else {
             return false;
         };
@@ -1241,11 +1463,31 @@ impl DocumentEngine {
                 hit.to_string()
             };
         }
-        ordered_nodes(self.document.active_page())
+        let page = self.document.active_page();
+        let by_id: std::collections::HashMap<_, _> =
+            page.nodes.iter().map(|node| (node.id, node)).collect();
+        ordered_nodes(page)
             .into_iter()
             .rev()
             .find(|node| {
-                node.kind != NodeKind::Group && !node.locked && point_in_rotated_node(node, x, y)
+                if node.kind == NodeKind::Group
+                    || node.locked
+                    || node.opacity <= 0.0
+                    || !point_in_rotated_node(node, x, y)
+                {
+                    return false;
+                }
+                let mut current = Some(*node);
+                while let Some(ancestor) = current {
+                    if ancestor.opacity <= 0.0
+                        || (ancestor.kind == NodeKind::Frame
+                            && !geometry::point_in_frame(ancestor, x, y))
+                    {
+                        return false;
+                    }
+                    current = ancestor.parent_id.and_then(|id| by_id.get(&id).copied());
+                }
+                true
             })
             .map_or_else(String::new, |node| node.id.to_string())
     }
@@ -1254,19 +1496,37 @@ impl DocumentEngine {
         console_error_panic_hook::set_once();
         let mut value: serde_json::Value = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
+        let journal = value
+            .as_object_mut()
+            .and_then(|v| v.remove("operation_history"));
         migrate_legacy_document_ids(&mut value);
         let mut document: Document = serde_json::from_value(value)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
         document
             .validate()
             .map_err(|error| JsValue::from_str(&error))?;
+        let operation_session = journal
+            .map(|value| {
+                let journal = serde_json::from_value(value)
+                    .map_err(|e| format!("Invalid operation history: {e}"))?;
+                operations::Session::restore(journal, &document, Uuid::now_v7())
+            })
+            .transpose()
+            .map_err(|e| JsValue::from_str(&e))?;
+        let before_population = document.clone();
         document.populate_active_benchmark();
+        let mut operation_session = operation_session;
+        if let Some(session) = &mut operation_session {
+            session.record(&before_population, &document, None);
+        }
         Ok(Self {
             document,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             transaction_start: None,
             geometry_transaction_start: None,
+            operation_session,
+            operation_error: None,
         })
     }
 }
@@ -1281,6 +1541,10 @@ impl DocumentEngine {
         if component_source_changed(&before, &self.document) {
             self.document.sync_component_instances();
         }
+        if self.operation_session.is_some() {
+            self.record_operation(&before);
+            return result;
+        }
         if before != self.document {
             if self.transaction_start.is_none() {
                 self.push_undo(HistoryEntry::Document(before));
@@ -1288,6 +1552,69 @@ impl DocumentEngine {
             self.redo_stack.clear();
         }
         result
+    }
+
+    fn edit_command(
+        &mut self,
+        command: operations::Command,
+        fallback: impl FnOnce(&mut Document) -> bool,
+    ) -> bool {
+        if self.operation_session.is_none()
+            || self.transaction_start.is_some()
+            || self.geometry_transaction_start.is_some()
+        {
+            return self.mutate(fallback);
+        }
+        let before = self.document.clone();
+        let session = self.operation_session.as_mut().unwrap();
+        let envelope = session.envelope(command);
+        match session.apply(&mut self.document, envelope, false) {
+            Ok(_) => {
+                self.operation_error = None;
+                before != self.document
+            }
+            Err(error) => {
+                self.operation_error = Some(error);
+                false
+            }
+        }
+    }
+
+    fn record_operation(&mut self, before: &Document) {
+        if let Err(error) = self.document.validate() {
+            self.document = before.clone();
+            self.operation_error = Some(error);
+            return;
+        }
+        self.operation_error = None;
+        self.operation_session
+            .as_mut()
+            .unwrap()
+            .record(before, &self.document, None);
+    }
+
+    fn operation_history(&mut self, redo: bool) -> bool {
+        let session = self.operation_session.as_mut().unwrap();
+        let stack = if redo { &session.redo } else { &session.undo };
+        let Some(id) = stack.get(&session.actor).and_then(|v| v.last()).copied() else {
+            return false;
+        };
+        let command = if redo {
+            operations::Command::Redo { operation_id: id }
+        } else {
+            operations::Command::Undo { operation_id: id }
+        };
+        let envelope = session.envelope(command);
+        match session.apply(&mut self.document, envelope, false) {
+            Ok(_) => {
+                self.operation_error = None;
+                true
+            }
+            Err(e) => {
+                self.operation_error = Some(e);
+                false
+            }
+        }
     }
 
     fn push_undo(&mut self, entry: HistoryEntry) {
@@ -1322,3 +1649,6 @@ impl Default for DocumentEngine {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod operation_tests;

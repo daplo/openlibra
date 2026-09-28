@@ -488,4 +488,5 @@ pub(crate) struct PageSummary<'a> {
     pub(crate) id: EntityId,
     pub(crate) name: &'a str,
     pub(crate) description: &'a str,
+    pub(crate) benchmark_node_count: Option<usize>,
 }
