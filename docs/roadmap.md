@@ -351,3 +351,26 @@ See [the MVP checklist](mvp.md) for the remaining six priorities. Dedicated sema
 commands for every authoring tool, accounts/ownership recovery, review, bounded
 history and production deployment remain separate work. Existing capabilities are
 shared; this batch does not add the missing pen/anchor/boolean tools.
+
+## Editable boolean shapes — implemented 2026-09-28
+
+- [x] Union, subtract, intersect, and exclude with editable original operands.
+- [x] Inspector operation switching, release, and Layers access to source shapes.
+- [x] Derived result hit testing and visible selection outlines.
+- [x] Native persistence, undo/redo, shared replay, and derived SVG/PNG rendering.
+- [x] Nested results and curve flattening with bounded geometry work.
+
+See [MVP vector authoring](mvp.md#2-essential-vector-authoring) and [boolean document representation](project-format.md#boolean-groups). Gradients and supported SVG import remain next vector-authoring work.
+
+## Local automation foundation — implemented
+
+- [x] Shared Rust/WASM-backed file automation API.
+- [x] CLI create, inspect, validate, node reads, templates, and transactional edits.
+- [x] Stdio MCP tools with workspace-scoped file access.
+- [x] Content-hash preconditions, cooperative writer locks, atomic saves, and batch rollback.
+- [x] CLI and real MCP client integration tests.
+- [ ] Automation PNG previews and SVG export.
+- [ ] Higher-level layout, component, path, mask, and boolean tools.
+- [ ] Live collaboration connection with agent identity and existing permissions.
+
+See [automation setup and command reference](automation.md). This operates on local disk files; browser autosaves and shared rooms remain separate.

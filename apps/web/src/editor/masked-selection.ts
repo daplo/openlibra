@@ -23,10 +23,10 @@ export async function maskedSelectionBounds(
 ): Promise<VisibleBounds | null> {
   const subtree = sceneSubtree(nodes, root.id);
   const mask = subtree.find((n) => n.parent_id === root.id && n.mask_shape);
-  if (!mask) return root;
+  if (!mask && !root.boolean_operation) return root;
   const painter = createScenePainter(subtree, assets);
   let bounds = painter.bounds;
-  const maskBounds = createScenePainter([mask], []).bounds;
+  const maskBounds = mask ? createScenePainter([mask], []).bounds : undefined;
   if (
     bounds &&
     maskBounds &&

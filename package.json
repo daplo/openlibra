@@ -10,7 +10,7 @@
     "build:wasm": "wasm-pack build crates/scene-wasm --target web --out-dir ../../apps/web/src/wasm",
     "dev": "npm run build:wasm && npm run dev --workspace @open-libra/web",
     "benchmark:browser": "node scripts/measure-performance.mjs",
-    "check": "npm run format && npm run lint && npm test && npm run test:ui && npm run build:collaboration && node scripts/collaboration-durable-tests.mjs && node scripts/collaboration-tests.mjs && node scripts/shared-editor-tests.mjs",
+    "check": "npm run format && npm run lint && npm test && npm run test:ui && npm run build:collaboration && node scripts/collaboration-durable-tests.mjs && node scripts/collaboration-tests.mjs && node scripts/shared-editor-tests.mjs && node scripts/automation-tests.mjs",
     "format": "cargo fmt --all --check && prettier --check apps/web/src scripts *.js *.json *.md docs",
     "lint": "npm run lint:rust && npm run lint:web",
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
@@ -22,7 +22,9 @@
     "build:collaboration": "wasm-pack build crates/scene-wasm --target nodejs --out-dir ../../target/collaboration-wasm",
     "dev:collaboration": "npm run build:collaboration && node scripts/collaboration-server.mjs",
     "test:collaboration": "npm run build:collaboration && npm run build && node scripts/collaboration-durable-tests.mjs && node scripts/collaboration-tests.mjs && node scripts/shared-editor-tests.mjs",
-    "test:shared-editor": "npm run build:collaboration && npm run build && node scripts/shared-editor-tests.mjs"
+    "test:shared-editor": "npm run build:collaboration && npm run build && node scripts/shared-editor-tests.mjs",
+    "cli": "node scripts/openlibra.mjs",
+    "test:automation": "npm run build:collaboration && node scripts/automation-tests.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -36,6 +38,11 @@
     "typescript-eslint": "^8.67.0"
   },
   "dependencies": {
-    "lucide-react": "^1.31.0"
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "lucide-react": "^1.31.0",
+    "zod": "^4.6.5"
+  },
+  "bin": {
+    "openlibra": "scripts/openlibra.mjs"
   }
 }

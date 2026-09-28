@@ -3,7 +3,7 @@ import { rgbaToHex } from "./model-utils";
 import type { NodeSummary, VectorPoint } from "./types";
 
 export function exportVectorSvg(node: NodeSummary) {
-  if (node.kind !== "vector" || !node.vector)
+  if ((node.kind !== "vector" && !node.boolean_operation) || !node.vector)
     throw new Error("Select a vector to export.");
   const geometry = vectorMarkup(node);
   const bounds = localGeometryBounds(node);

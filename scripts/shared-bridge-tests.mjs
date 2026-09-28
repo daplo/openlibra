@@ -237,6 +237,42 @@ export async function testSharedBridge(browser, url, server) {
         await settled(11);
         if (!JSON.parse(a.engine.node_json(maskSource)).mask_shape)
           throw Error("Mask undo did not synchronize");
+        a.engine.begin_transaction();
+        const operandA = a.engine.add_rectangle();
+        a.engine.set_node_bounds(operandA, 0, 0, 100, 100);
+        const operandB = a.engine.add_rectangle();
+        a.engine.set_node_bounds(operandB, 50, 0, 100, 100);
+        const booleanGroup = a.engine.boolean_nodes(
+          JSON.stringify([operandA, operandB]),
+          "subtract",
+        );
+        a.engine.end_transaction();
+        await settled(12);
+        const geometryBefore = JSON.parse(
+          a.engine.node_json(booleanGroup),
+        ).vector;
+        if (
+          JSON.stringify(
+            JSON.parse(b.engine.node_json(booleanGroup)).vector,
+          ) !== JSON.stringify(geometryBefore)
+        )
+          throw Error("Boolean creation did not synchronize");
+        b.engine.set_node_bounds(operandB, 200, 0, 100, 100);
+        await settled(13);
+        if (
+          JSON.stringify(
+            JSON.parse(a.engine.node_json(booleanGroup)).vector,
+          ) === JSON.stringify(geometryBefore)
+        )
+          throw Error("Boolean operand edit did not update result");
+        b.engine.undo();
+        await settled(14);
+        if (
+          JSON.stringify(
+            JSON.parse(a.engine.node_json(booleanGroup)).vector,
+          ) !== JSON.stringify(geometryBefore)
+        )
+          throw Error("Boolean undo did not synchronize");
         // Reconnect replaces the working head, with no local journal contamination.
         const before = ca.engine.document_json();
         const loaded = DocumentEngine.load_json(before);
@@ -264,7 +300,7 @@ export async function testSharedBridge(browser, url, server) {
     scopedUndo: true,
     conflict: true,
     downgrade: true,
-    revision: 11,
+    revision: 14,
   });
   await page.close();
 }

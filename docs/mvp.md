@@ -35,13 +35,15 @@ Implementation uses resolved entity/property compare-and-set edits for editor ac
 - [x] Pen tool: start, extend, close, cancel, and continue paths.
 - [x] Direct selection: select/move anchors and Bezier handles; add/delete anchors.
 - [x] Corner/smooth point conversion and handle constraints.
-- [ ] Editable union, subtract, intersect, and exclude operations with undo.
+- [x] Editable union, subtract, intersect, and exclude operations with undo.
 - [x] Editable shape masks with release, undo, native-file persistence, shared replay, and PNG export.
 - [ ] Linear/radial gradients with editable stops and handles.
 - [ ] Supported SVG import/export with explicit unsupported-feature reporting.
 - [ ] Test vector editing and export after save/reopen and shared replay.
 
-Pen and single-anchor editing are implemented. Select **Pen tool** to draw, or select a path and choose **Edit path**. Existing primitives can be converted to paths in the inspector. Anchor insertion preserves the curve; Shift constrains movement, Alt breaks handle coupling. Each completed edit supports undo and shared replay. Path creation/anchor edits are covered by native-file reload, browser autosave, SVG export, and two-client tests; the full vector gate still includes upcoming booleans, gradients, and SVG import. Shared edits currently compare-and-set whole path geometry, so concurrent edits to the same path require conflict resolution; point-level merging is not implemented.
+Pen and single-anchor editing are implemented. Select **Pen tool** to draw, or select a path and choose **Edit path**. Existing primitives can be converted to paths in the inspector. Anchor insertion preserves the curve; Shift constrains movement, Alt breaks handle coupling. Each completed edit supports undo and shared replay. Path creation/anchor edits are covered by native-file reload, browser autosave, SVG export, and two-client tests; the full vector gate still includes upcoming gradients and SVG import. Shared edits currently compare-and-set whole path geometry, so concurrent edits to the same path require conflict resolution; point-level merging is not implemented.
+
+Boolean operations preserve source shapes in Layers. Select two or more closed shapes, then choose **Union**, **Subtract**, **Intersect**, or **Exclude** in the inspector. Change the operation later or choose **Release boolean**. Subtract removes upper shapes from the bottom shape; the result inherits the bottom shape’s paint. Source edits update the result, including shared replay and undo. Native files retain operands; canvas, PNG, and result SVG use the derived geometry. Curves in the result are approximated at 0.05 document-pixel tolerance; original curves remain editable.
 
 ## 3. Responsive UI design and reuse
 

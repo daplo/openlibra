@@ -184,3 +184,7 @@ run without storage. Accepted edits and permission changes commit to private fil
 before publication. SSE also carries live role changes and ephemeral presence, with
 server-side permission checks on every request. Full account/workspace architecture
 and PostgreSQL/object storage remain planned.
+
+## Local automation adapters
+
+`scripts/automation/api.mjs` loads the Node-target Rust/WASM engine and provides validated local-file operations. The `scripts/openlibra.mjs` CLI and `scripts/automation/mcp.mjs` stdio server share that API. An edit batch is submitted through the existing typed operation engine and saved only after success, retaining operation history in the native file. Workspace path checks, content hashes, cooperative sidecar locks, and atomic file publication belong to this adapter rather than the document model. See [automation](automation.md) for setup, command support, and limitations.

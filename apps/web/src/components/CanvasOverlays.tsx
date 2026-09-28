@@ -149,7 +149,10 @@ export function SelectionOverlay({
     const maskRoots = selected.filter(
       (node) =>
         node.kind === "group" &&
-        nodes.some((child) => child.parent_id === node.id && child.mask_shape),
+        (node.boolean_operation ||
+          nodes.some(
+            (child) => child.parent_id === node.id && child.mask_shape,
+          )),
     );
     if (maskRoots.length) {
       const snapshot = structuredClone(nodes);

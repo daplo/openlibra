@@ -1041,6 +1041,7 @@ impl Document {
             kind,
             parent_id,
             mask_shape: false,
+            boolean_operation: None,
             x: bounds[0],
             y: bounds[1],
             width: bounds[2],
@@ -1667,8 +1668,32 @@ impl Document {
                 if node.kind == NodeKind::Vector && node.vector.is_none() {
                     return Err(format!("Vector node {} has no geometry", node.id));
                 }
-                if node.kind != NodeKind::Vector && node.vector.is_some() {
+                if node.kind != NodeKind::Vector
+                    && node.boolean_operation.is_none()
+                    && node.vector.is_some()
+                {
                     return Err(format!("Non-vector node {} has vector geometry", node.id));
+                }
+                if node.boolean_operation.is_some() {
+                    if node.kind != NodeKind::Group
+                        || node.vector.is_none()
+                        || node.mask_shape
+                        || node.layout_mode != LayoutMode::None
+                    {
+                        return Err("Invalid boolean group".into());
+                    }
+                    let operands: Vec<_> = page
+                        .nodes
+                        .iter()
+                        .filter(|child| child.parent_id == Some(node.id))
+                        .collect();
+                    if operands.len() > 64
+                        || operands
+                            .iter()
+                            .any(|child| !crate::boolean::supported(child) || child.mask_shape)
+                    {
+                        return Err("Boolean groups accept at most 64 closed shapes".into());
+                    }
                 }
                 if let Some(vector) = &node.vector {
                     validate_vector(node.id, vector)?;
@@ -1841,6 +1866,7 @@ fn benchmark_node(id: EntityId, index: usize, columns: usize) -> Node {
         id,
         name: format!("Node {}", index + 1),
         mask_shape: false,
+        boolean_operation: None,
         kind: NodeKind::Rectangle,
         parent_id: None,
         x: column as f32 * 16.0,

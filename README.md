@@ -51,3 +51,7 @@ npm run check
 ## Run the collaboration experiment
 
 Run `npm run dev:collaboration` alongside `npm run dev`, then choose **Share document** in the editor. Publish a shared copy and open an invitation from **People and access** in another browser profile. Rooms persist in `.openlibra-collaboration/`; the UI reports the active storage mode. See [setup and limitations](docs/collaboration-prototype.md).
+
+## Local CLI and MCP server
+
+Run `npm run build:collaboration`, then `npm run cli -- --help` for file inspection, validation, node templates, and atomic edit batches. Launch the MCP server with `node scripts/openlibra.mjs mcp --root /absolute/workspace`. See [automation setup and reference](docs/automation.md). Verify with `npm run test:automation`.

@@ -306,6 +306,7 @@ impl Session {
                 }
             }
         }
+        candidate.sync_booleans()?;
         candidate.validate()?;
         let changes = operation_patch::diff(&before, &candidate);
         *document = candidate;

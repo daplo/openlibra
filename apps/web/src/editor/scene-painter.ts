@@ -200,7 +200,9 @@ export function createScenePainter(nodes: NodeSummary[], assets: MediaAsset[]) {
         return;
       }
       visibleIds.add(node.id);
-      const descendants = children.get(node.id) ?? [];
+      const descendants = node.boolean_operation
+        ? []
+        : (children.get(node.id) ?? []);
       const mask =
         node.kind === "group"
           ? descendants.find((child) => child.mask_shape)

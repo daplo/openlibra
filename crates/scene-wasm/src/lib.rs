@@ -1,3 +1,4 @@
+mod boolean;
 mod color;
 mod document;
 mod edit;
@@ -697,6 +698,55 @@ impl DocumentEngine {
     pub fn delete_page(&mut self, page_id: String) -> bool {
         let page_id = parse_entity_id(&page_id);
         self.mutate(|document| document.delete_page(page_id))
+    }
+
+    pub fn boolean_nodes(&mut self, ids_json: &str, operation: &str) -> Result<String, JsValue> {
+        let ids: Vec<EntityId> =
+            serde_json::from_str(ids_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let mode: BooleanOperation =
+            serde_json::from_value(serde_json::Value::String(operation.into()))
+                .map_err(|_| JsValue::from_str("Unknown boolean operation"))?;
+        self.mutate(|d| d.create_boolean(&ids, mode))
+            .map(|id| id.to_string())
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn set_boolean_operation(&mut self, id: String, operation: &str) -> bool {
+        let Ok(mode) =
+            serde_json::from_value::<BooleanOperation>(serde_json::Value::String(operation.into()))
+        else {
+            return false;
+        };
+        let id = parse_entity_id(&id);
+        self.mutate(|d| {
+            let Some(node) = d.active_node_mut(id) else {
+                return false;
+            };
+            if node.locked || node.boolean_operation.is_none() {
+                return false;
+            }
+            node.boolean_operation = Some(mode);
+            true
+        })
+    }
+
+    pub fn release_boolean(&mut self, id: String) -> bool {
+        let id = parse_entity_id(&id);
+        self.mutate(|d| {
+            let Some(node) = d.active_node_mut(id) else {
+                return false;
+            };
+            if node.locked || node.boolean_operation.is_none() {
+                return false;
+            }
+            node.boolean_operation = None;
+            node.vector = None;
+            node.fill = [0.0; 4];
+            node.stroke_width = 0.0;
+            node.shadows.clear();
+            node.name = "Group".into();
+            true
+        })
     }
 
     pub fn mask_nodes(&mut self, node_ids_json: &str) -> String {
@@ -1460,6 +1510,11 @@ impl DocumentEngine {
             if component_source_changed(&before, &self.document) {
                 self.document.sync_component_instances();
             }
+            if let Err(error) = self.document.sync_booleans() {
+                self.document = before;
+                self.operation_error = Some(error);
+                return;
+            }
             if self.operation_session.is_some() {
                 self.record_operation(&before);
                 return;
@@ -1565,12 +1620,25 @@ impl DocumentEngine {
             .into_iter()
             .rev()
             .find(|node| {
-                if node.kind == NodeKind::Group
+                if (node.kind == NodeKind::Group && node.boolean_operation.is_none())
                     || node.locked
                     || node.opacity <= 0.0
-                    || !point_in_rotated_node(node, x, y)
+                    || (node.boolean_operation.is_none() && !point_in_rotated_node(node, x, y))
                 {
                     return false;
+                }
+                if node.boolean_operation.is_some() && !geometry::point_in_mask(node, x, y) {
+                    return false;
+                }
+                let mut parent = node.parent_id;
+                while let Some(id) = parent {
+                    if by_id
+                        .get(&id)
+                        .is_some_and(|n| n.boolean_operation.is_some())
+                    {
+                        return false;
+                    }
+                    parent = by_id.get(&id).and_then(|n| n.parent_id);
                 }
                 let mut current = Some(*node);
                 while let Some(ancestor) = current {
@@ -1633,12 +1701,30 @@ impl DocumentEngine {
 impl DocumentEngine {
     fn mutate<R>(&mut self, operation: impl FnOnce(&mut Document) -> R) -> R {
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
-            return operation(&mut self.document);
+            let before = self.document.has_booleans().then(|| self.document.clone());
+            let result = operation(&mut self.document);
+            if let Err(error) = self.document.sync_booleans() {
+                if let Some(before) = before {
+                    self.document = before;
+                }
+                self.operation_error = Some(error);
+            }
+            return result;
         }
         let before = self.document.clone();
         let result = operation(&mut self.document);
+        if let Err(error) = self.document.sync_booleans() {
+            self.document = before;
+            self.operation_error = Some(error);
+            return result;
+        }
         if component_source_changed(&before, &self.document) {
             self.document.sync_component_instances();
+        }
+        if let Err(error) = self.document.sync_booleans() {
+            self.document = before;
+            self.operation_error = Some(error);
+            return result;
         }
         if self.operation_session.is_some() {
             self.record_operation(&before);

@@ -3581,3 +3581,99 @@ canvas[data-tool="hand"]:active {
   background: #82e6b8;
   color: #102b20;
 }
+.boolean-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+.boolean-actions button {
+  padding: 7px 5px;
+  border-radius: 5px;
+  border: 1px solid #535b69;
+  background: #24262c;
+  color: #f5f5f5;
+  font-size: 11px;
+}
+.boolean-actions button[aria-pressed="true"] {
+  background: #82e6b8;
+  color: #102b20;
+  border-color: #82e6b8;
+}
+:root[data-theme="light"] .boolean-actions button {
+  background: #eef1f5;
+  color: #252b34;
+  border-color: #c3cad5;
+}
+:root[data-theme="light"] .boolean-actions button[aria-pressed="true"] {
+  background: #b9efd7;
+  color: #102b20;
+  border-color: #45a97e;
+}
+
+.boolean-export {
+  color: #f5f5f5;
+}
+
+.shape-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.shape-action {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 34px;
+  padding: 6px;
+  border: 1px solid #535b69;
+  border-radius: 5px;
+  background: #24262c;
+  color: #f5f5f5;
+}
+.shape-action > span:first-child {
+  display: flex;
+}
+.shape-action:hover {
+  border-color: #82e6b8;
+}
+.shape-action:focus-visible {
+  outline: 2px solid #82e6b8;
+  outline-offset: 2px;
+}
+.shape-action-tooltip {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 100;
+  width: max-content;
+  max-width: 210px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: #101217;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: 0 3px 12px #0004;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+}
+.shape-actions .shape-action-tooltip,
+.boolean-actions .shape-action:first-child .shape-action-tooltip {
+  left: 0;
+  right: auto;
+}
+.shape-action:hover .shape-action-tooltip,
+.shape-action:focus-visible .shape-action-tooltip {
+  visibility: visible;
+  opacity: 1;
+}
+:root[data-theme="light"] .shape-action {
+  background: #eef1f5;
+  color: #252b34;
+  border-color: #c3cad5;
+}

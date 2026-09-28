@@ -115,3 +115,13 @@ restoration is limited to single-page flat rectangle documents. See
 A shape node can carry optional `mask_shape: true` (absent means false). Within a group, that direct child supplies the clipping geometry for all other children and is not painted itself. There is at most one mask source per group. Supported sources are rectangles, ellipses, polygons, stars, and closed native paths; paths preserve their fill rule. Source fill, stroke, and opacity do not affect the geometric mask. Transforms and descendants continue to use resolved world coordinates.
 
 **Use as mask** groups selected siblings and marks the topmost selected shape. **Release mask** clears the flag and keeps the editable group and artwork. Ungrouping clears the flag on promoted children; deleting the source also removes clipping. Canvas and frame PNG share the mask renderer. Native save/reopen and shared entity/property operations preserve the flag. This is geometric clipping, not raster alpha/luminance masking; group SVG export remains unsupported.
+
+## Boolean groups
+
+A group can carry optional `boolean_operation`: `union`, `subtract`, `intersect`, or `exclude`. Its direct children are editable operands, ordered by document paint order. The group’s `vector` stores a derived normalized, closed, even-odd path. Children do not paint separately; canvas selection targets the result, and Layers provides explicit operand selection.
+
+The engine recomputes derived paths after operand edits and shared operation replay, deepest groups first. Native documents store both operands and the result. Creation accepts 2–64 unlocked sibling rectangles or closed vector shapes (including nested boolean results); open paths, ordinary groups, masks, text, images, and component instances are not operands. Removing operands can leave a single-operand or empty result.
+
+Operations combine filled geometry, ignoring operand stroke width, opacity, and visibility. Subtraction folds upper operands into the bottom operand; the group inherits bottom-operand fill/stroke. Curves are flattened with a 0.05 document-pixel tolerance; original Bézier handles remain unchanged. Geometry is capped at 131,072 points per operand/result, with bounded curve subdivision. This is geometric combination, not alpha compositing.
+
+Release clears boolean mode and the derived path, restoring an ordinary group of original artwork. Undo restores the operation. Result SVG export exports the derived vector path; PNG uses the same painter as the canvas.

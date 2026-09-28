@@ -2468,3 +2468,117 @@ fn masking_preserves_unselected_sibling_stacking() {
     );
     assert_eq!(engine.hit_test(50.0, 50.0), above);
 }
+
+#[test]
+fn boolean_modes_preserve_operands_and_update_through_history() {
+    for (mode, hits) in [
+        ("union", [true, true, true]),
+        ("subtract", [true, false, false]),
+        ("intersect", [false, true, false]),
+        ("exclude", [true, false, true]),
+    ] {
+        let mut engine = DocumentEngine::new_blank();
+        engine
+            .enable_operations(&Uuid::now_v7().to_string())
+            .unwrap();
+        let a = engine.add_rectangle();
+        engine.set_node_bounds(a.clone(), 0.0, 0.0, 100.0, 100.0);
+        let b = engine.add_rectangle();
+        engine.set_node_bounds(b.clone(), 50.0, 0.0, 100.0, 100.0);
+        let ids = serde_json::to_string(&[&a, &b]).unwrap();
+        let group = engine.boolean_nodes(&ids, mode).unwrap();
+        for (x, expected) in [25.0, 75.0, 125.0].into_iter().zip(hits) {
+            assert_eq!(
+                !engine.hit_test(x, 50.0).is_empty(),
+                expected,
+                "{mode} at {x}"
+            );
+            if expected {
+                assert_eq!(engine.hit_test(x, 50.0), group);
+            }
+        }
+        let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+        assert_eq!(
+            loaded.node_json(group.clone()),
+            engine.node_json(group.clone())
+        );
+        let before = engine.node_json(group.clone());
+        engine.set_node_bounds(b.clone(), 200.0, 0.0, 100.0, 100.0);
+        assert_ne!(engine.node_json(group.clone()), before);
+        assert!(engine.undo());
+        assert_eq!(engine.node_json(group.clone()), before);
+        assert!(engine.set_boolean_operation(group.clone(), "union"));
+        assert_eq!(engine.hit_test(125.0, 50.0), group);
+        assert!(engine.release_boolean(group.clone()));
+        assert_eq!(engine.hit_test(125.0, 50.0), b);
+        assert!(engine.undo());
+        assert_eq!(engine.hit_test(125.0, 50.0), group);
+        engine.document.validate().unwrap();
+    }
+}
+
+#[test]
+fn boolean_holes_nested_shapes_and_empty_results() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    engine.set_node_bounds(a.clone(), 0.0, 0.0, 200.0, 200.0);
+    let b = engine.add_vector_shape("ellipse".into(), "".into());
+    engine.set_node_bounds(b.clone(), 50.0, 50.0, 100.0, 100.0);
+    let original: Node = serde_json::from_str(&engine.node_json(b.clone())).unwrap();
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "subtract")
+        .unwrap();
+    assert!(engine.hit_test(100.0, 100.0).is_empty());
+    assert_eq!(engine.hit_test(55.0, 55.0), group);
+    let retained: Node = serde_json::from_str(&engine.node_json(b.clone())).unwrap();
+    assert_eq!(retained.vector, original.vector);
+    let c = engine.add_rectangle();
+    engine.set_node_bounds(c.clone(), 300.0, 0.0, 50.0, 50.0);
+    let outer = engine
+        .boolean_nodes(&serde_json::to_string(&[&group, &c]).unwrap(), "union")
+        .unwrap();
+    assert_eq!(engine.hit_test(20.0, 20.0), outer);
+    assert_eq!(engine.hit_test(320.0, 20.0), outer);
+    assert!(engine.hit_test(100.0, 100.0).is_empty());
+    engine.set_boolean_operation(outer.clone(), "intersect");
+    assert!(engine.hit_test(20.0, 20.0).is_empty());
+    engine.document.validate().unwrap();
+}
+
+#[test]
+fn boolean_rejects_open_operands_without_mutation() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    let b = engine.add_vector_shape("line".into(), "".into());
+    let before = engine.document.clone();
+    assert!(
+        engine
+            .document
+            .create_boolean(
+                &[parse_entity_id(&a), parse_entity_id(&b)],
+                BooleanOperation::Union
+            )
+            .is_err()
+    );
+    assert_eq!(engine.document, before);
+}
+
+#[test]
+fn boolean_transformed_operand_keeps_its_footprint() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    engine.set_node_bounds(a.clone(), 0.0, 0.0, 100.0, 100.0);
+    engine
+        .document
+        .active_node_mut(parse_entity_id(&a))
+        .unwrap()
+        .rotation = 45.0;
+    let b = engine.add_rectangle();
+    engine.set_node_bounds(b.clone(), 300.0, 0.0, 100.0, 100.0);
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "union")
+        .unwrap();
+    assert!(engine.hit_test(0.0, 0.0).is_empty());
+    assert_eq!(engine.hit_test(50.0, -10.0), group);
+    assert_eq!(engine.hit_test(350.0, 50.0), group);
+}

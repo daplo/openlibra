@@ -1293,6 +1293,34 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     }
   }
 
+  function booleanSelected(
+    operation: NonNullable<NodeSummary["boolean_operation"]>,
+  ) {
+    if (!selectionCanBeEdited() || !engineRef.current || shared?.blocked)
+      return;
+    try {
+      const id = engineRef.current.boolean_nodes(
+        JSON.stringify(selectedNodeIdsRef.current),
+        operation,
+      );
+      refreshDocument([id]);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+  function changeBoolean(
+    node: NodeSummary,
+    operation: NonNullable<NodeSummary["boolean_operation"]>,
+  ) {
+    if (!selectionCanBeEdited() || shared?.blocked) return;
+    if (engineRef.current?.set_boolean_operation(node.id, operation))
+      refreshDocument([node.id]);
+  }
+  function releaseBoolean(node: NodeSummary) {
+    if (!selectionCanBeEdited() || shared?.blocked) return;
+    if (engineRef.current?.release_boolean(node.id)) refreshDocument([node.id]);
+  }
+
   function maskSelected() {
     if (!selectionCanBeEdited() || !engineRef.current) return;
     const id = engineRef.current.mask_nodes(
@@ -1459,6 +1487,12 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         snapped.dy,
       )
     ) {
+      if (
+        documentModelRef.current?.nodes.some((node) => node.boolean_operation)
+      ) {
+        refreshDocument(selection);
+        return;
+      }
       patchMovedNodesInModel(selection, snapped.dx, snapped.dy);
       refreshLiveSelectionBounds();
       refreshVisibleScene();
@@ -2254,6 +2288,31 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     return target;
   }
 
+  function hitCanvasPoint(world: { x: number; y: number }) {
+    // Only explicitly selected operands can be grabbed independently, including
+    // portions outside the result or inside a subtraction hole.
+    const direct = directLayerSelectionRef.current.find((id) => {
+      if (!selectedNodeIdsRef.current.includes(id)) return false;
+      const node = nodesByIdRef.current.get(id);
+      if (!node) return false;
+      let parent = node.parent_id;
+      let operand = false;
+      while (parent) {
+        const ancestor = nodesByIdRef.current.get(parent);
+        if (ancestor?.boolean_operation) operand = true;
+        parent = ancestor?.parent_id;
+      }
+      if (!operand) return false;
+      const angle = (-node.rotation * Math.PI) / 180;
+      const dx = world.x - node.x - node.width / 2;
+      const dy = world.y - node.y - node.height / 2;
+      const x = dx * Math.cos(angle) - dy * Math.sin(angle);
+      const y = dx * Math.sin(angle) + dy * Math.cos(angle);
+      return Math.abs(x) <= node.width / 2 && Math.abs(y) <= node.height / 2;
+    });
+    return direct ?? engineRef.current?.hit_test(world.x, world.y) ?? "";
+  }
+
   function selectCanvasPoint(
     clientX: number,
     clientY: number,
@@ -2264,7 +2323,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     const engine = engineRef.current;
     if (!renderer || !engine) return;
     const world = renderer.worldPointFromClient(clientX, clientY);
-    const hitId = engine.hit_test(world.x, world.y);
+    const hitId = hitCanvasPoint(world);
     if (!hitId) {
       if (!additive) {
         directLayerSelectionRef.current = [];
@@ -2318,6 +2377,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         );
         if (
           node?.vector?.geometry.type === "path" &&
+          !node.boolean_operation &&
           !node.locked &&
           !node.instance_root_id
         ) {
@@ -2428,7 +2488,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       renderer.setTheme(themeRef.current);
       renderer.setInteractionHandlers({
         hitTest: (x, y) => {
-          const id = engineRef.current?.hit_test(x, y) ?? "";
+          const id = hitCanvasPoint({ x, y });
           return id || undefined;
         },
         select: () => {},
@@ -3148,6 +3208,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
                 !!shared?.blocked ||
                 selectedNodes.length !== 1 ||
                 selectedNodes[0]?.vector?.geometry.type !== "path" ||
+                !!selectedNodes[0]?.boolean_operation ||
                 selectedNodes[0]?.locked ||
                 (!!selectedMasterRoot && !isolationRootId) ||
                 !!selectedNodes[0]?.instance_root_id
@@ -3482,6 +3543,9 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
                   onAlign={alignSelected}
                   onDelete={deleteSelected}
                   onGroup={groupSelected}
+                  onBoolean={booleanSelected}
+                  onBooleanChange={changeBoolean}
+                  onBooleanRelease={releaseBoolean}
                   onMask={maskSelected}
                   onReleaseMask={releaseMask}
                   hasMask={

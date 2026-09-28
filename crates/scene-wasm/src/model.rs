@@ -96,6 +96,8 @@ pub struct Node {
     pub(crate) parent_id: Option<EntityId>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) mask_shape: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) boolean_operation: Option<BooleanOperation>,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) width: f32,
@@ -495,4 +497,13 @@ pub(crate) struct PageSummary<'a> {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum BooleanOperation {
+    Union,
+    Subtract,
+    Intersect,
+    Exclude,
 }

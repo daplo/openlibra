@@ -68,6 +68,7 @@ export type NodeSummary = {
   kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon" | "vector";
   parent_id?: EntityId;
   mask_shape?: boolean;
+  boolean_operation?: "union" | "subtract" | "intersect" | "exclude";
   x: number;
   y: number;
   width: number;

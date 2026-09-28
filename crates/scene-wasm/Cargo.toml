@@ -13,3 +13,4 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 wasm-bindgen = "0.2"
 uuid = { version = "1.24", features = ["js", "serde", "v5", "v7"] }
 console_error_panic_hook = "0.1"
+i_overlay = "8.1.0"

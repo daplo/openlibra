@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Group,
+  Ungroup,
+  Scan,
   AlignCenter,
   AlignHorizontalJustifyCenter,
   AlignHorizontalJustifyEnd,
@@ -51,6 +54,12 @@ export function Properties(props: {
   onDelete: () => void;
   onGroup: () => void;
   onMask: () => void;
+  onBoolean: (operation: NonNullable<NodeSummary["boolean_operation"]>) => void;
+  onBooleanChange: (
+    node: NodeSummary,
+    operation: NonNullable<NodeSummary["boolean_operation"]>,
+  ) => void;
+  onBooleanRelease: (node: NodeSummary) => void;
   onReleaseMask: (node: NodeSummary) => void;
   hasMask: boolean;
   onUngroup: (node: NodeSummary) => void;
@@ -164,26 +173,32 @@ export function Properties(props: {
           />
           {selected.length === 1 && <Property label="Type" value={node.kind} />}
           {selected.length > 1 && (
-            <button className="primary-button" onClick={props.onGroup}>
-              Group selection
-            </button>
-          )}
-          {selected.length > 1 && (
-            <button
-              className="secondary-button mask-action"
-              onClick={props.onMask}
-              title="Use the topmost selected shape to clip the other objects"
+            <div
+              className="shape-actions"
+              role="group"
+              aria-label="Selection actions"
             >
-              Use as mask
-            </button>
+              <ShapeAction label="Group selection" onClick={props.onGroup}>
+                <Group size={19} />
+              </ShapeAction>
+              <ShapeAction
+                label="Use as mask"
+                hint="Use as mask · topmost shape clips the others"
+                onClick={props.onMask}
+              >
+                <Scan size={19} />
+              </ShapeAction>
+            </div>
           )}
           {selected.length === 1 && props.hasMask && (
-            <button
-              className="secondary-button mask-action"
-              onClick={() => props.onReleaseMask(node)}
-            >
-              Release mask
-            </button>
+            <div className="shape-actions">
+              <ShapeAction
+                label="Release mask"
+                onClick={() => props.onReleaseMask(node)}
+              >
+                <Unlink size={19} />
+              </ShapeAction>
+            </div>
           )}
           {selected.length === 1 && node.mask_shape && (
             <p className="path-edit-hint">
@@ -191,14 +206,70 @@ export function Properties(props: {
             </p>
           )}
           {selected.length === 1 && node.kind === "group" && (
-            <button
-              className="primary-button"
-              onClick={() => props.onUngroup(node)}
-            >
-              Ungroup
-            </button>
+            <div className="shape-actions">
+              <ShapeAction
+                label="Ungroup"
+                onClick={() => props.onUngroup(node)}
+              >
+                <Ungroup size={19} />
+              </ShapeAction>
+            </div>
           )}
         </PropertySection>
+        {(selected.length > 1 || node.boolean_operation) && (
+          <PropertySection title="Boolean shapes">
+            <div
+              className="boolean-actions"
+              role="group"
+              aria-label="Boolean operations"
+            >
+              {(["union", "subtract", "intersect", "exclude"] as const).map(
+                (operation) => (
+                  <ShapeAction
+                    key={operation}
+                    label={operation[0].toUpperCase() + operation.slice(1)}
+                    hint={
+                      {
+                        union: "Union · combine shapes",
+                        subtract: "Subtract · remove upper shapes",
+                        intersect: "Intersect · keep overlapping areas",
+                        exclude: "Exclude · remove overlapping areas",
+                      }[operation]
+                    }
+                    pressed={node.boolean_operation === operation}
+                    onClick={() =>
+                      selected.length > 1
+                        ? props.onBoolean(operation)
+                        : props.onBooleanChange(node, operation)
+                    }
+                  >
+                    <BooleanIcon operation={operation} />
+                  </ShapeAction>
+                ),
+              )}
+            </div>
+            {selected.length === 1 && node.boolean_operation && (
+              <>
+                <p className="path-edit-hint">
+                  Edit original shapes in Layers. The result updates
+                  automatically.
+                </p>
+                <button
+                  className="secondary-button mask-action"
+                  onClick={() => props.onBooleanRelease(node)}
+                >
+                  Release boolean
+                </button>
+                <button
+                  className="secondary-button boolean-export"
+                  onClick={() => props.onExportVector(node)}
+                >
+                  Export SVG
+                </button>
+              </>
+            )}
+          </PropertySection>
+        )}
         {selected.length === 1 && node.kind === "frame" && (
           <PropertySection title="Export">
             <div className="export-controls">
@@ -322,21 +393,22 @@ export function Properties(props: {
                     />
                   </>
                 )}
-                {node.vector.geometry.type === "path" && (
-                  <>
-                    <button
-                      className="secondary-button"
-                      disabled={node.locked || !!node.instance_root_id}
-                      onClick={() => props.onEditPath(node)}
-                    >
-                      Edit curve points
-                    </button>
-                    <p className="path-edit-hint">
-                      Double-click the path to move points and handles, or
-                      change sharp points to smooth curves.
-                    </p>
-                  </>
-                )}
+                {node.vector.geometry.type === "path" &&
+                  !node.boolean_operation && (
+                    <>
+                      <button
+                        className="secondary-button"
+                        disabled={node.locked || !!node.instance_root_id}
+                        onClick={() => props.onEditPath(node)}
+                      >
+                        Edit curve points
+                      </button>
+                      <p className="path-edit-hint">
+                        Double-click the path to move points and handles, or
+                        change sharp points to smooth curves.
+                      </p>
+                    </>
+                  )}
                 {node.vector.geometry.type !== "path" && (
                   <button
                     className="secondary-button"
@@ -414,15 +486,16 @@ export function Properties(props: {
                 }
               />
             </PropertySection>
-            {(node.kind === "frame" || node.kind === "group") && (
-              <PropertySection title="Auto layout">
-                <AutoLayoutControls
-                  key={node.id}
-                  node={node}
-                  onChange={(change) => props.onLayoutChange(node, change)}
-                />
-              </PropertySection>
-            )}
+            {!node.boolean_operation &&
+              (node.kind === "frame" || node.kind === "group") && (
+                <PropertySection title="Auto layout">
+                  <AutoLayoutControls
+                    key={node.id}
+                    node={node}
+                    onChange={(change) => props.onLayoutChange(node, change)}
+                  />
+                </PropertySection>
+              )}
             {node.kind === "frame" && (
               <PropertySection title="Artboard grid">
                 <ArtboardGuideControls
@@ -790,32 +863,37 @@ function VariableBindingControls({
         onChange={(id) => onBind("height", id)}
         onCreate={() => onCreate("height", node.height)}
       />
-      {(node.kind === "frame" || node.kind === "group") && (
-        <>
-          <VariableSelect
-            label="Gap"
-            value={bindings.gap}
-            variables={variables}
-            onChange={(id) => onBind("gap", id)}
-            onCreate={() => onCreate("gap", node.layout_gap)}
-          />
-          {(["Top", "Right", "Bottom", "Left"] as const).map((label, index) => (
+      {!node.boolean_operation &&
+        (node.kind === "frame" || node.kind === "group") && (
+          <>
             <VariableSelect
-              key={label}
-              label={`Padding ${label}`}
-              value={bindings.padding[index] ?? undefined}
+              label="Gap"
+              value={bindings.gap}
               variables={variables}
-              onChange={(id) => onBind(`padding_${label.toLowerCase()}`, id)}
-              onCreate={() =>
-                onCreate(
-                  `padding_${label.toLowerCase()}`,
-                  node.layout_padding[index],
-                )
-              }
+              onChange={(id) => onBind("gap", id)}
+              onCreate={() => onCreate("gap", node.layout_gap)}
             />
-          ))}
-        </>
-      )}
+            {(["Top", "Right", "Bottom", "Left"] as const).map(
+              (label, index) => (
+                <VariableSelect
+                  key={label}
+                  label={`Padding ${label}`}
+                  value={bindings.padding[index] ?? undefined}
+                  variables={variables}
+                  onChange={(id) =>
+                    onBind(`padding_${label.toLowerCase()}`, id)
+                  }
+                  onCreate={() =>
+                    onCreate(
+                      `padding_${label.toLowerCase()}`,
+                      node.layout_padding[index],
+                    )
+                  }
+                />
+              ),
+            )}
+          </>
+        )}
     </div>
   );
 }
@@ -1983,6 +2061,65 @@ function BorderJoinIcon({ rounded }: { rounded: boolean }) {
       aria-hidden="true"
     >
       <path d={rounded ? "M3 13V8a5 5 0 0 1 5-5h5" : "M3 13V3h10"} />
+    </svg>
+  );
+}
+
+function ShapeAction({
+  label,
+  hint,
+  pressed,
+  onClick,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  pressed?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="shape-action"
+      aria-label={label}
+      aria-pressed={pressed}
+      onClick={onClick}
+    >
+      <span aria-hidden="true">{children}</span>
+      <span className="shape-action-tooltip" role="tooltip">
+        {hint ?? label}
+      </span>
+    </button>
+  );
+}
+
+function BooleanIcon({
+  operation,
+}: {
+  operation: NonNullable<NodeSummary["boolean_operation"]>;
+}) {
+  const shapes = {
+    union: "M3 3H15V9H21V21H9V15H3Z",
+    subtract: "M3 3H15V9H9V15H3Z",
+    intersect: "M9 9H15V15H9Z",
+    exclude: "M3 3H15V9H21V21H9V15H3Z M9 9V15H15V9Z",
+  };
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M3 3H15V15H3Z M9 9H21V21H9Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        opacity=".35"
+      />
+      <path d={shapes[operation]} fill="currentColor" fillRule="evenodd" />
     </svg>
   );
 }
