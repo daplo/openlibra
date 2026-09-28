@@ -122,3 +122,72 @@ pub(crate) fn point_in_frame(node: &Node, x: f32, y: f32) -> bool {
     }
     true
 }
+
+pub(crate) fn point_in_mask(node: &Node, x: f32, y: f32) -> bool {
+    use crate::{FillRule, VectorGeometry};
+    if node.kind == crate::NodeKind::Rectangle {
+        return point_in_frame(node, x, y);
+    }
+    let center = (node.x + node.width / 2.0, node.y + node.height / 2.0);
+    let p = rotate_around((x, y), center, -node.rotation.to_radians());
+    let mut x = (p.0 - node.x) / node.width;
+    let mut y = (p.1 - node.y) / node.height;
+    if node.flip_x {
+        x = 1.0 - x;
+    }
+    if node.flip_y {
+        y = 1.0 - y;
+    }
+    let Some(vector) = &node.vector else {
+        return false;
+    };
+    if matches!(vector.geometry, VectorGeometry::Ellipse) {
+        return (x - 0.5).powi(2) + (y - 0.5).powi(2) <= 0.25;
+    }
+    let contours = match &vector.geometry {
+        VectorGeometry::Path { contours } => contours.clone(),
+        geometry => crate::edit::contours_for_geometry(geometry).unwrap_or_default(),
+    };
+    let mut winding = 0_i32;
+    for contour in contours {
+        for i in 0..contour.points.len() {
+            let a = &contour.points[i];
+            let b = &contour.points[(i + 1) % contour.points.len()];
+            let h1 = a.handle_out.unwrap_or(a.position);
+            let h2 = b.handle_in.unwrap_or(b.position);
+            let steps = if a.handle_out.is_some() || b.handle_in.is_some() {
+                64
+            } else {
+                1
+            };
+            let mut previous = a.position;
+            for step in 1..=steps {
+                let t = step as f32 / steps as f32;
+                let u = 1.0 - t;
+                let next = [
+                    u * u * u * a.position[0]
+                        + 3.0 * u * u * t * h1[0]
+                        + 3.0 * u * t * t * h2[0]
+                        + t * t * t * b.position[0],
+                    u * u * u * a.position[1]
+                        + 3.0 * u * u * t * h1[1]
+                        + 3.0 * u * t * t * h2[1]
+                        + t * t * t * b.position[1],
+                ];
+                if (previous[1] <= y && next[1] > y) || (previous[1] > y && next[1] <= y) {
+                    let cross = previous[0]
+                        + (y - previous[1]) * (next[0] - previous[0]) / (next[1] - previous[1]);
+                    if cross > x {
+                        winding += if next[1] > previous[1] { 1 } else { -1 };
+                    }
+                }
+                previous = next;
+            }
+        }
+    }
+    if vector.fill_rule == FillRule::Evenodd {
+        winding.abs() % 2 == 1
+    } else {
+        winding != 0
+    }
+}

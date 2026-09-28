@@ -2315,3 +2315,156 @@ fn finance_starter_layouts_fit_and_instances_reuse_real_content() {
         2
     );
 }
+
+#[test]
+fn pen_paths_validate_round_trip_and_undo_as_one_edit() {
+    let mut engine = DocumentEngine::new_blank();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    let contours = r#"[{"closed":false,"points":[{"position":[0,0],"handle_out":[0.3,0.5],"point_type":"smooth"},{"position":[1,1],"handle_in":[0.7,0.5]}]}]"#;
+    let id = engine.add_path(contours.into(), "[30,40,200,100]".into(), "".into());
+    assert!(!id.is_empty());
+    let original = engine.node_json(id.clone());
+    let mut next: Vec<VectorContour> = serde_json::from_str(contours).unwrap();
+    next[0].points[0].position = [0.1, 0.2];
+    assert!(engine.update_path(id.clone(), serde_json::to_string(&next).unwrap()));
+    assert!(engine.undo());
+    assert_eq!(engine.node_json(id.clone()), original);
+    assert!(engine.redo());
+    let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+    assert_eq!(loaded.node_json(id.clone()), engine.node_json(id.clone()));
+    let before = engine.document_json();
+    assert!(!engine.update_path(id.clone(), "[]".into()));
+    assert!(
+        engine
+            .add_path("[]".into(), "[0,0,100,100]".into(), "".into())
+            .is_empty()
+    );
+    assert!(
+        engine
+            .add_path(contours.into(), "[0,0,-1,100]".into(), "".into())
+            .is_empty()
+    );
+    assert_eq!(engine.document_json(), before);
+    engine.set_node_locked(id.clone(), true);
+    assert!(!engine.update_path(id, contours.into()));
+}
+
+#[test]
+fn path_bounds_expand_without_moving_rotated_or_flipped_geometry() {
+    for flip in [false, true] {
+        let mut document = Document::blank();
+        let id = document.add_vector_shape(VectorGeometry::Line, None);
+        document.convert_vector_to_path(id);
+        let node = document.active_node_mut(id).unwrap();
+        node.rotation = 37.0;
+        node.flip_x = flip;
+        let VectorGeometry::Path { contours } = &mut node.vector.as_mut().unwrap().geometry else {
+            panic!()
+        };
+        contours[0].points[0].position = [-0.5, 1.8];
+        contours[0].points[0].handle_out = Some([-0.8, 2.0]);
+        let positions = |n: &Node| {
+            let VectorGeometry::Path { contours } = &n.vector.as_ref().unwrap().geometry else {
+                panic!()
+            };
+            let angle = n.rotation.to_radians();
+            contours
+                .iter()
+                .flat_map(|c| &c.points)
+                .flat_map(|p| {
+                    std::iter::once(p.position)
+                        .chain(p.handle_in)
+                        .chain(p.handle_out)
+                })
+                .map(|p| {
+                    let dx = (p[0] - 0.5) * n.width * if n.flip_x { -1.0 } else { 1.0 };
+                    let dy = (p[1] - 0.5) * n.height * if n.flip_y { -1.0 } else { 1.0 };
+                    [
+                        n.x + n.width / 2.0 + dx * angle.cos() - dy * angle.sin(),
+                        n.y + n.height / 2.0 + dx * angle.sin() + dy * angle.cos(),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = positions(node);
+        expand_path_bounds(node);
+        assert!(node.width > 180.0 && node.height > 2.0);
+        for (a, b) in before.iter().zip(positions(node)) {
+            assert!((a[0] - b[0]).abs() < 0.001 && (a[1] - b[1]).abs() < 0.001);
+        }
+    }
+}
+
+#[test]
+fn mask_group_preserves_artwork_undo_reload_and_hit_clipping() {
+    let mut engine = DocumentEngine::new_blank();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    let content = engine.add_rectangle();
+    engine.set_node_bounds(content.clone(), 0.0, 0.0, 200.0, 200.0);
+    let source = engine.add_vector_shape("ellipse".into(), "".into());
+    engine.set_node_bounds(source.clone(), 50.0, 50.0, 100.0, 100.0);
+    let group = engine.mask_nodes(&serde_json::to_string(&[&content, &source]).unwrap());
+    assert!(!group.is_empty());
+    assert!(engine.hit_test(55.0, 55.0).is_empty());
+    assert!(engine.hit_test(10.0, 10.0).is_empty());
+    assert_eq!(engine.hit_test(100.0, 100.0), source);
+    let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+    assert!(loaded.hit_test(55.0, 55.0).is_empty());
+    assert!(engine.release_mask(group.clone()));
+    assert_eq!(engine.hit_test(10.0, 10.0), content);
+    assert!(engine.undo());
+    assert!(engine.hit_test(10.0, 10.0).is_empty());
+    assert!(engine.undo());
+    assert!(engine.node_json(group.clone()).is_empty());
+    assert_eq!(engine.hit_test(10.0, 10.0), content);
+    assert!(engine.redo());
+    assert!(engine.ungroup_nodes(group));
+    let source_node: Node = serde_json::from_str(&engine.node_json(source)).unwrap();
+    assert!(!source_node.mask_shape);
+    engine.document.validate().unwrap();
+}
+
+#[test]
+fn masks_reject_open_paths_and_separate_containers_without_mutation() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    let line = engine.add_vector_shape("line".into(), "".into());
+    let before = engine.document_json();
+    assert!(
+        engine
+            .mask_nodes(&serde_json::to_string(&[a, line]).unwrap())
+            .is_empty()
+    );
+    assert_eq!(engine.document_json(), before);
+    let frame = engine.add_frame();
+    let inside = engine.add_rectangle_to(frame);
+    let outside = engine.add_rectangle();
+    let before = engine.document_json();
+    assert!(
+        engine
+            .mask_nodes(&serde_json::to_string(&[inside, outside]).unwrap())
+            .is_empty()
+    );
+    assert_eq!(engine.document_json(), before);
+}
+
+#[test]
+fn masking_preserves_unselected_sibling_stacking() {
+    let mut engine = DocumentEngine::new_blank();
+    let content = engine.add_rectangle();
+    let source = engine.add_vector_shape("ellipse".into(), "".into());
+    let above = engine.add_rectangle();
+    for id in [&content, &source, &above] {
+        engine.set_node_bounds(id.clone(), 0.0, 0.0, 100.0, 100.0);
+    }
+    assert!(
+        !engine
+            .mask_nodes(&serde_json::to_string(&[content, source]).unwrap())
+            .is_empty()
+    );
+    assert_eq!(engine.hit_test(50.0, 50.0), above);
+}

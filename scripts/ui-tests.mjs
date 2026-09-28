@@ -1,3 +1,5 @@
+import { testMasks } from "./mask-tests.mjs";
+import { testPathEditing } from "./path-editing-tests.mjs";
 import { testOperations } from "./operation-tests.mjs";
 import { testRenderingInteraction } from "./rendering-interaction-tests.mjs";
 import { testRendering } from "./rendering-tests.mjs";
@@ -762,6 +764,8 @@ try {
 
   await testOperations(browser, url);
   await testRendering(browser, url);
+  await testPathEditing(browser, url);
+  await testMasks(browser, url);
   await testRenderingInteraction(browser, url);
   await testProjectSafety(browser, url);
   await testCrossTab(browser, url);

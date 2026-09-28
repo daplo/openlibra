@@ -50,6 +50,9 @@ export function Properties(props: {
   onAlign: (alignment: string) => void;
   onDelete: () => void;
   onGroup: () => void;
+  onMask: () => void;
+  onReleaseMask: (node: NodeSummary) => void;
+  hasMask: boolean;
   onUngroup: (node: NodeSummary) => void;
   onExportFrame: (node: NodeSummary, scale: number) => void;
   onCreateComponent: (node: NodeSummary) => void;
@@ -68,6 +71,7 @@ export function Properties(props: {
     fillRule: "nonzero" | "evenodd",
   ) => void;
   onVectorConvertToPath: (node: NodeSummary) => void;
+  onEditPath: (node: NodeSummary) => void;
   onExportVector: (node: NodeSummary) => void;
   onStyleChange: (
     node: NodeSummary,
@@ -163,6 +167,28 @@ export function Properties(props: {
             <button className="primary-button" onClick={props.onGroup}>
               Group selection
             </button>
+          )}
+          {selected.length > 1 && (
+            <button
+              className="secondary-button mask-action"
+              onClick={props.onMask}
+              title="Use the topmost selected shape to clip the other objects"
+            >
+              Use as mask
+            </button>
+          )}
+          {selected.length === 1 && props.hasMask && (
+            <button
+              className="secondary-button mask-action"
+              onClick={() => props.onReleaseMask(node)}
+            >
+              Release mask
+            </button>
+          )}
+          {selected.length === 1 && node.mask_shape && (
+            <p className="path-edit-hint">
+              Mask shape · its geometry clips the other objects in this group.
+            </p>
           )}
           {selected.length === 1 && node.kind === "group" && (
             <button
@@ -294,6 +320,21 @@ export function Properties(props: {
                         )
                       }
                     />
+                  </>
+                )}
+                {node.vector.geometry.type === "path" && (
+                  <>
+                    <button
+                      className="secondary-button"
+                      disabled={node.locked || !!node.instance_root_id}
+                      onClick={() => props.onEditPath(node)}
+                    >
+                      Edit curve points
+                    </button>
+                    <p className="path-edit-hint">
+                      Double-click the path to move points and handles, or
+                      change sharp points to smooth curves.
+                    </p>
                   </>
                 )}
                 {node.vector.geometry.type !== "path" && (

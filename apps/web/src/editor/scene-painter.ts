@@ -201,9 +201,14 @@ export function createScenePainter(nodes: NodeSummary[], assets: MediaAsset[]) {
       }
       visibleIds.add(node.id);
       const descendants = children.get(node.id) ?? [];
+      const mask =
+        node.kind === "group"
+          ? descendants.find((child) => child.mask_shape)
+          : undefined;
       // A transparent one-child group has no overlapping paints to isolate.
       if (
         node.kind === "group" &&
+        !mask &&
         node.fill[3] === 0 &&
         (node.stroke_width === 0 || node.stroke[3] === 0) &&
         !node.shadows.some((s) => s.enabled) &&
@@ -281,7 +286,16 @@ export function createScenePainter(nodes: NodeSummary[], assets: MediaAsset[]) {
         drawStroke(target, node, path);
         if (node.kind === "frame") target.clip(path);
         target.setTransform(world);
-        for (const child of descendants) visit(target, child);
+        if (mask) {
+          transformNode(target, mask);
+          target.clip(
+            paths.get(mask.id)!,
+            mask.vector?.fill_rule === "evenodd" ? "evenodd" : "nonzero",
+          );
+          target.setTransform(world);
+        }
+        for (const child of descendants)
+          if (child !== mask) visit(target, child);
       } finally {
         target.restore();
       }

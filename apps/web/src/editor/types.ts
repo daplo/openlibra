@@ -67,6 +67,7 @@ export type NodeSummary = {
   name: string;
   kind: "frame" | "rectangle" | "group" | "text" | "image" | "icon" | "vector";
   parent_id?: EntityId;
+  mask_shape?: boolean;
   x: number;
   y: number;
   width: number;

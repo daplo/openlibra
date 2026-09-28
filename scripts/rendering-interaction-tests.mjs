@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mixedFixture, openFixture } from "./mixed-fixture.mjs";
 
 export async function testRenderingInteraction(browser, url) {
+  await testMultiSelectionDrag(browser, url);
   for (const count of [1, 2000])
     await testSceneInteraction(browser, url, count);
 }
@@ -112,6 +113,98 @@ async function testSceneInteraction(browser, url, count) {
     assert.equal(await page.getByLabel("Rotation degrees").inputValue(), "90");
     console.log(
       `Rendering interaction passed for ${count} nodes (live drag pixels, undo repaint, transform persistence).`,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+async function testMultiSelectionDrag(browser, url) {
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+  try {
+    await page.goto(url);
+    await page
+      .locator(".save-status > span")
+      .filter({ hasText: /^Saved in this browser/ })
+      .waitFor();
+    const fixture = await mixedFixture(page, 3);
+    fixture.document.pages[0].nodes.forEach((n, i) =>
+      Object.assign(n, {
+        kind: "rectangle",
+        vector: null,
+        text: null,
+        asset_id: null,
+        x: 100 + i * 180,
+        y: 100,
+        width: 60,
+        height: 40,
+        fill: [1, 0, 0, 1],
+        opacity: 1,
+        rotation: 0,
+        flip_x: false,
+        flip_y: false,
+        shadows: [],
+        stroke_width: 0,
+        corner_radii: [0, 0, 0, 0],
+      }),
+    );
+    await openFixture(page, fixture.document, "Multi drag.libra");
+    const nodes = fixture.document.pages[0].nodes;
+    await page.getByTestId(`layer-node-${nodes[0].id}`).click();
+    await page
+      .getByTestId(`layer-node-${nodes[1].id}`)
+      .click({ modifiers: ["Shift"] });
+    await page.getByRole("button", { name: "Fit", exact: true }).click();
+    await page.waitForTimeout(200);
+    const view = await page
+      .locator(".scene-content")
+      .evaluate((c) => JSON.parse(c.dataset.view));
+    const bounds = await page
+      .getByLabel("Open Libra WebGPU editor canvas")
+      .boundingBox();
+    const alpha = async (x, y) =>
+      page
+        .locator(".scene-content")
+        .evaluate(
+          (c, { x, y }) => c.getContext("2d").getImageData(x, y, 1, 1).data[3],
+          {
+            x: Math.round((x * view.zoom + view.pan.x) * view.ratio),
+            y: Math.round((y * view.zoom + view.pan.y) * view.ratio),
+          },
+        );
+    const x = bounds.x + 130 * view.zoom + view.pan.x,
+      y = bounds.y + 120 * view.zoom + view.pan.y;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + 90 * view.zoom, { steps: 6 });
+    await page.waitForTimeout(100);
+    assert.equal(
+      await alpha(130, 210),
+      255,
+      "First selected object must move during drag",
+    );
+    assert.equal(
+      await alpha(310, 210),
+      255,
+      "Second selected object must move during drag",
+    );
+    assert.equal(
+      await alpha(310, 120),
+      0,
+      "Second selected object must leave its old position",
+    );
+    assert.equal(await alpha(490, 120), 255, "Unselected object must stay put");
+    await page.mouse.up();
+    await page.keyboard.press("ControlOrMeta+z");
+    await page.waitForTimeout(100);
+    assert.equal(await alpha(130, 120), 255);
+    assert.equal(await alpha(310, 120), 255);
+    assert.equal(await alpha(130, 210), 0);
+    assert.equal(await alpha(310, 210), 0);
+    console.log(
+      "Multi-selection drag passed (both objects move live, unselected object stays, one undo restores both).",
     );
   } finally {
     await page.close();

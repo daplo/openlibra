@@ -1,7 +1,11 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { OpenLibraRenderer, ColorTheme } from "../renderer";
 import { hexWithAlpha, rgbaToHex } from "../editor/model-utils";
-import type { NodeSummary } from "../editor/types";
+import type { NodeSummary, MediaAsset } from "../editor/types";
+import {
+  maskedSelectionBounds,
+  type VisibleBounds,
+} from "../editor/masked-selection";
 
 export function CanvasGrid({
   rendererRef,
@@ -126,13 +130,43 @@ export function Rulers({
 export function SelectionOverlay({
   rendererRef,
   selected,
+  nodes,
+  assets,
 }: {
   rendererRef: RefObject<OpenLibraRenderer | undefined>;
   selected: NodeSummary[];
+  nodes: NodeSummary[];
+  assets: MediaAsset[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let frame = 0;
+    let cancelled = false;
+    const masked = new Map<
+      string,
+      { bounds: VisibleBounds | null; x: number; y: number }
+    >();
+    const maskRoots = selected.filter(
+      (node) =>
+        node.kind === "group" &&
+        nodes.some((child) => child.parent_id === node.id && child.mask_shape),
+    );
+    if (maskRoots.length) {
+      const snapshot = structuredClone(nodes);
+      for (const root of maskRoots) {
+        const original = snapshot.find((node) => node.id === root.id)!;
+        masked.set(root.id, { bounds: null, x: original.x, y: original.y });
+        void maskedSelectionBounds(original, snapshot, assets)
+          .then((bounds) => {
+            if (!cancelled)
+              masked.set(root.id, { bounds, x: original.x, y: original.y });
+          })
+          .catch(() => {
+            // Resource errors are surfaced by SceneCanvas; retain a usable outline.
+            if (!cancelled) masked.delete(root.id);
+          });
+      }
+    }
     const draw = () => {
       const canvas = canvasRef.current;
       const renderer = rendererRef.current;
@@ -160,18 +194,46 @@ export function SelectionOverlay({
           resizing && visibleSelection[0]
             ? `${visibleSelection[0].width}x${visibleSelection[0].height}`
             : "";
+        const outlinedSelection = visibleSelection.flatMap((node) => {
+          const measured = masked.get(node.id);
+          if (!measured) return [node];
+          if (!measured.bounds) return [];
+          return [
+            {
+              ...node,
+              ...measured.bounds,
+              x: measured.bounds.x + node.x - measured.x,
+              y: measured.bounds.y + node.y - measured.y,
+              rotation: 0,
+              flip_x: false,
+              flip_y: false,
+            },
+          ];
+        });
+        canvas.dataset.visibleBounds = JSON.stringify(
+          outlinedSelection.map(({ id, x, y, width, height }) => ({
+            id,
+            x,
+            y,
+            width,
+            height,
+          })),
+        );
         drawSelectionOverlay(
           canvas,
           renderer.getViewState(),
-          visibleSelection,
+          outlinedSelection,
           resizing,
         );
       }
       frame = requestAnimationFrame(draw);
     };
     frame = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(frame);
-  }, [rendererRef, selected]);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [rendererRef, selected, nodes, assets]);
   return (
     <canvas ref={canvasRef} className="selection-overlay" aria-hidden="true" />
   );

@@ -1,3 +1,5 @@
+import { PathEditor } from "./components/PathEditor";
+import type { VectorContour } from "./editor/types";
 import { SharedPresence } from "./components/SharedPresence";
 import type { SharedEditorBridge } from "./editor/shared-editor";
 import { ShareDocument } from "./components/ShareDocument";
@@ -30,6 +32,8 @@ import {
   MessageCircle,
   Moon,
   MousePointer2,
+  PenTool,
+  Spline,
   Redo2,
   Save,
   Square,
@@ -62,7 +66,6 @@ import {
 } from "./editor/input";
 import {
   collectDocumentColors,
-  findSelectedAncestor,
   hexToRgb,
   preferredArtboardId,
   rgbaToHex,
@@ -110,6 +113,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   const rendererRef = useRef<OpenLibraRenderer | undefined>(undefined);
   const engineRef = useRef<DocumentEngine | undefined>(undefined);
   const selectedNodeIdsRef = useRef<string[]>([]);
+  const directLayerSelectionRef = useRef<string[]>([]);
   const copiedNodeIdsRef = useRef<string[]>([]);
   const inputControllerRef = useRef<EditorInputController | undefined>(
     undefined,
@@ -153,6 +157,10 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   const [snapGuides, setSnapGuides] = useState<{ x?: number; y?: number }>({});
   const [isolationRootId, setIsolationRootId] = useState<string>();
   const isolationRootIdRef = useRef<string | undefined>(undefined);
+  const [pathSession, setPathSession] = useState<{
+    node?: NodeSummary;
+    page: string;
+  }>();
   const [canvasTool, setCanvasTool] = useState<CanvasTool>("select");
   const [theme, setTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem("open-libra-theme");
@@ -1075,6 +1083,90 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     }
   }
 
+  function commitPath(contours: VectorContour[], original?: NodeSummary) {
+    const engine = engineRef.current;
+    if (
+      !engine ||
+      shared?.blocked ||
+      mode !== "design" ||
+      pathSession?.page !== documentModel.active_page_id
+    )
+      return false;
+    if (original) {
+      const current = JSON.parse(
+        engine.node_json(original.id) || "null",
+      ) as NodeSummary | null;
+      const geometryState = (n: NodeSummary) =>
+        JSON.stringify([
+          n.vector,
+          n.x,
+          n.y,
+          n.width,
+          n.height,
+          n.rotation,
+          n.flip_x,
+          n.flip_y,
+          n.locked,
+        ]);
+      if (!current || geometryState(current) !== geometryState(original)) {
+        setError(
+          "This path changed while you were editing it. Reopen Edit path to use the latest version.",
+        );
+        setPathSession(undefined);
+        return false;
+      }
+      engine.update_path(original.id, JSON.stringify(contours));
+      const updated = JSON.parse(engine.node_json(original.id)) as NodeSummary;
+      setPathSession({ node: updated, page: documentModel.active_page_id });
+      refreshDocument([original.id]);
+      return updated.vector?.geometry.type === "path"
+        ? updated.vector.geometry.contours
+        : false;
+    } else {
+      const points = contours.flatMap((c) =>
+        c.points.flatMap((p) => [
+          p.position,
+          ...(p.handle_in ? [p.handle_in] : []),
+          ...(p.handle_out ? [p.handle_out] : []),
+        ]),
+      );
+      const x = Math.min(...points.map((p) => p[0])),
+        y = Math.min(...points.map((p) => p[1]));
+      const width = Math.max(1, ...points.map((p) => p[0] - x)),
+        height = Math.max(1, ...points.map((p) => p[1] - y));
+      const normalized = contours.map((c) => ({
+        ...c,
+        points: c.points.map((p) => ({
+          ...p,
+          position: [(p.position[0] - x) / width, (p.position[1] - y) / height],
+          handle_in: p.handle_in && [
+            (p.handle_in[0] - x) / width,
+            (p.handle_in[1] - y) / height,
+          ],
+          handle_out: p.handle_out && [
+            (p.handle_out[0] - x) / width,
+            (p.handle_out[1] - y) / height,
+          ],
+        })),
+      }));
+      const parent = preferredArtboardId(
+        documentModel.nodes,
+        selectedNodeIdsRef.current,
+      );
+      const id = engine.add_path(
+        JSON.stringify(normalized),
+        JSON.stringify([x, y, width, height]),
+        parent ?? "",
+      );
+      if (!id) {
+        setError("Could not create this path.");
+        return false;
+      }
+      refreshDocument([id]);
+    }
+    return contours;
+  }
+
   function addVectorShape(shape: VectorShape) {
     const engine = engineRef.current;
     if (!engine) return;
@@ -1199,6 +1291,23 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
+  }
+
+  function maskSelected() {
+    if (!selectionCanBeEdited() || !engineRef.current) return;
+    const id = engineRef.current.mask_nodes(
+      JSON.stringify(selectedNodeIdsRef.current),
+    );
+    if (id) refreshDocument([id]);
+    else
+      setError(
+        "Select at least two unlocked objects in the same container. The topmost selected object must be a rectangle or a closed vector shape, outside a component instance.",
+      );
+  }
+
+  function releaseMask(node: NodeSummary) {
+    if (!selectionCanBeEdited()) return;
+    if (engineRef.current?.release_mask(node.id)) refreshDocument([node.id]);
   }
 
   function ungroupSelected(node: NodeSummary) {
@@ -2127,6 +2236,24 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     }
   }
 
+  function canvasSelectionTarget(hitId: string) {
+    const byId = nodesByIdRef.current;
+    const isolation = isolationRootIdRef.current;
+    let current = byId.get(hitId);
+    let target = hitId;
+    while (current && current.id !== isolation) {
+      // Explicit Layers-panel selection permits direct manipulation of a child.
+      if (
+        directLayerSelectionRef.current.includes(current.id) &&
+        selectedNodeIdsRef.current.includes(current.id)
+      )
+        return current.id;
+      if (current.kind === "group") target = current.id;
+      current = current.parent_id ? byId.get(current.parent_id) : undefined;
+    }
+    return target;
+  }
+
   function selectCanvasPoint(
     clientX: number,
     clientY: number,
@@ -2139,7 +2266,10 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     const world = renderer.worldPointFromClient(clientX, clientY);
     const hitId = engine.hit_test(world.x, world.y);
     if (!hitId) {
-      if (!additive) applySelection([]);
+      if (!additive) {
+        directLayerSelectionRef.current = [];
+        applySelection([]);
+      }
       return;
     }
     const isolationId = isolationRootIdRef.current;
@@ -2148,12 +2278,11 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       !isNodeWithinRoot(hitId, isolationId, nodesByIdRef.current)
     )
       return;
-    const selectedAncestor = findSelectedAncestor(
-      hitId,
-      selectedNodeIdsRef.current,
-      documentModel.nodes,
-    );
-    selectNode(selectedAncestor ?? hitId, additive);
+    const targetId = canvasSelectionTarget(hitId);
+    // Pointer-down starts a drag as well as a click. Keep an existing multi-
+    // selection intact when grabbing any member of it.
+    if (!additive && selectedNodeIdsRef.current.includes(targetId)) return;
+    selectNode(targetId, additive);
   }
 
   function createInputHandlers(): EditorInputHandlers {
@@ -2183,9 +2312,27 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         if (!renderer || !engine) return;
         const world = renderer.worldPointFromClient(clientX, clientY);
         const id = engine.hit_test(world.x, world.y);
+        if (canvasSelectionTarget(id) !== id) return;
         const node = documentModelRef.current?.nodes.find(
           (item) => item.id === id,
         );
+        if (
+          node?.vector?.geometry.type === "path" &&
+          !node.locked &&
+          !node.instance_root_id
+        ) {
+          if (
+            !isolationRootIdRef.current &&
+            isComponentMasterNode(node.id, nodesByIdRef.current)
+          )
+            return;
+          applySelection([node.id]);
+          setPathSession({
+            node,
+            page: documentModelRef.current!.active_page_id,
+          });
+          return;
+        }
         if (node?.kind === "text" && node.text && !node.locked) {
           if (
             !isolationRootIdRef.current &&
@@ -2340,7 +2487,10 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
             }
             return true;
           });
-          const next = roots.map((node) => node.id);
+          directLayerSelectionRef.current = [];
+          const next = [
+            ...new Set(roots.map((node) => canvasSelectionTarget(node.id))),
+          ];
           applySelection(
             additive
               ? [...new Set([...selectedNodeIdsRef.current, ...next])]
@@ -2889,7 +3039,10 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
             stats={stats}
             model={isolatedModel}
             selectedNodeIds={selectedNodeIds}
-            onSelectNode={selectNode}
+            onSelectNode={(id, additive) => {
+              selectNode(id, additive);
+              directLayerSelectionRef.current = [...selectedNodeIdsRef.current];
+            }}
             onAddPage={addPage}
             onSelectPage={selectPage}
             onRenamePage={renamePage}
@@ -2969,15 +3122,51 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
             <ToolButton
               label="Select (V)"
               icon={<MousePointer2 />}
-              active={canvasTool === "select"}
+              active={canvasTool === "select" && !pathSession}
               disabled={mode !== "design"}
-              onClick={() => setCanvasTool("select")}
+              onClick={() => {
+                setPathSession(undefined);
+                setCanvasTool("select");
+              }}
+            />
+            <ToolButton
+              label="Pen tool"
+              icon={<PenTool />}
+              active={!!pathSession && !pathSession.node}
+              disabled={mode !== "design" || !!shared?.blocked}
+              onClick={() => {
+                setCanvasTool("select");
+                setPathSession({ page: documentModel.active_page_id });
+              }}
+            />
+            <ToolButton
+              label="Edit path"
+              icon={<Spline />}
+              active={!!pathSession?.node}
+              disabled={
+                mode !== "design" ||
+                !!shared?.blocked ||
+                selectedNodes.length !== 1 ||
+                selectedNodes[0]?.vector?.geometry.type !== "path" ||
+                selectedNodes[0]?.locked ||
+                (!!selectedMasterRoot && !isolationRootId) ||
+                !!selectedNodes[0]?.instance_root_id
+              }
+              onClick={() =>
+                setPathSession({
+                  node: selectedNodes[0],
+                  page: documentModel.active_page_id,
+                })
+              }
             />
             <ToolButton
               label="Hand (H)"
               icon={<Hand />}
               active={canvasTool === "hand"}
-              onClick={() => setCanvasTool("hand")}
+              onClick={() => {
+                setPathSession(undefined);
+                setCanvasTool("hand");
+              }}
             />
             <ToolButton
               label="Artboard"
@@ -3096,6 +3285,8 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
             <SelectionOverlay
               rendererRef={rendererRef}
               selected={selectedNodes}
+              nodes={documentModel.nodes}
+              assets={documentModel.media_assets}
             />
             {marqueeRect && (
               <div className="selection-marquee" style={marqueeRect} />
@@ -3148,6 +3339,18 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
               nodes={documentModel.nodes}
               selected={selectedNodes}
             />
+            {pathSession &&
+              pathSession.page === documentModel.active_page_id &&
+              mode === "design" &&
+              !shared?.blocked && (
+                <PathEditor
+                  key={`${pathSession.page}:${pathSession.node?.id ?? "new"}`}
+                  rendererRef={rendererRef}
+                  node={pathSession.node}
+                  onCommit={commitPath}
+                  onClose={() => setPathSession(undefined)}
+                />
+              )}
             {editingTextNode?.text && (
               <textarea
                 className="text-editor-overlay"
@@ -3279,6 +3482,16 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
                   onAlign={alignSelected}
                   onDelete={deleteSelected}
                   onGroup={groupSelected}
+                  onMask={maskSelected}
+                  onReleaseMask={releaseMask}
+                  hasMask={
+                    selectedNodes.length === 1 &&
+                    documentModel.nodes.some(
+                      (node) =>
+                        node.parent_id === selectedNodes[0].id &&
+                        node.mask_shape,
+                    )
+                  }
                   onUngroup={ungroupSelected}
                   onExportFrame={(node, scale) =>
                     void exportSelectedFrame(node, scale)
@@ -3292,6 +3505,9 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
                   onVectorParametersChange={updateVectorParameters}
                   onVectorFillRuleChange={updateVectorFillRule}
                   onVectorConvertToPath={convertVectorToPath}
+                  onEditPath={(node) =>
+                    setPathSession({ node, page: documentModel.active_page_id })
+                  }
                   onExportVector={exportSelectedVector}
                   onStyleChange={updateNodeStyle}
                   onBoundsChange={updateNodeBounds}

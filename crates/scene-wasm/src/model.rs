@@ -94,6 +94,8 @@ pub struct Node {
     pub(crate) name: String,
     pub(crate) kind: NodeKind,
     pub(crate) parent_id: Option<EntityId>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) mask_shape: bool,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) width: f32,
@@ -489,4 +491,8 @@ pub(crate) struct PageSummary<'a> {
     pub(crate) name: &'a str,
     pub(crate) description: &'a str,
     pub(crate) benchmark_node_count: Option<usize>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }

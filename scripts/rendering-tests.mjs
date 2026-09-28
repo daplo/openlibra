@@ -6,7 +6,7 @@ export async function testRendering(browser, url) {
   const bundle = await build({
     stdin: {
       contents:
-        'export * from "./apps/web/src/editor/scene-painter"; export * from "./apps/web/src/editor/export-frame"; export * from "./apps/web/src/editor/scene-tiles";',
+        'export * from "./apps/web/src/editor/scene-painter"; export * from "./apps/web/src/editor/masked-selection"; export * from "./apps/web/src/editor/export-frame"; export * from "./apps/web/src/editor/scene-tiles";',
       resolveDir: process.cwd(),
     },
     bundle: true,
@@ -245,6 +245,58 @@ export async function testRendering(browser, url) {
         inkTop(2, "middle", "Send\nRequest") -
         inkTop(2, "top", "Send\nRequest"),
     };
+    const masked = [
+      frame,
+      node("mask-group", {
+        kind: "group",
+        parent_id: frame.id,
+        width: 200,
+        height: 160,
+        fill: [0, 0, 0, 0],
+        opacity: 0.5,
+      }),
+      node("masked-art", { parent_id: "mask-group", width: 200, height: 160 }),
+      node("mask-shape", {
+        kind: "vector",
+        parent_id: "mask-group",
+        mask_shape: true,
+        x: 50,
+        y: 40,
+        width: 100,
+        height: 80,
+        rotation: 30,
+        fill: [0, 1, 0, 1],
+        vector: { geometry: { type: "ellipse" }, fill_rule: "nonzero" },
+      }),
+    ];
+    ctx.clearRect(0, 0, 200, 160);
+    sceneTest.paintScene(ctx, masked, [], new Map());
+    const maskSamples = [pixel(100, 80), pixel(10, 10)];
+    // Bounds follow the actual overlap, not the mask box or hidden artwork.
+    const partial = masked.map((n) => ({ ...n }));
+    partial[2] = { ...partial[2], x: 90, y: 0, width: 15, height: 160 };
+    const visibleMaskBounds = await sceneTest.maskedSelectionBounds(
+      partial[1],
+      partial,
+      [],
+    );
+    partial[2] = { ...partial[2], x: 500 };
+    const emptyMaskBounds = await sceneTest.maskedSelectionBounds(
+      partial[1],
+      partial,
+      [],
+    );
+    const maskPixels = ctx.getImageData(0, 0, 200, 160).data;
+    const maskPng = await createImageBitmap(
+      await sceneTest.renderFramePng(frame, masked, [], 1),
+    );
+    ctx.clearRect(0, 0, 200, 160);
+    ctx.drawImage(maskPng, 0, 0);
+    maskPng.close();
+    const pngPixels = ctx.getImageData(0, 0, 200, 160).data;
+    const maskExportMatches = maskPixels.every(
+      (value, index) => value === pngPixels[index],
+    );
     return {
       samples,
       difference,
@@ -252,8 +304,25 @@ export async function testRendering(browser, url) {
       missingRejected,
       effectSamples,
       textOffsets,
+      maskSamples,
+      visibleMaskBounds,
+      emptyMaskBounds,
+      maskExportMatches,
     };
   });
+  assert.ok(Math.abs(result.visibleMaskBounds.x - 90) < 1);
+  assert.ok(Math.abs(result.visibleMaskBounds.width - 15) < 1);
+  assert.ok(result.visibleMaskBounds.height < 100);
+  assert.equal(result.emptyMaskBounds, null);
+  assert.deepEqual(result.maskSamples, [
+    [255, 127, 127, 255],
+    [255, 255, 255, 255],
+  ]);
+  assert.equal(
+    result.maskExportMatches,
+    true,
+    "Masked PNG must match canvas pixels",
+  );
   assert.deepEqual(result.samples, [
     [255, 0, 0, 255],
     [0, 0, 255, 255],

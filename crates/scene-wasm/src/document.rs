@@ -1040,6 +1040,7 @@ impl Document {
             name: name.into(),
             kind,
             parent_id,
+            mask_shape: false,
             x: bounds[0],
             y: bounds[1],
             width: bounds[2],
@@ -1590,7 +1591,21 @@ impl Document {
             if nodes_by_id.len() != page.nodes.len() {
                 return Err(format!("Page {} contains duplicate node IDs", page.id));
             }
+            let mut mask_parents = HashSet::new();
             for node in &page.nodes {
+                if node.mask_shape {
+                    if !crate::edit::mask_geometry_supported(node) {
+                        return Err("Mask source must be a closed shape".into());
+                    }
+                    if let Some(parent) = node.parent_id
+                        && nodes_by_id
+                            .get(&parent)
+                            .is_some_and(|n| n.kind == NodeKind::Group)
+                        && !mask_parents.insert(parent)
+                    {
+                        return Err("A group can have only one mask shape".into());
+                    }
+                }
                 if node.id.is_nil()
                     || ![
                         node.x,
@@ -1825,6 +1840,7 @@ fn benchmark_node(id: EntityId, index: usize, columns: usize) -> Node {
     Node {
         id,
         name: format!("Node {}", index + 1),
+        mask_shape: false,
         kind: NodeKind::Rectangle,
         parent_id: None,
         x: column as f32 * 16.0,

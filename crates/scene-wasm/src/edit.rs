@@ -576,6 +576,56 @@ impl Document {
         Some(group_id)
     }
 
+    pub(crate) fn mask_nodes(&mut self, ids: &[EntityId]) -> Option<EntityId> {
+        let selected: Vec<_> = self
+            .active_page()
+            .nodes
+            .iter()
+            .filter(|n| ids.contains(&n.id))
+            .collect();
+        let source = *selected.last()?;
+        if selected.len() < 2
+            || selected.iter().any(|n| {
+                n.parent_id != source.parent_id
+                    || n.mask_shape
+                    || n.locked
+                    || n.instance_root_id.is_some()
+                    || n.component_id.is_some()
+            })
+            || !mask_geometry_supported(source)
+        {
+            return None;
+        }
+        let source_id = source.id;
+        let group = self.group_nodes(ids)?;
+        self.active_node_mut(group)?.name = "Mask group".into();
+        self.active_node_mut(source_id)?.mask_shape = true;
+        // Keep unrelated siblings above the selection above the mask group.
+        let nodes = &mut self.active_page_mut().nodes;
+        let group_index = nodes.iter().position(|n| n.id == group)?;
+        let group_node = nodes.remove(group_index);
+        let source_index = nodes.iter().position(|n| n.id == source_id)?;
+        nodes.insert(source_index + 1, group_node);
+        Some(group)
+    }
+
+    pub(crate) fn release_mask(&mut self, group_id: EntityId) -> bool {
+        if !self
+            .active_node(group_id)
+            .is_some_and(|n| n.kind == NodeKind::Group && !n.locked)
+        {
+            return false;
+        }
+        let mut changed = false;
+        for node in &mut self.active_page_mut().nodes {
+            if node.parent_id == Some(group_id) && node.mask_shape {
+                node.mask_shape = false;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn ungroup_nodes(&mut self, group_id: EntityId) -> bool {
         let Some(group) = self.active_node(group_id) else {
             return false;
@@ -593,6 +643,7 @@ impl Document {
         for node in &mut page.nodes {
             if node.parent_id == Some(group_id) {
                 node.parent_id = parent_id;
+                node.mask_shape = false;
             }
         }
         page.nodes.retain(|node| node.id != group_id);
@@ -1597,7 +1648,7 @@ impl Document {
     }
 }
 
-fn contours_for_geometry(geometry: &VectorGeometry) -> Option<Vec<VectorContour>> {
+pub(crate) fn contours_for_geometry(geometry: &VectorGeometry) -> Option<Vec<VectorContour>> {
     let points = match geometry {
         VectorGeometry::Ellipse => {
             let kappa = 0.552_284_8;
@@ -1700,4 +1751,16 @@ fn normalize_typography(mut style: TypographyStyle) -> TypographyStyle {
     style.line_height = style.line_height.clamp(0.5, 5.0);
     style.letter_spacing = style.letter_spacing.clamp(-20.0, 100.0);
     style
+}
+
+pub(crate) fn mask_geometry_supported(node: &Node) -> bool {
+    node.kind == NodeKind::Rectangle
+        || (node.kind == NodeKind::Vector
+            && node.vector.as_ref().is_some_and(|v| match &v.geometry {
+                VectorGeometry::Line => false,
+                VectorGeometry::Path { contours } => {
+                    !contours.is_empty() && contours.iter().all(|c| c.closed && c.points.len() >= 3)
+                }
+                _ => true,
+            }))
 }

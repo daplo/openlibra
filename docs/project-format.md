@@ -109,3 +109,9 @@ creates a new room/document lineage with a fresh baseline, owner and invitations
 Source node IDs are retained but old actor history is not inherited. Current shared
 restoration is limited to single-page flat rectangle documents. See
 [the collaboration storage contract](collaboration-prototype.md#persistence-contract).
+
+## Shape masks
+
+A shape node can carry optional `mask_shape: true` (absent means false). Within a group, that direct child supplies the clipping geometry for all other children and is not painted itself. There is at most one mask source per group. Supported sources are rectangles, ellipses, polygons, stars, and closed native paths; paths preserve their fill rule. Source fill, stroke, and opacity do not affect the geometric mask. Transforms and descendants continue to use resolved world coordinates.
+
+**Use as mask** groups selected siblings and marks the topmost selected shape. **Release mask** clears the flag and keeps the editable group and artwork. Ungrouping clears the flag on promoted children; deleting the source also removes clipping. Canvas and frame PNG share the mask renderer. Native save/reopen and shared entity/property operations preserve the flag. This is geometric clipping, not raster alpha/luminance masking; group SVG export remains unsupported.

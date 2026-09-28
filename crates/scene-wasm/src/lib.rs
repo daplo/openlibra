@@ -522,6 +522,82 @@ impl DocumentEngine {
         .to_string()
     }
 
+    /// Commit a complete path as one undoable operation. Coordinates are normalized
+    /// to the supplied bounds, matching native files and SVG export.
+    pub fn add_path(
+        &mut self,
+        contours_json: String,
+        bounds_json: String,
+        parent_id: String,
+    ) -> String {
+        let Ok(contours) = serde_json::from_str::<Vec<VectorContour>>(&contours_json) else {
+            return String::new();
+        };
+        let Ok(bounds) = serde_json::from_str::<[f32; 4]>(&bounds_json) else {
+            return String::new();
+        };
+        if !valid_path(&contours)
+            || bounds.iter().any(|v| !v.is_finite())
+            || bounds[2] < 1.0
+            || bounds[3] < 1.0
+        {
+            return String::new();
+        }
+        let parent = parse_entity_id(&parent_id);
+        self.mutate(|document| {
+            let id = document.add_vector_shape(
+                VectorGeometry::Path { contours },
+                (!parent.is_nil()).then_some(parent),
+            );
+            let node = document.active_node_mut(id).unwrap();
+            [node.x, node.y, node.width, node.height] = bounds;
+            node.name = "Path".into();
+            node.stroke_align = StrokeAlign::Center;
+            node.rotation = 0.0;
+            node.flip_x = false;
+            node.flip_y = false;
+            node.fill = [0.0; 4];
+            node.stroke = [0.12, 0.65, 0.44, 1.0];
+            node.stroke_width = 2.0;
+            id
+        })
+        .to_string()
+    }
+
+    pub fn update_path(&mut self, node_id: String, contours_json: String) -> bool {
+        let Ok(contours) = serde_json::from_str::<Vec<VectorContour>>(&contours_json) else {
+            return false;
+        };
+        if !valid_path(&contours) {
+            return false;
+        }
+        let id = parse_entity_id(&node_id);
+        self.mutate(|document| {
+            let Some(node) = document.active_node_mut(id) else {
+                return false;
+            };
+            if node.locked || node.kind != NodeKind::Vector {
+                return false;
+            }
+            if node.mask_shape && contours.iter().any(|c| !c.closed || c.points.len() < 3) {
+                return false;
+            }
+            let Some(vector) = &mut node.vector else {
+                return false;
+            };
+            if !matches!(vector.geometry, VectorGeometry::Path { .. }) {
+                return false;
+            }
+            let next = VectorGeometry::Path { contours };
+            if vector.geometry == next {
+                return false;
+            }
+            vector.geometry = next;
+            expand_path_bounds(node);
+            true
+        })
+    }
+
     pub fn update_vector_parameters(
         &mut self,
         node_id: String,
@@ -621,6 +697,19 @@ impl DocumentEngine {
     pub fn delete_page(&mut self, page_id: String) -> bool {
         let page_id = parse_entity_id(&page_id);
         self.mutate(|document| document.delete_page(page_id))
+    }
+
+    pub fn mask_nodes(&mut self, node_ids_json: &str) -> String {
+        let Ok(ids) = serde_json::from_str::<Vec<EntityId>>(node_ids_json) else {
+            return String::new();
+        };
+        self.mutate(|document| document.mask_nodes(&ids))
+            .map_or_else(String::new, |id| id.to_string())
+    }
+
+    pub fn release_mask(&mut self, group_id: String) -> bool {
+        let id = parse_entity_id(&group_id);
+        self.mutate(|document| document.release_mask(id))
     }
 
     pub fn ungroup_nodes(&mut self, group_id: String) -> bool {
@@ -1466,6 +1555,12 @@ impl DocumentEngine {
         let page = self.document.active_page();
         let by_id: std::collections::HashMap<_, _> =
             page.nodes.iter().map(|node| (node.id, node)).collect();
+        let masks: std::collections::HashMap<_, _> = page
+            .nodes
+            .iter()
+            .filter(|n| n.mask_shape)
+            .filter_map(|n| n.parent_id.map(|id| (id, n)))
+            .collect();
         ordered_nodes(page)
             .into_iter()
             .rev()
@@ -1479,7 +1574,11 @@ impl DocumentEngine {
                 }
                 let mut current = Some(*node);
                 while let Some(ancestor) = current {
-                    if ancestor.opacity <= 0.0
+                    if (ancestor.kind == NodeKind::Group
+                        && masks
+                            .get(&ancestor.id)
+                            .is_some_and(|mask| !geometry::point_in_mask(mask, x, y)))
+                        || ancestor.opacity <= 0.0
                         || (ancestor.kind == NodeKind::Frame
                             && !geometry::point_in_frame(ancestor, x, y))
                     {
@@ -1652,3 +1751,66 @@ mod tests;
 
 #[cfg(test)]
 mod operation_tests;
+
+fn valid_path(contours: &[VectorContour]) -> bool {
+    !contours.is_empty()
+        && contours.len() <= 1024
+        && contours.iter().all(|c| {
+            c.points.len() >= 2
+                && c.points.len() <= 10000
+                && c.points.iter().all(|p| {
+                    p.position
+                        .iter()
+                        .chain(p.handle_in.iter().flatten())
+                        .chain(p.handle_out.iter().flatten())
+                        .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                })
+        })
+}
+
+// Keep moved handles/anchors selectable outside the original box while preserving
+// their world positions under rotation and reflection.
+fn expand_path_bounds(node: &mut Node) {
+    let Some(VectorData {
+        geometry: VectorGeometry::Path { contours },
+        ..
+    }) = &mut node.vector
+    else {
+        return;
+    };
+    let (mut left, mut top, mut right, mut bottom) = (0.0_f32, 0.0_f32, 1.0_f32, 1.0_f32);
+    for point in contours.iter().flat_map(|c| &c.points) {
+        for p in std::iter::once(&point.position)
+            .chain(point.handle_in.iter())
+            .chain(point.handle_out.iter())
+        {
+            left = left.min(p[0]);
+            top = top.min(p[1]);
+            right = right.max(p[0]);
+            bottom = bottom.max(p[1]);
+        }
+    }
+    if left == 0.0 && top == 0.0 && right == 1.0 && bottom == 1.0 {
+        return;
+    }
+    let width = node.width * (right - left);
+    let height = node.height * (bottom - top);
+    let dx =
+        (left * node.width + width / 2.0 - node.width / 2.0) * if node.flip_x { -1.0 } else { 1.0 };
+    let dy = (top * node.height + height / 2.0 - node.height / 2.0)
+        * if node.flip_y { -1.0 } else { 1.0 };
+    let angle = node.rotation.to_radians();
+    node.x += node.width / 2.0 + dx * angle.cos() - dy * angle.sin() - width / 2.0;
+    node.y += node.height / 2.0 + dx * angle.sin() + dy * angle.cos() - height / 2.0;
+    node.width = width;
+    node.height = height;
+    for point in contours.iter_mut().flat_map(|c| &mut c.points) {
+        for p in std::iter::once(&mut point.position)
+            .chain(point.handle_in.iter_mut())
+            .chain(point.handle_out.iter_mut())
+        {
+            p[0] = (p[0] - left) / (right - left);
+            p[1] = (p[1] - top) / (bottom - top);
+        }
+    }
+}

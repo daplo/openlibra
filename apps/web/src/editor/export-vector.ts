@@ -1,3 +1,4 @@
+import { localGeometryBounds } from "./scene-bounds";
 import { rgbaToHex } from "./model-utils";
 import type { NodeSummary, VectorPoint } from "./types";
 
@@ -5,7 +6,14 @@ export function exportVectorSvg(node: NodeSummary) {
   if (node.kind !== "vector" || !node.vector)
     throw new Error("Select a vector to export.");
   const geometry = vectorMarkup(node);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${node.width} ${node.height}" width="${node.width}" height="${node.height}">${geometry}</svg>`;
+  const bounds = localGeometryBounds(node);
+  const margin =
+    node.stroke_width > 0 && node.stroke[3] > 0 ? node.stroke_width / 2 : 0;
+  const x = bounds.left - margin,
+    y = bounds.top - margin;
+  const width = bounds.right - bounds.left + margin * 2,
+    height = bounds.bottom - bounds.top + margin * 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${width} ${height}" width="${width}" height="${height}">${geometry}</svg>`;
   const blob = new Blob([svg], { type: "image/svg+xml" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -19,7 +27,7 @@ function vectorMarkup(node: NodeSummary) {
   const vector = node.vector!;
   const fill = rgbaToHex(node.fill);
   const stroke = node.stroke_width > 0 ? rgbaToHex(node.stroke) : "none";
-  const style = `fill="${fill}" fill-opacity="${node.fill[3] ?? 1}" stroke="${stroke}" stroke-opacity="${node.stroke[3] ?? 1}" stroke-width="${node.stroke_width}" opacity="${node.opacity}" fill-rule="${vector.fill_rule}"`;
+  const style = `fill="${fill}" fill-opacity="${node.fill[3] ?? 1}" stroke="${stroke}" stroke-opacity="${node.stroke[3] ?? 1}" stroke-width="${node.stroke_width}" stroke-linejoin="${node.stroke_join === "round" ? "round" : "miter"}" opacity="${node.opacity}" fill-rule="${vector.fill_rule}"`;
   const geometry = vector.geometry;
   if (geometry.type === "ellipse")
     return `<ellipse cx="${node.width / 2}" cy="${node.height / 2}" rx="${node.width / 2}" ry="${node.height / 2}" ${style}/>`;

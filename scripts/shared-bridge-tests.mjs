@@ -180,6 +180,63 @@ export async function testSharedBridge(browser, url, server) {
           room.token,
         );
         await wait(() => cb.role === "editor");
+        const contours = [
+          {
+            closed: false,
+            points: [
+              {
+                position: [0, 0],
+                handle_out: [0.25, 0.5],
+                point_type: "smooth",
+              },
+              { position: [1, 1], point_type: "corner" },
+            ],
+          },
+        ];
+        const path = a.engine.add_path(
+          JSON.stringify(contours),
+          "[50,50,120,80]",
+          "",
+        );
+        await settled(6);
+        if (!JSON.parse(b.engine.node_json(path)).vector)
+          throw Error("Pen path did not synchronize");
+        contours[0].points[0].position = [0.1, 0.2];
+        b.engine.update_path(path, JSON.stringify(contours));
+        await settled(7);
+        if (
+          JSON.parse(a.engine.node_json(path)).vector.geometry.contours[0]
+            .points[0].position[0] < 0.09
+        )
+          throw Error("Anchor edit did not synchronize");
+        b.engine.undo();
+        await settled(8);
+        if (
+          JSON.parse(a.engine.node_json(path)).vector.geometry.contours[0]
+            .points[0].position[0] !== 0
+        )
+          throw Error("Anchor undo did not synchronize");
+        a.engine.begin_transaction();
+        const maskContent = a.engine.add_rectangle();
+        const maskSource = a.engine.add_vector_shape("ellipse", "");
+        const maskGroup = a.engine.mask_nodes(
+          JSON.stringify([maskContent, maskSource]),
+        );
+        a.engine.end_transaction();
+        await settled(9);
+        if (
+          !maskGroup ||
+          !JSON.parse(b.engine.node_json(maskSource)).mask_shape
+        )
+          throw Error("Mask did not synchronize");
+        b.engine.release_mask(maskGroup);
+        await settled(10);
+        if (JSON.parse(a.engine.node_json(maskSource)).mask_shape)
+          throw Error("Mask release did not synchronize");
+        b.engine.undo();
+        await settled(11);
+        if (!JSON.parse(a.engine.node_json(maskSource)).mask_shape)
+          throw Error("Mask undo did not synchronize");
         // Reconnect replaces the working head, with no local journal contamination.
         const before = ca.engine.document_json();
         const loaded = DocumentEngine.load_json(before);
@@ -207,7 +264,7 @@ export async function testSharedBridge(browser, url, server) {
     scopedUndo: true,
     conflict: true,
     downgrade: true,
-    revision: 5,
+    revision: 11,
   });
   await page.close();
 }

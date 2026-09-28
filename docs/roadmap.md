@@ -2,7 +2,7 @@
 
 The current MVP delivery checklist and priority order are in [mvp.md](mvp.md).
 
-Updated: 2026-09-27.
+Updated: 2026-09-28.
 
 Open Libra combines interface design, vector illustration and team collaboration
 in one editable document. The goal is to draw an asset, reuse it in a responsive
@@ -20,8 +20,10 @@ text styles, numeric variables, components with named variants, images/icons,
 vector primitives, `.libra` files, browser autosave, partial Figma import, frame PNG
 export and single-vector SVG export.
 
-Pen and anchor editing, complete responsive layout, shared libraries, a collaboration
-backend, permissions, working comments and interactive prototypes remain unfinished
+Pen drawing and single-anchor editing now support native paths, undo, saved files,
+SVG export and shared replay. The development collaboration service and editor
+permissions are implemented. Complete responsive layout, shared libraries,
+recoverable accounts, working comments and interactive prototypes remain unfinished
 or absent. Existing foundations should be extended, with their limitations resolved
 before marking a complete workflow delivered.
 
@@ -120,7 +122,7 @@ inside it, using a coherent set of tools.
 
 ### Vector authoring
 
-- [ ] Draw open/closed Bezier paths with pen tools and edit anchors/handles directly.
+- [x] Draw open/closed Bezier paths with pen tools and edit individual anchors/handles directly.
 - [ ] Add editable union, subtract, intersect and exclude operations plus compound paths.
 - [ ] Add gradient editing, multiple paints, stroke controls and clipping masks.
 - [ ] Import supported SVG as editable geometry and export it with explicit conversion limits.
