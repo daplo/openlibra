@@ -201,14 +201,18 @@ fn shape(node: &Node) -> Result<Shapes, String> {
     let mut paths: Vec<Vec<Point>> = vec![];
     if node.kind == NodeKind::Rectangle {
         let mut r = node.corner_radii.map(|v| v as f64);
-        let factor = [
+    let factor = if r.iter().all(|radius| *radius == 0.0) {
+        1.0
+    } else {
+        [
             w / (r[0] + r[1]),
             w / (r[2] + r[3]),
             h / (r[0] + r[3]),
             h / (r[1] + r[2]),
         ]
         .into_iter()
-        .fold(1.0, f64::min);
+        .fold(1.0, f64::min)
+    };
         for v in &mut r {
             *v *= factor;
         }
