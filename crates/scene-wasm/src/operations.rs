@@ -329,6 +329,9 @@ impl Session {
                 return Err("Journal effects do not match deterministic replay".into());
             }
         }
+        // Navigation is excluded from replay. Matching heads can be compared
+        // directly without allocating two complete JSON property maps.
+        current.active_page_id = head.active_page_id;
         if !operation_patch::diff(&current, head).is_empty() {
             return Err("Document does not match its operation journal".into());
         }

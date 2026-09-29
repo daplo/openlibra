@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { automation } from "./automation/api.mjs";
@@ -42,6 +42,64 @@ try {
     dx: 10,
     dy: 20,
   };
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "libra-outside-"));
+  try {
+    const external = path.join(outside, "edits.json");
+    fs.writeFileSync(external, JSON.stringify([move]));
+    fs.symlinkSync(external, path.join(root, "escaped-edits.json"));
+    fs.symlinkSync(outside, path.join(root, "escaped-directory"));
+    assert.throws(
+      () => api.readOperations({ file: "escaped-directory/edits.json" }),
+      /workspace root/,
+    );
+    for (const operations of [
+      external,
+      path.relative(root, external),
+      "escaped-edits.json",
+    ]) {
+      const rejected = spawnSync(
+        process.execPath,
+        [
+          "scripts/openlibra.mjs",
+          "apply",
+          "test.libra",
+          "--root",
+          root,
+          "--operations",
+          operations,
+          "--expected-sha256",
+          added.sha256,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(rejected.status, 1);
+      assert.match(rejected.stderr, /workspace root/);
+      assert.equal(api.inspect({ file: "test.libra" }).sha256, added.sha256);
+    }
+    fs.writeFileSync(path.join(root, "edits.json"), JSON.stringify([move]));
+    const accepted = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "scripts/openlibra.mjs",
+          "apply",
+          "test.libra",
+          "--root",
+          root,
+          "--operations",
+          "edits.json",
+          "--expected-sha256",
+          added.sha256,
+          "--output",
+          "cli-copy.libra",
+        ],
+        { encoding: "utf8" },
+      ),
+    );
+    assert.equal(accepted.revision, 2);
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
   const before = fs.readFileSync(path.join(root, "test.libra"), "utf8");
   assert.throws(() =>
     api.apply({

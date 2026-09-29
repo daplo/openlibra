@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { readFileSync } from "node:fs";
 import { automation } from "./automation/api.mjs";
 
 try {
@@ -67,7 +66,7 @@ Build prerequisite: npm run build:collaboration`);
           file,
           output: values.output,
           expected_sha256: values["expected-sha256"],
-          commands: JSON.parse(readFileSync(values.operations, "utf8")),
+          commands: api.readOperations({ file: values.operations }),
         });
         break;
       default:

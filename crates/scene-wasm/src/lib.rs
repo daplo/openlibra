@@ -353,6 +353,8 @@ pub struct DocumentEngine {
     geometry_transaction_start: Option<HistoryEntry>,
     operation_session: Option<operations::Session>,
     operation_error: Option<String>,
+    // Moved, never cloned: the saved project is parked while a temporary scene is active.
+    benchmark_project: Option<Box<DocumentEngine>>,
 }
 
 #[wasm_bindgen]
@@ -368,6 +370,7 @@ impl DocumentEngine {
             geometry_transaction_start: None,
             operation_session: None,
             operation_error: None,
+            benchmark_project: None,
         }
     }
 
@@ -381,7 +384,34 @@ impl DocumentEngine {
             geometry_transaction_start: None,
             operation_session: None,
             operation_error: None,
+            benchmark_project: None,
         }
+    }
+
+    /// Temporary scenes have no journal and are never part of a project snapshot.
+    pub fn start_benchmark(&mut self, node_count: usize) -> bool {
+        if ![1_000, 10_000, 50_000, 100_000].contains(&node_count) {
+            return false;
+        }
+        self.end_benchmark();
+        self.end_transaction();
+        let mut scene = Self::new_blank();
+        scene.document = Document::benchmark(node_count);
+        let project = std::mem::replace(self, scene);
+        self.benchmark_project = Some(Box::new(project));
+        true
+    }
+
+    pub fn end_benchmark(&mut self) -> bool {
+        let Some(project) = self.benchmark_project.take() else {
+            return false;
+        };
+        *self = *project;
+        true
+    }
+
+    pub fn is_benchmark(&self) -> bool {
+        self.benchmark_project.is_some()
     }
 
     pub fn scene_data(&self) -> Vec<f32> {
@@ -397,23 +427,73 @@ impl DocumentEngine {
     }
 
     pub fn read_model_json(&self) -> String {
-        serde_json::to_string(&self.document.read_model()).expect("read model is serializable")
+        let mut model = self.document.read_model();
+        if let Some(project) = &self.benchmark_project {
+            let mut pages = project.document.read_model().pages;
+            pages.append(&mut model.pages);
+            model.pages = pages;
+        }
+        serde_json::to_string(&model).expect("read model is serializable")
+    }
+
+    /// Metadata/previews for persistence must describe the project, not a temporary scene.
+    pub fn project_read_model_json(&self) -> String {
+        self.benchmark_project.as_ref().map_or_else(
+            || self.read_model_json(),
+            |project| project.read_model_json(),
+        )
+    }
+
+    /// Identity of the committed snapshot exposed by document_json. Untracked
+    /// engines deliberately return no key so callers cannot cache mutable state.
+    pub fn document_snapshot_key(&self) -> String {
+        if let Some(project) = &self.benchmark_project {
+            return project.document_snapshot_key();
+        }
+        let Some(session) = &self.operation_session else {
+            return String::new();
+        };
+        let document = self.transaction_start.as_ref().unwrap_or(&self.document);
+        format!(
+            "{}:{}:{}",
+            session.journal.document_id,
+            session.revision(),
+            document.active_page_id
+        )
     }
 
     pub fn document_json(&self) -> String {
-        let mut value = serde_json::to_value(if self.operation_session.is_some() {
+        if let Some(project) = &self.benchmark_project {
+            return project.document_json();
+        }
+        #[derive(serde::Serialize)]
+        struct Snapshot<'a> {
+            #[serde(flatten)]
+            document: &'a Document,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            operation_history: Option<&'a operations::Journal>,
+        }
+        let document = if self.operation_session.is_some() {
             self.transaction_start.as_ref().unwrap_or(&self.document)
         } else {
             &self.document
+        };
+        serde_json::to_string(&Snapshot {
+            document,
+            operation_history: self
+                .operation_session
+                .as_ref()
+                .map(|session| &session.journal),
         })
-        .expect("document is serializable");
-        if let Some(session) = &self.operation_session {
-            value["operation_history"] = serde_json::to_value(&session.journal).unwrap();
-        }
-        value.to_string()
+        .expect("document is serializable")
     }
 
     pub fn enable_operations(&mut self, actor_id: &str) -> Result<(), JsValue> {
+        if self.is_benchmark() {
+            return Err(JsValue::from_str(
+                "Temporary stress tests cannot join collaboration",
+            ));
+        }
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             return Err(JsValue::from_str(
                 "Finish the active transaction before changing actor",
@@ -687,15 +767,18 @@ impl DocumentEngine {
     }
 
     pub fn add_page(&mut self, name: String) -> String {
+        self.end_benchmark();
         self.mutate(|document| document.add_page(name)).to_string()
     }
 
     pub fn rename_page(&mut self, page_id: String, name: String) -> bool {
+        self.end_benchmark();
         let page_id = parse_entity_id(&page_id);
         self.mutate(|document| document.rename_page(page_id, name))
     }
 
     pub fn delete_page(&mut self, page_id: String) -> bool {
+        self.end_benchmark();
         let page_id = parse_entity_id(&page_id);
         self.mutate(|document| document.delete_page(page_id))
     }
@@ -706,7 +789,8 @@ impl DocumentEngine {
         let mode: BooleanOperation =
             serde_json::from_value(serde_json::Value::String(operation.into()))
                 .map_err(|_| JsValue::from_str("Unknown boolean operation"))?;
-        self.mutate(|d| d.create_boolean(&ids, mode))
+        self.try_mutate(|d| d.create_boolean(&ids, mode))
+            .and_then(|result| result)
             .map(|id| id.to_string())
             .map_err(|e| JsValue::from_str(&e))
     }
@@ -718,7 +802,7 @@ impl DocumentEngine {
             return false;
         };
         let id = parse_entity_id(&id);
-        self.mutate(|d| {
+        self.try_mutate(|d| {
             let Some(node) = d.active_node_mut(id) else {
                 return false;
             };
@@ -728,11 +812,12 @@ impl DocumentEngine {
             node.boolean_operation = Some(mode);
             true
         })
+        .unwrap_or(false)
     }
 
     pub fn release_boolean(&mut self, id: String) -> bool {
         let id = parse_entity_id(&id);
-        self.mutate(|d| {
+        self.try_mutate(|d| {
             let Some(node) = d.active_node_mut(id) else {
                 return false;
             };
@@ -740,6 +825,7 @@ impl DocumentEngine {
                 return false;
             }
             node.boolean_operation = None;
+            node.boolean_operands.clear();
             node.vector = None;
             node.fill = [0.0; 4];
             node.stroke_width = 0.0;
@@ -747,6 +833,7 @@ impl DocumentEngine {
             node.name = "Group".into();
             true
         })
+        .unwrap_or(false)
     }
 
     pub fn mask_nodes(&mut self, node_ids_json: &str) -> String {
@@ -858,7 +945,28 @@ impl DocumentEngine {
     }
 
     pub fn set_active_page(&mut self, page_id: String) -> bool {
-        self.mutate(|document| document.set_active_page(parse_entity_id(&page_id)))
+        if let Some(project) = &self.benchmark_project {
+            if !project
+                .document
+                .pages
+                .iter()
+                .any(|page| page.id.to_string() == page_id)
+            {
+                return false;
+            }
+            self.end_benchmark();
+        }
+        let page_id = parse_entity_id(&page_id);
+        let Some(page) = self.document.pages.iter().find(|page| page.id == page_id) else {
+            return false;
+        };
+        if page.benchmark_node_count.is_some() && page.nodes.is_empty() {
+            // Initial lazy benchmark generation adds real nodes and must be
+            // journaled. Ordinary navigation changes only local view state.
+            return self.mutate(|document| document.set_active_page(page_id));
+        }
+        self.document.active_page_id = page_id;
+        true
     }
 
     pub fn delete_node(&mut self, node_id: String) -> bool {
@@ -1447,12 +1555,18 @@ impl DocumentEngine {
     }
 
     pub fn begin_transaction(&mut self) {
+        if self.is_benchmark() {
+            return;
+        }
         if self.transaction_start.is_none() {
             self.transaction_start = Some(self.document.clone());
         }
     }
 
     pub fn begin_geometry_transaction(&mut self, node_ids_json: &str) -> Result<(), JsValue> {
+        if self.is_benchmark() {
+            return Ok(());
+        }
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             return Ok(());
         }
@@ -1506,6 +1620,9 @@ impl DocumentEngine {
     }
 
     pub fn end_transaction(&mut self) {
+        if self.is_benchmark() {
+            return;
+        }
         if let Some(before) = self.transaction_start.take() {
             if component_source_changed(&before, &self.document) {
                 self.document.sync_component_instances();
@@ -1661,30 +1778,44 @@ impl DocumentEngine {
 
     pub fn load_json(json: &str) -> Result<DocumentEngine, JsValue> {
         console_error_panic_hook::set_once();
-        let mut value: serde_json::Value = serde_json::from_str(json)
+        #[derive(serde::Deserialize)]
+        struct Header {
+            schema_version: Option<u32>,
+            operation_history: Option<operations::Journal>,
+        }
+        // Deserialize current files directly. Building a generic Value tree for
+        // the document AND its journal can exhaust the WASM address space.
+        let header: Header = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
-        let journal = value
-            .as_object_mut()
-            .and_then(|v| v.remove("operation_history"));
-        migrate_legacy_document_ids(&mut value);
-        let mut document: Document = serde_json::from_value(value)
-            .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
+        let mut document: Document = if header.schema_version == Some(SCHEMA_VERSION) {
+            serde_json::from_str(json)
+        } else {
+            let mut value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+                JsValue::from_str(&format!("Invalid Open Libra document: {error}"))
+            })?;
+            if let Some(object) = value.as_object_mut() {
+                object.remove("operation_history");
+            }
+            migrate_legacy_document_ids(&mut value);
+            serde_json::from_value(value)
+        }
+        .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
         document
             .validate()
             .map_err(|error| JsValue::from_str(&error))?;
-        let operation_session = journal
-            .map(|value| {
-                let journal = serde_json::from_value(value)
-                    .map_err(|e| format!("Invalid operation history: {e}"))?;
-                operations::Session::restore(journal, &document, Uuid::now_v7())
-            })
+        let operation_session = header
+            .operation_history
+            .map(|journal| operations::Session::restore(journal, &document, Uuid::now_v7()))
             .transpose()
             .map_err(|e| JsValue::from_str(&e))?;
-        let before_population = document.clone();
-        document.populate_active_benchmark();
         let mut operation_session = operation_session;
-        if let Some(session) = &mut operation_session {
-            session.record(&before_population, &document, None);
+        let page = document.active_page();
+        if page.benchmark_node_count.is_some() && page.nodes.is_empty() {
+            let before_population = document.clone();
+            document.populate_active_benchmark();
+            if let Some(session) = &mut operation_session {
+                session.record(&before_population, &document, None);
+            }
         }
         Ok(Self {
             document,
@@ -1694,41 +1825,62 @@ impl DocumentEngine {
             geometry_transaction_start: None,
             operation_session,
             operation_error: None,
+            benchmark_project: None,
         })
     }
 }
 
 impl DocumentEngine {
     fn mutate<R>(&mut self, operation: impl FnOnce(&mut Document) -> R) -> R {
-        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
+        self.mutate_checked(operation).0
+    }
+
+    /// Like `mutate`, but also returns the boolean synchronization error that
+    /// caused the edit to be rolled back, so callers do not report success.
+    fn try_mutate<R>(&mut self, operation: impl FnOnce(&mut Document) -> R) -> Result<R, String> {
+        match self.mutate_checked(operation) {
+            (result, None) => Ok(result),
+            (_, Some(error)) => Err(error),
+        }
+    }
+
+    fn mutate_checked<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Document) -> R,
+    ) -> (R, Option<String>) {
+        if self.is_benchmark()
+            || self.transaction_start.is_some()
+            || self.geometry_transaction_start.is_some()
+        {
             let before = self.document.has_booleans().then(|| self.document.clone());
             let result = operation(&mut self.document);
             if let Err(error) = self.document.sync_booleans() {
                 if let Some(before) = before {
                     self.document = before;
                 }
-                self.operation_error = Some(error);
+                self.operation_error = Some(error.clone());
+                return (result, Some(error));
             }
-            return result;
+            return (result, None);
         }
         let before = self.document.clone();
         let result = operation(&mut self.document);
         if let Err(error) = self.document.sync_booleans() {
             self.document = before;
-            self.operation_error = Some(error);
-            return result;
+            self.operation_error = Some(error.clone());
+            return (result, Some(error));
         }
         if component_source_changed(&before, &self.document) {
             self.document.sync_component_instances();
         }
         if let Err(error) = self.document.sync_booleans() {
             self.document = before;
-            self.operation_error = Some(error);
-            return result;
+            self.operation_error = Some(error.clone());
+            return (result, Some(error));
         }
         if self.operation_session.is_some() {
             self.record_operation(&before);
-            return result;
+            return (result, None);
         }
         if before != self.document {
             if self.transaction_start.is_none() {
@@ -1736,7 +1888,7 @@ impl DocumentEngine {
             }
             self.redo_stack.clear();
         }
-        result
+        (result, None)
     }
 
     fn edit_command(
@@ -1803,6 +1955,9 @@ impl DocumentEngine {
     }
 
     fn push_undo(&mut self, entry: HistoryEntry) {
+        if self.is_benchmark() {
+            return;
+        }
         const HISTORY_LIMIT: usize = 100;
         if self.undo_stack.len() == HISTORY_LIMIT {
             self.undo_stack.remove(0);

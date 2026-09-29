@@ -55,6 +55,9 @@ impl Document {
         let root = self.active_node_mut(group).unwrap();
         root.name = format!("Boolean / {operation:?}");
         root.boolean_operation = Some(operation);
+        root.boolean_operands = selected.iter().map(|n| n.id).collect();
+        // Seed independent result paint once; syncing operand geometry must
+        // not overwrite styling applied directly to the boolean group.
         root.fill = first.fill;
         root.stroke = first.stroke;
         root.stroke_width = first.stroke_width;
@@ -93,16 +96,32 @@ impl Document {
                 .collect();
             groups.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
             for (id, _) in groups {
-                let operands: Vec<_> = page
+                let mut operands: Vec<_> = page
                     .nodes
                     .iter()
                     .filter(|n| n.parent_id == Some(id))
                     .cloned()
                     .collect();
+                let stored = page
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .map(|n| n.boolean_operands.clone())
+                    .unwrap_or_default();
+                if !stored.is_empty() {
+                    operands.sort_by_key(|n| {
+                        stored
+                            .iter()
+                            .position(|operand| *operand == n.id)
+                            .unwrap_or(usize::MAX)
+                    });
+                }
                 if operands.len() > 64 || operands.iter().any(|n| !supported(n) || n.mask_shape) {
                     return Err("Boolean operands must be closed shapes (maximum 64)".into());
                 }
+                let order: Vec<_> = operands.iter().map(|n| n.id).collect();
                 let root = page.nodes.iter_mut().find(|n| n.id == id).unwrap();
+                root.boolean_operands = order;
                 root.vector = Some(result_vector(
                     root,
                     combine(&operands, root.boolean_operation.unwrap())?,
@@ -182,14 +201,18 @@ fn shape(node: &Node) -> Result<Shapes, String> {
     let mut paths: Vec<Vec<Point>> = vec![];
     if node.kind == NodeKind::Rectangle {
         let mut r = node.corner_radii.map(|v| v as f64);
-        let factor = [
-            w / (r[0] + r[1]),
-            w / (r[2] + r[3]),
-            h / (r[0] + r[3]),
-            h / (r[1] + r[2]),
-        ]
-        .into_iter()
-        .fold(1.0, f64::min);
+        let factor = if r.iter().all(|radius| *radius == 0.0) {
+            1.0
+        } else {
+            [
+                w / (r[0] + r[1]),
+                w / (r[2] + r[3]),
+                h / (r[0] + r[3]),
+                h / (r[1] + r[2]),
+            ]
+            .into_iter()
+            .fold(1.0, f64::min)
+        };
         for v in &mut r {
             *v *= factor;
         }

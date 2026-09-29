@@ -1,3 +1,7 @@
+import {
+  documentContentKey,
+  serializeDocument,
+} from "./editor/document-snapshot";
 import { PathEditor } from "./components/PathEditor";
 import type { VectorContour } from "./editor/types";
 import { SharedPresence } from "./components/SharedPresence";
@@ -76,8 +80,8 @@ import {
   createProjectPreview,
   getLastDocumentId,
   getRecentDocument,
-  listArchivedDocuments,
-  listStoredDocuments,
+  getRecentDocumentRevision,
+  listProjectSummaries,
   removeRecentDocument,
   storeRecentDocument,
   storeRecoverySnapshot,
@@ -171,13 +175,18 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   });
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [benchmarkLoadMs, setBenchmarkLoadMs] = useState<number>();
+  const benchmarkActive = !shared && !!engineRef.current?.is_benchmark();
+  const [initializing, setInitializing] = useState(true);
+  const [initializationError, setInitializationError] = useState<string>();
   const [operationError, setOperationError] = useState<string>();
   const [documentName, setDocumentName] = useState("Engine study.libra");
   const [isDocumentDirty, setIsDocumentDirty] = useState(false);
   const savedDocumentJsonRef = useRef<string | undefined>(undefined);
-  const browserSavedRef = useRef<{ json: string; name: string } | undefined>(
-    undefined,
-  );
+  const browserSavedRef = useRef<
+    { json: string; name: string; contentKey?: string } | undefined
+  >(undefined);
   const persistenceIdRef = useRef<string | undefined>(undefined);
   const projectSessionsRef = useRef(
     new WeakMap<
@@ -315,11 +324,24 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     void refreshRecentDocuments();
   }, []);
 
+  const contentRevision = engineRef.current
+    ? documentContentKey(engineRef.current)
+    : "";
+  function browserSnapshotMatches(engine: DocumentEngine) {
+    const saved = browserSavedRef.current;
+    return (
+      !!saved &&
+      (saved.contentKey
+        ? saved.contentKey === documentContentKey(engine)
+        : saved.json === serializeDocument(engine))
+    );
+  }
+
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
     if (
-      browserSavedRef.current?.json === engine.document_json() &&
+      browserSnapshotMatches(engine) &&
       browserSavedRef.current?.name === documentName
     )
       return;
@@ -327,7 +349,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     return () => window.clearTimeout(timeout);
     // documentModel changes after every committed engine mutation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentModel, isDocumentDirty, documentName, currentRecentDocumentId]);
+  }, [contentRevision, isDocumentDirty, documentName, currentRecentDocumentId]);
 
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -335,7 +357,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       const engine = engineRef.current;
       if (
         !engine ||
-        (browserSavedRef.current?.json === engine.document_json() &&
+        (browserSnapshotMatches(engine) &&
           browserSavedRef.current?.name === documentName)
       )
         return;
@@ -353,7 +375,12 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     });
   }, [shared, documentModel.active_page_id, selectedNodeIds]);
 
-  function refreshDocument(selection = selectedNodeIdsRef.current) {
+  const pageModelsRef = useRef(new Map<string, DocumentReadModel>());
+
+  function refreshDocument(
+    selection = selectedNodeIdsRef.current,
+    navigation = false,
+  ) {
     const engine = engineRef.current;
     if (!engine) return;
     const operationState = JSON.parse(engine.operation_state_json()) as {
@@ -361,7 +388,20 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     } | null;
     if (engineRef.current === engine)
       setOperationError(operationState?.error ?? undefined);
-    const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+    const temporary = !shared && engine.is_benchmark();
+    if (temporary) navigation = true;
+    const modelKey = temporary ? "" : engine.document_snapshot_key();
+    const pageModels = pageModelsRef.current;
+    if (!navigation || temporary) pageModels.clear();
+    const model =
+      (navigation && modelKey && pageModels.get(modelKey)) ||
+      (JSON.parse(engine.read_model_json()) as DocumentReadModel);
+    if (modelKey) {
+      pageModels.set(modelKey, model);
+      // Bound retained page data; edits invalidate every cached page.
+      if (pageModels.size > 2)
+        pageModels.delete(pageModels.keys().next().value!);
+    }
     const validSelection = selection.filter(
       (id) =>
         model.nodes.some((node) => node.id === id) || !!shared?.client.pending,
@@ -374,18 +414,19 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       selectedNodeIdsRef.current = validSelection;
       setSelectedNodeIds(validSelection);
     }
+    const documentJson = navigation ? undefined : serializeDocument(engine);
     setDocumentModel(model);
-    setDownloadRequested(false);
-    setAutosaveState(
-      browserSavedRef.current?.json === engine.document_json() &&
-        browserSavedRef.current?.name === documentName
-        ? "saved"
-        : "idle",
-    );
-    if (savedDocumentJsonRef.current !== undefined)
-      setIsDocumentDirty(
-        engine.document_json() !== savedDocumentJsonRef.current,
+    if (!navigation) {
+      setDownloadRequested(false);
+      setAutosaveState(
+        browserSavedRef.current?.json === documentJson &&
+          browserSavedRef.current?.name === documentName
+          ? "saved"
+          : "idle",
       );
+      if (savedDocumentJsonRef.current !== undefined)
+        setIsDocumentDirty(documentJson !== savedDocumentJsonRef.current);
+    }
     setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
     const selected = model.nodes.filter((node) =>
       validSelection.includes(node.id),
@@ -491,7 +532,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     engineRef.current = engine;
     projectSessionsRef.current.set(engine, { revision, conflicted: false });
     setProjectConflict(false);
-    savedDocumentJsonRef.current = engine.document_json();
+    savedDocumentJsonRef.current = serializeDocument(engine);
     setDocumentName(name);
     persistenceIdRef.current = recentDocumentId;
     browserSavedRef.current = undefined;
@@ -589,7 +630,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     const engine = engineRef.current;
     if (!engine) return;
     setFileMenuOpen(false);
-    const json = engine.document_json();
+    const json = serializeDocument(engine);
     const blob = new Blob([serializeProject(json)], {
       type: OPEN_LIBRA_PROJECT_MIME,
     });
@@ -614,18 +655,27 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
 
   async function refreshRecentDocuments() {
     try {
-      const [recent, archived] = await Promise.all([
-        listStoredDocuments(),
-        listArchivedDocuments(),
-      ]);
-      setRecentDocuments(recent);
-      setArchivedDocuments(archived);
+      const rows = await listProjectSummaries();
+      setRecentDocuments(
+        rows
+          .filter((row) => !row.archivedAt)
+          .sort((a, b) => b.updatedAt - a.updatedAt),
+      );
+      setArchivedDocuments(
+        rows
+          .filter((row) => row.archivedAt)
+          .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+      );
     } catch {
       // IndexedDB may be unavailable in hardened/private browser contexts.
       setRecentDocuments([]);
       setArchivedDocuments([]);
     }
   }
+
+  useEffect(() => {
+    if (libraryOpen || documentSwitcherOpen) void refreshRecentDocuments();
+  }, [libraryOpen, documentSwitcherOpen]);
 
   function showProjectConflict(engine: DocumentEngine) {
     const session = projectSessionsRef.current.get(engine);
@@ -638,28 +688,28 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
 
   useEffect(() => {
     async function checkProject(id = persistenceIdRef.current) {
-      void refreshRecentDocuments();
       const engine = engineRef.current;
       if (!engine || !id || id !== persistenceIdRef.current) return;
       const session = projectSessionsRef.current.get(engine);
       if (!session || session.revision === null) return;
       const expectedRevision = session.revision;
       try {
-        const latest = await getRecentDocument(id);
+        const latestRevision = await getRecentDocumentRevision(id);
         if (
           engineRef.current !== engine ||
           session.revision !== expectedRevision
         )
           return;
-        if (!latest || (latest.revision ?? 0) !== session.revision)
+        if (latestRevision === undefined || latestRevision !== session.revision)
           showProjectConflict(engine);
       } catch {
         // Atomic revision checks still protect writes when notification reads fail.
       }
     }
-    const unsubscribe = subscribeToProjectChanges(
-      (id) => void checkProject(id),
-    );
+    const unsubscribe = subscribeToProjectChanges((id) => {
+      void checkProject(id);
+      if (libraryOpen || documentSwitcherOpen) void refreshRecentDocuments();
+    });
     const refresh = () => {
       void checkProject();
     };
@@ -670,7 +720,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, []);
+  }, [libraryOpen, documentSwitcherOpen]);
 
   async function reloadLatestProject() {
     const previous = engineRef.current;
@@ -695,8 +745,9 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       const engine = DocumentEngine.load_json(latest.json);
       replaceDocumentEngine(engine, latest.name, id, latest.revision ?? 0);
       browserSavedRef.current = {
-        json: engine.document_json(),
+        json: serializeDocument(engine),
         name: latest.name,
+        contentKey: documentContentKey(engine),
       };
       setAutosaveState("saved");
       setLastDocumentId(id);
@@ -708,7 +759,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   async function saveConflictCopy() {
     const current = engineRef.current;
     if (!current) return;
-    const engine = DocumentEngine.load_json(current.document_json());
+    const engine = DocumentEngine.load_json(serializeDocument(current));
     const name = `${documentName.replace(/\.(libra|olibra|json)$/i, "")} copy.libra`;
     const id = crypto.randomUUID();
     replaceDocumentEngine(engine, name, id);
@@ -723,20 +774,26 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     if (shared) return true;
     const session = projectSessionsRef.current.get(engine)!;
     if (session.conflicted) return false;
-    const json = engine.document_json();
+    const json = serializeDocument(engine);
+    const contentKey = documentContentKey(engine);
     const operationState = JSON.parse(engine.operation_state_json()) as {
       error?: string;
     } | null;
     if (engineRef.current === engine)
       setOperationError(operationState?.error ?? undefined);
-    const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+    const model = JSON.parse(
+      engine.project_read_model_json(),
+    ) as DocumentReadModel;
     persistenceIdRef.current = id;
     if (engineRef.current === engine) setAutosaveState("saving");
     // Preserve invocation order so a slower earlier save cannot overwrite a newer edit.
     const save = saveQueueRef.current.then(async () => {
       if (session.conflicted) return false;
       try {
-        const existing = await getRecentDocument(id);
+        const existing =
+          recentDocuments.find((item) => item.id === id) ??
+          archivedDocuments.find((item) => item.id === id) ??
+          (await getRecentDocument(id));
         const saved = await storeRecentDocument(
           {
             id,
@@ -757,12 +814,27 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         );
         session.revision = saved.revision ?? 0;
         if (engineRef.current === engine) {
-          browserSavedRef.current = { json, name };
+          browserSavedRef.current = { json, name, contentKey };
           setCurrentRecentDocumentId(id);
           setLastDocumentId(id);
-          setAutosaveState(engine.document_json() === json ? "saved" : "idle");
+          setAutosaveState(
+            documentContentKey(engine) === contentKey ? "saved" : "idle",
+          );
         }
-        await refreshRecentDocuments();
+        // The saved row is already available. Reloading every full project twice
+        // here copied all document histories on each autosave and stalled input.
+        setRecentDocuments((items) =>
+          [
+            ...items.filter((item) => item.id !== id),
+            ...(saved.archivedAt ? [] : [{ ...saved, json: "" }]),
+          ].sort((a, b) => b.updatedAt - a.updatedAt),
+        );
+        setArchivedDocuments((items) =>
+          [
+            ...items.filter((item) => item.id !== id),
+            ...(saved.archivedAt ? [{ ...saved, json: "" }] : []),
+          ].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+        );
         return true;
       } catch (cause) {
         if (cause instanceof ProjectConflictError) showProjectConflict(engine);
@@ -782,7 +854,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       persistenceIdRef.current ??
       (persistenceIdRef.current = crypto.randomUUID());
     const name = documentName;
-    const snapshotJson = engine.document_json();
+    const snapshotJson = serializeDocument(engine);
     setAutosaveState("saving");
     const stored = await rememberDocument(engine, name, id);
     if (engineRef.current !== engine) return;
@@ -811,11 +883,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       }
     }
     if (engineRef.current !== engine) return;
-    setAutosaveState(
-      browserSavedRef.current?.json === engine.document_json()
-        ? "saved"
-        : "idle",
-    );
+    setAutosaveState(browserSnapshotMatches(engine) ? "saved" : "idle");
   }
 
   function nextUntitledDocumentName() {
@@ -831,6 +899,16 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     return number === 1 ? "Untitled.libra" : `Untitled ${number}.libra`;
   }
 
+  async function loadProjectPayload(
+    document: RecentDocument,
+  ): Promise<RecentDocument> {
+    if (document.json) return document;
+    const stored = await getRecentDocument(document.id);
+    if (!stored || (stored.revision ?? 0) !== (document.revision ?? 0))
+      throw new ProjectConflictError();
+    return { ...document, json: stored.json };
+  }
+
   async function openRecentDocument(document: RecentDocument) {
     setDocumentSwitcherOpen(false);
     if (document.id === currentRecentDocumentId) {
@@ -839,6 +917,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     }
     if (!(await preserveCurrentDocument())) return;
     try {
+      document = await loadProjectPayload(document);
       const engine = DocumentEngine.load_json(document.json);
       replaceDocumentEngine(
         engine,
@@ -907,6 +986,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         (loaded.conflicted || loaded.revision !== (document.revision ?? 0))
       )
         throw new ProjectConflictError();
+      document = await loadProjectPayload(document);
       const saved = await storeRecentDocument(document);
       const engine = engineRef.current;
       const session = engine && projectSessionsRef.current.get(engine);
@@ -958,7 +1038,8 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       archivedAt: undefined,
     };
     try {
-      await storeRecentDocument(copy, null);
+      const source = await loadProjectPayload(document);
+      await storeRecentDocument({ ...copy, json: source.json }, null);
       await refreshRecentDocuments();
     } catch {
       setError("Could not save the duplicated project.");
@@ -1005,6 +1086,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   async function setProjectCover(document: RecentDocument, pageId: string) {
     let engine: DocumentEngine | undefined;
     try {
+      document = await loadProjectPayload(document);
       engine = DocumentEngine.load_json(document.json);
       if (!engine.set_active_page(pageId)) return;
       const operationState = JSON.parse(engine.operation_state_json()) as {
@@ -1238,14 +1320,76 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   function addPage() {
     const engine = engineRef.current;
     if (!engine) return;
-    engine.add_page(`Page ${documentModel.pages.length + 1}`);
+    engine.add_page(
+      `Page ${documentModel.pages.length + (benchmarkActive ? 0 : 1)}`,
+    );
     refreshDocument([]);
     rendererRef.current?.resetView();
   }
 
+  async function startBenchmark(count: number) {
+    const engine = engineRef.current;
+    if (!engine || shared || benchmarkLoading) return;
+    flushPendingSceneRefresh();
+    engine.end_transaction();
+    setBenchmarkLoading(true);
+    setBenchmarkLoadMs(undefined);
+    setPathSession(undefined);
+    setEditingTextId(undefined);
+    setIsolationRootId(undefined);
+    copiedNodeIdsRef.current = [];
+    try {
+      // Paint feedback before synchronous generation, then finish after the scene paints.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => setTimeout(resolve, 0)),
+      );
+      if (engineRef.current !== engine) return;
+      const started = performance.now();
+      if (!engine.start_benchmark(count))
+        throw new Error("Unsupported stress test size");
+      pageModelsRef.current.clear();
+      refreshDocument([], true);
+      rendererRef.current?.resetView();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      if (engineRef.current === engine)
+        setBenchmarkLoadMs(performance.now() - started);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (engineRef.current === engine) setBenchmarkLoading(false);
+    }
+  }
+
+  function leaveBenchmark() {
+    flushPendingSceneRefresh();
+    if (!engineRef.current?.end_benchmark()) return;
+    pageModelsRef.current.clear();
+    copiedNodeIdsRef.current = [];
+    setPathSession(undefined);
+    setEditingTextId(undefined);
+    setIsolationRootId(undefined);
+    refreshDocument([], true);
+    rendererRef.current?.resetView();
+  }
+
   function selectPage(id: string) {
-    if (!engineRef.current?.set_active_page(id)) return;
-    refreshDocument([]);
+    if (documentModelRef.current?.active_page_id === id) return;
+    if (!shared && engineRef.current?.is_benchmark()) leaveBenchmark();
+    flushPendingSceneRefresh();
+    engineRef.current?.end_transaction();
+    const engine = engineRef.current;
+    if (!engine) return;
+    const before = documentContentKey(engine);
+    if (!engine.set_active_page(id)) return;
+    const navigationOnly = before === documentContentKey(engine);
+    try {
+      sessionStorage.setItem(`open-libra-page:${before.split(":")[0]}`, id);
+    } catch {
+      /* optional view state */
+    }
+    refreshDocument([], navigationOnly);
     rendererRef.current?.resetView();
   }
 
@@ -2416,6 +2560,11 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     let unsubscribeShared: (() => void) | undefined;
 
     async function start() {
+      // Let the loading overlay paint before synchronous WASM initialization.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => setTimeout(resolve, 0)),
+      );
+      if (disposed) return;
       if (!navigator.gpu) {
         throw new Error(
           "Open Libra currently requires WebGPU in a current desktop Chrome or Edge browser.",
@@ -2443,6 +2592,16 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         engine = new DocumentEngine();
       }
       engine.enable_operations(operationActor());
+      if (!shared) {
+        try {
+          const page = sessionStorage.getItem(
+            `open-libra-page:${documentContentKey(engine).split(":")[0]}`,
+          );
+          if (page) engine.set_active_page(page);
+        } catch {
+          /* optional view state */
+        }
+      }
       engineRef.current = engine;
       setHistoryState({
         canUndo: engine.can_undo(),
@@ -2452,7 +2611,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         revision: storedDocument ? (storedDocument.revision ?? 0) : null,
         conflicted: false,
       });
-      savedDocumentJsonRef.current = engine.document_json();
+      savedDocumentJsonRef.current = serializeDocument(engine);
       const initialDocumentId = storedDocument?.id ?? crypto.randomUUID();
       const initialDocumentName = shared
         ? "Shared document.libra"
@@ -2460,7 +2619,11 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       setCurrentRecentDocumentId(initialDocumentId);
       persistenceIdRef.current = initialDocumentId;
       browserSavedRef.current = storedDocument
-        ? { json: engine.document_json(), name: initialDocumentName }
+        ? {
+            json: serializeDocument(engine),
+            name: initialDocumentName,
+            contentKey: documentContentKey(engine),
+          }
         : undefined;
       setDocumentName(initialDocumentName);
       setAutosaveState(storedDocument ? "saved" : "idle");
@@ -2574,11 +2737,19 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       }
       if (!shared && !storedDocument)
         void rememberDocument(engine, initialDocumentName, initialDocumentId);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!disposed) setInitializing(false);
+        }),
+      );
     }
 
-    start().catch((cause: unknown) =>
-      setError(cause instanceof Error ? cause.message : String(cause)),
-    );
+    start().catch((cause: unknown) => {
+      if (disposed) return;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message);
+      setInitializationError(message);
+    });
     return () => {
       disposed = true;
       unsubscribeShared?.();
@@ -2694,914 +2865,1014 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   }, [theme]);
 
   return (
-    <main className={`app-shell ${shared ? "is-shared" : ""}`}>
-      {shareOpen && (
-        <ShareDocument
-          documentJson={() => engineRef.current!.document_json()}
-          onClose={() => setShareOpen(false)}
-        />
+    <>
+      {(initializing || benchmarkLoading) && (
+        <div className="editor-loading-overlay">
+          <div
+            className="editor-loading-card"
+            role={initializationError ? "alert" : "status"}
+            aria-live="polite"
+          >
+            {!initializationError && (
+              <span className="editor-loading-spinner" aria-hidden="true" />
+            )}
+            <strong>
+              {initializationError
+                ? "Unable to open document"
+                : benchmarkLoading
+                  ? "Loading stress test…"
+                  : "Opening your document…"}
+            </strong>
+            <p>
+              {initializationError ??
+                "Preparing pages and canvas. Large documents may take a moment."}
+            </p>
+            {initializationError && (
+              <button onClick={() => window.location.reload()}>
+                Try again
+              </button>
+            )}
+          </div>
+        </div>
       )}
-      <header className="topbar">
-        <div className="brand">
-          <span className="mark">OL</span>
-          <strong>Open Libra</strong>
-          <div className="document-switcher" ref={documentSwitcherRef}>
-            <button
-              className={`file-name ${documentSwitcherOpen ? "active" : ""}`}
-              aria-haspopup="menu"
-              aria-expanded={documentSwitcherOpen}
-              onClick={() => {
-                setFileMenuOpen(false);
-                setDocumentSwitcherOpen((open) => !open);
-              }}
-            >
-              {documentName}
-              {isDocumentDirty ? " •" : ""}
-              <span
-                className={`autosave-indicator ${autosaveState}`}
-                title={
-                  shared
-                    ? "Shared document"
-                    : autosaveLabel(autosaveState, isDocumentDirty)
-                }
-              />
-              <ChevronRight aria-hidden="true" />
-            </button>
-            {documentSwitcherOpen && (
-              <div className="document-switcher-menu" role="menu">
-                <div className="document-switcher-heading">Documents</div>
-                <button
-                  className="document-switcher-item current"
-                  role="menuitem"
-                  onClick={() => setDocumentSwitcherOpen(false)}
-                >
-                  <Check aria-hidden="true" />
-                  <span>
-                    <strong>{documentName}</strong>
-                    <small>
-                      {shared
-                        ? "Shared document"
-                        : autosaveLabel(autosaveState, isDocumentDirty)}
-                    </small>
-                  </span>
-                </button>
-                {recentDocuments
-                  .filter((document) => document.id !== currentRecentDocumentId)
-                  .slice(0, 6)
-                  .map((document) => (
-                    <button
-                      className="document-switcher-item"
-                      role="menuitem"
-                      key={document.id}
-                      onClick={() => void openRecentDocument(document)}
-                    >
-                      <span className="document-switcher-dot" />
-                      <span>
-                        <strong>{document.name}</strong>
-                        <small>
-                          {document.pageCount} page
-                          {document.pageCount === 1 ? "" : "s"} ·{" "}
-                          {document.objectCount.toLocaleString()} objects
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-                <div className="document-switcher-actions">
-                  <button role="menuitem" onClick={() => void newDocument()}>
-                    <FilePlus2 aria-hidden="true" /> New
-                  </button>
+      <main
+        className={`app-shell ${shared ? "is-shared" : ""}`}
+        inert={initializing || benchmarkLoading}
+        aria-busy={initializing || benchmarkLoading}
+      >
+        {shareOpen && (
+          <ShareDocument
+            documentJson={() => serializeDocument(engineRef.current!)}
+            onClose={() => setShareOpen(false)}
+          />
+        )}
+        <header className="topbar">
+          <div className="brand">
+            <span className="mark">OL</span>
+            <strong>Open Libra</strong>
+            <div className="document-switcher" ref={documentSwitcherRef}>
+              <button
+                className={`file-name ${documentSwitcherOpen ? "active" : ""}`}
+                aria-haspopup="menu"
+                aria-expanded={documentSwitcherOpen}
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  setDocumentSwitcherOpen((open) => !open);
+                }}
+              >
+                {documentName}
+                {isDocumentDirty ? " •" : ""}
+                <span
+                  className={`autosave-indicator ${autosaveState}`}
+                  title={
+                    shared
+                      ? "Shared document"
+                      : autosaveLabel(autosaveState, isDocumentDirty)
+                  }
+                />
+                <ChevronRight aria-hidden="true" />
+              </button>
+              {documentSwitcherOpen && (
+                <div className="document-switcher-menu" role="menu">
+                  <div className="document-switcher-heading">Documents</div>
                   <button
+                    className="document-switcher-item current"
                     role="menuitem"
-                    onClick={() => void requestOpenDocument()}
+                    onClick={() => setDocumentSwitcherOpen(false)}
                   >
-                    <FolderOpen aria-hidden="true" /> Open…
+                    <Check aria-hidden="true" />
+                    <span>
+                      <strong>{documentName}</strong>
+                      <small>
+                        {shared
+                          ? "Shared document"
+                          : autosaveLabel(autosaveState, isDocumentDirty)}
+                      </small>
+                    </span>
+                  </button>
+                  {recentDocuments
+                    .filter(
+                      (document) => document.id !== currentRecentDocumentId,
+                    )
+                    .slice(0, 6)
+                    .map((document) => (
+                      <button
+                        className="document-switcher-item"
+                        role="menuitem"
+                        key={document.id}
+                        onClick={() => void openRecentDocument(document)}
+                      >
+                        <span className="document-switcher-dot" />
+                        <span>
+                          <strong>{document.name}</strong>
+                          <small>
+                            {document.pageCount} page
+                            {document.pageCount === 1 ? "" : "s"} ·{" "}
+                            {document.objectCount.toLocaleString()} objects
+                          </small>
+                        </span>
+                      </button>
+                    ))}
+                  <div className="document-switcher-actions">
+                    <button role="menuitem" onClick={() => void newDocument()}>
+                      <FilePlus2 aria-hidden="true" /> New
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => void requestOpenDocument()}
+                    >
+                      <FolderOpen aria-hidden="true" /> Open…
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => {
+                        setDocumentSwitcherOpen(false);
+                        setLibraryComponentId(undefined);
+                        setLibrarySection("projects");
+                        setLibraryOpen(true);
+                      }}
+                    >
+                      <FolderClock aria-hidden="true" /> View all
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            {recoveryProject && (
+              <RecoveryDialog
+                project={recoveryProject}
+                onClose={() => setRecoveryProject(undefined)}
+                onRestore={restoreRecoverySnapshot}
+              />
+            )}
+            <div className="save-status" role="status" aria-live="polite">
+              <span>
+                {projectConflict
+                  ? "Project changed in another tab"
+                  : shared
+                    ? "Shared document"
+                    : autosaveLabel(autosaveState, isDocumentDirty)}
+              </span>
+              {projectConflict && (
+                <>
+                  <button onClick={() => void reloadLatestProject()}>
+                    Reload latest
+                  </button>
+                  <button onClick={() => void saveConflictCopy()}>
+                    Save as a copy
+                  </button>
+                </>
+              )}
+              {downloadRequested && <small>Download requested</small>}
+              {recoveryWarning && <small>{recoveryWarning}</small>}
+              {!projectConflict &&
+                (autosaveState === "error" || recoveryWarning) && (
+                  <>
+                    <button onClick={() => void autosaveDocument()}>
+                      Retry save
+                    </button>
+                    <button onClick={saveDocument}>Download .libra</button>
+                  </>
+                )}
+            </div>
+            <div className="menu-anchor" ref={fileMenuRef}>
+              <button
+                className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
+                aria-haspopup="menu"
+                aria-expanded={fileMenuOpen}
+                onClick={() => {
+                  setEditMenuOpen(false);
+                  setViewMenuOpen(false);
+                  setFileMenuOpen((open) => !open);
+                }}
+              >
+                File
+              </button>
+              {fileMenuOpen && (
+                <div className="edit-menu file-menu" role="menu">
+                  <button role="menuitem" onClick={newDocument}>
+                    <FilePlus2 />
+                    <span>New document</span>
+                    <kbd>⌘N</kbd>
+                  </button>
+                  {!shared && (
+                    <button
+                      role="menuitem"
+                      onClick={() => void openStarterDesign()}
+                    >
+                      <Shapes />
+                      <span>Open starter design</span>
+                    </button>
+                  )}
+                  <button role="menuitem" onClick={requestOpenDocument}>
+                    <FolderOpen />
+                    <span>Open…</span>
+                    <kbd>⌘O</kbd>
+                  </button>
+                  <button role="menuitem" onClick={saveDocument}>
+                    <Save />
+                    <span>Save</span>
+                    <kbd>⌘S</kbd>
                   </button>
                   <button
                     role="menuitem"
                     onClick={() => {
-                      setDocumentSwitcherOpen(false);
+                      setFileMenuOpen(false);
                       setLibraryComponentId(undefined);
                       setLibrarySection("projects");
                       setLibraryOpen(true);
                     }}
                   >
-                    <FolderClock aria-hidden="true" /> View all
+                    <FolderClock />
+                    <span>Recent projects…</span>
+                    <kbd />
                   </button>
-                </div>
-              </div>
-            )}
-          </div>
-          {recoveryProject && (
-            <RecoveryDialog
-              project={recoveryProject}
-              onClose={() => setRecoveryProject(undefined)}
-              onRestore={restoreRecoverySnapshot}
-            />
-          )}
-          <div className="save-status" role="status" aria-live="polite">
-            <span>
-              {projectConflict
-                ? "Project changed in another tab"
-                : shared
-                  ? "Shared document"
-                  : autosaveLabel(autosaveState, isDocumentDirty)}
-            </span>
-            {projectConflict && (
-              <>
-                <button onClick={() => void reloadLatestProject()}>
-                  Reload latest
-                </button>
-                <button onClick={() => void saveConflictCopy()}>
-                  Save as a copy
-                </button>
-              </>
-            )}
-            {downloadRequested && <small>Download requested</small>}
-            {recoveryWarning && <small>{recoveryWarning}</small>}
-            {!projectConflict &&
-              (autosaveState === "error" || recoveryWarning) && (
-                <>
-                  <button onClick={() => void autosaveDocument()}>
-                    Retry save
-                  </button>
-                  <button onClick={saveDocument}>Download .libra</button>
-                </>
-              )}
-          </div>
-          <div className="menu-anchor" ref={fileMenuRef}>
-            <button
-              className={`menu-trigger ${fileMenuOpen ? "active" : ""}`}
-              aria-haspopup="menu"
-              aria-expanded={fileMenuOpen}
-              onClick={() => {
-                setEditMenuOpen(false);
-                setViewMenuOpen(false);
-                setFileMenuOpen((open) => !open);
-              }}
-            >
-              File
-            </button>
-            {fileMenuOpen && (
-              <div className="edit-menu file-menu" role="menu">
-                <button role="menuitem" onClick={newDocument}>
-                  <FilePlus2 />
-                  <span>New document</span>
-                  <kbd>⌘N</kbd>
-                </button>
-                {!shared && (
+                  <div className="menu-section-label">Import</div>
                   <button
                     role="menuitem"
-                    onClick={() => void openStarterDesign()}
+                    onClick={() => {
+                      setFileMenuOpen(false);
+                      figmaFileInputRef.current?.click();
+                    }}
                   >
-                    <Shapes />
-                    <span>Open starter design</span>
+                    <FileArchive />
+                    <span>Import Figma file…</span>
+                    <kbd>.fig</kbd>
                   </button>
-                )}
-                <button role="menuitem" onClick={requestOpenDocument}>
-                  <FolderOpen />
-                  <span>Open…</span>
-                  <kbd>⌘O</kbd>
-                </button>
-                <button role="menuitem" onClick={saveDocument}>
-                  <Save />
-                  <span>Save</span>
-                  <kbd>⌘S</kbd>
-                </button>
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    setFileMenuOpen(false);
-                    setLibraryComponentId(undefined);
-                    setLibrarySection("projects");
-                    setLibraryOpen(true);
-                  }}
-                >
-                  <FolderClock />
-                  <span>Recent projects…</span>
-                  <kbd />
-                </button>
-                <div className="menu-section-label">Import</div>
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    setFileMenuOpen(false);
-                    figmaFileInputRef.current?.click();
-                  }}
-                >
-                  <FileArchive />
-                  <span>Import Figma file…</span>
-                  <kbd>.fig</kbd>
-                </button>
-              </div>
-            )}
-            <input
-              ref={documentFileInputRef}
-              className="hidden-file-input"
-              data-testid="open-document-input"
-              type="file"
-              accept=".libra,.olibra,.json,application/json,application/vnd.openlibra.project+json,application/vnd.openlibra+json"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void openDocument(file);
-                event.currentTarget.value = "";
-              }}
-            />
-            <input
-              ref={figmaFileInputRef}
-              className="hidden-file-input"
-              data-testid="file-menu-figma-upload"
-              type="file"
-              accept=".fig,application/octet-stream"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void importFigma(file);
-                event.currentTarget.value = "";
-              }}
-            />
-          </div>
-          <div className="menu-anchor" ref={editMenuRef}>
-            <button
-              className={`menu-trigger ${editMenuOpen ? "active" : ""}`}
-              onClick={() => {
-                setFileMenuOpen(false);
-                setViewMenuOpen(false);
-                setEditMenuOpen((open) => !open);
-              }}
-            >
-              Edit
-            </button>
-            {editMenuOpen && (
-              <div className="edit-menu" role="menu">
-                <button
-                  role="menuitem"
-                  disabled={!historyState.canUndo}
-                  onClick={() => {
-                    undo();
-                    setEditMenuOpen(false);
-                  }}
-                >
-                  <Undo2 />
-                  <span>Undo</span>
-                  <kbd>⌘Z</kbd>
-                </button>
-                <button
-                  role="menuitem"
-                  disabled={!historyState.canRedo}
-                  onClick={() => {
-                    redo();
-                    setEditMenuOpen(false);
-                  }}
-                >
-                  <Redo2 />
-                  <span>Redo</span>
-                  <kbd>⇧⌘Z</kbd>
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="menu-anchor" ref={viewMenuRef}>
-            <button
-              className={`menu-trigger ${viewMenuOpen ? "active" : ""}`}
-              onClick={() => {
-                setFileMenuOpen(false);
-                setEditMenuOpen(false);
-                setViewMenuOpen((open) => !open);
-              }}
-            >
-              View
-            </button>
-            {viewMenuOpen && (
-              <div className="edit-menu view-menu" role="menu">
-                <button
-                  role="menuitemcheckbox"
-                  aria-checked={rulersVisible}
-                  onClick={() => setRulersVisible((visible) => !visible)}
-                >
-                  <span className="menu-check">{rulersVisible ? "✓" : ""}</span>
-                  <span>Show rulers</span>
-                  <kbd>⇧R</kbd>
-                </button>
-                <button
-                  role="menuitemcheckbox"
-                  aria-checked={gridVisible}
-                  onClick={() => setGridVisible((visible) => !visible)}
-                >
-                  <span className="menu-check">{gridVisible ? "✓" : ""}</span>
-                  <span>Show grid</span>
-                  <kbd>⇧G</kbd>
-                </button>
-                <div className="menu-section-label">Toolbar</div>
-                {(["top", "bottom"] as const).map((position) => (
+                </div>
+              )}
+              <input
+                ref={documentFileInputRef}
+                className="hidden-file-input"
+                data-testid="open-document-input"
+                type="file"
+                accept=".libra,.olibra,.json,application/json,application/vnd.openlibra.project+json,application/vnd.openlibra+json"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void openDocument(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <input
+                ref={figmaFileInputRef}
+                className="hidden-file-input"
+                data-testid="file-menu-figma-upload"
+                type="file"
+                accept=".fig,application/octet-stream"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void importFigma(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </div>
+            <div className="menu-anchor" ref={editMenuRef}>
+              <button
+                className={`menu-trigger ${editMenuOpen ? "active" : ""}`}
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  setViewMenuOpen(false);
+                  setEditMenuOpen((open) => !open);
+                }}
+              >
+                Edit
+              </button>
+              {editMenuOpen && (
+                <div className="edit-menu" role="menu">
                   <button
-                    key={position}
-                    role="menuitemradio"
-                    aria-checked={toolbarPosition === position}
-                    onClick={() => setToolbarPosition(position)}
+                    role="menuitem"
+                    disabled={!historyState.canUndo}
+                    onClick={() => {
+                      undo();
+                      setEditMenuOpen(false);
+                    }}
+                  >
+                    <Undo2 />
+                    <span>Undo</span>
+                    <kbd>⌘Z</kbd>
+                  </button>
+                  <button
+                    role="menuitem"
+                    disabled={!historyState.canRedo}
+                    onClick={() => {
+                      redo();
+                      setEditMenuOpen(false);
+                    }}
+                  >
+                    <Redo2 />
+                    <span>Redo</span>
+                    <kbd>⇧⌘Z</kbd>
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="menu-anchor" ref={viewMenuRef}>
+              <button
+                className={`menu-trigger ${viewMenuOpen ? "active" : ""}`}
+                onClick={() => {
+                  setFileMenuOpen(false);
+                  setEditMenuOpen(false);
+                  setViewMenuOpen((open) => !open);
+                }}
+              >
+                View
+              </button>
+              {viewMenuOpen && (
+                <div className="edit-menu view-menu" role="menu">
+                  <button
+                    role="menuitemcheckbox"
+                    aria-checked={rulersVisible}
+                    onClick={() => setRulersVisible((visible) => !visible)}
                   >
                     <span className="menu-check">
-                      {toolbarPosition === position ? "●" : ""}
+                      {rulersVisible ? "✓" : ""}
                     </span>
-                    <span>{position === "top" ? "Top" : "Bottom"}</span>
-                    <span />
+                    <span>Show rulers</span>
+                    <kbd>⇧R</kbd>
                   </button>
-                ))}
-              </div>
-            )}
+                  <button
+                    role="menuitemcheckbox"
+                    aria-checked={gridVisible}
+                    onClick={() => setGridVisible((visible) => !visible)}
+                  >
+                    <span className="menu-check">{gridVisible ? "✓" : ""}</span>
+                    <span>Show grid</span>
+                    <kbd>⇧G</kbd>
+                  </button>
+                  <div className="menu-section-label">Toolbar</div>
+                  {(["top", "bottom"] as const).map((position) => (
+                    <button
+                      key={position}
+                      role="menuitemradio"
+                      aria-checked={toolbarPosition === position}
+                      onClick={() => setToolbarPosition(position)}
+                    >
+                      <span className="menu-check">
+                        {toolbarPosition === position ? "●" : ""}
+                      </span>
+                      <span>{position === "top" ? "Top" : "Bottom"}</span>
+                      <span />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-        <nav className="mode-switcher" aria-label="Editor mode">
-          {MODES.map((item) => (
+          <nav className="mode-switcher" aria-label="Editor mode">
+            {MODES.map((item) => (
+              <button
+                key={item.id}
+                className={mode === item.id ? "active" : ""}
+                onClick={() => setMode(item.id)}
+                title={`${item.label} mode (${item.shortcut})`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="topbar-actions">
             <button
-              key={item.id}
-              className={mode === item.id ? "active" : ""}
-              onClick={() => setMode(item.id)}
-              title={`${item.label} mode (${item.shortcut})`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        <div className="topbar-actions">
-          <button
-            className={`library-trigger ${libraryOpen ? "active" : ""}`}
-            onClick={() => {
-              setLibraryComponentId(undefined);
-              setLibrarySection("projects");
-              setLibraryOpen((open) => !open);
-            }}
-          >
-            Library
-          </button>
-          <button
-            className="theme-toggle"
-            onClick={() =>
-              setTheme((current) => (current === "dark" ? "light" : "dark"))
-            }
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          >
-            {theme === "dark" ? <Sun /> : <Moon />}
-          </button>
-          {!shared && (
-            <button
-              className="share-button"
-              onClick={async () => {
-                if (await preserveCurrentDocument()) setShareOpen(true);
+              className={`library-trigger ${libraryOpen ? "active" : ""}`}
+              onClick={() => {
+                setLibraryComponentId(undefined);
+                setLibrarySection("projects");
+                setLibraryOpen((open) => !open);
               }}
             >
-              Share document
+              Library
             </button>
-          )}
-        </div>
-      </header>
-
-      {libraryOpen && (
-        <LibraryView
-          model={documentModel}
-          focusedComponentId={libraryComponentId}
-          section={librarySection}
-          recentDocuments={recentDocuments}
-          archivedDocuments={archivedDocuments}
-          currentRecentDocumentId={currentRecentDocumentId}
-          onBack={() => setLibraryOpen(false)}
-          onSectionChange={setLibrarySection}
-          onNewDocument={newDocument}
-          onOpenRecent={openRecentDocument}
-          onRemoveRecent={(id) => void removeRecentProject(id)}
-          onRenameRecent={(document) => void renameRecentProject(document)}
-          onDuplicateRecent={(document) =>
-            void duplicateRecentProject(document)
-          }
-          onArchiveRecent={(document) => void archiveRecentProject(document)}
-          onRestoreRecent={(document) => void restoreRecentProject(document)}
-          onSetProjectCover={(document, pageId) =>
-            void setProjectCover(document, pageId)
-          }
-          onRecoverRecent={setRecoveryProject}
-          onInsert={createComponentInstance}
-          onEditMain={editMainComponent}
-          onAddVariant={duplicateComponentVariant}
-        />
-      )}
-      <section
-        aria-hidden={libraryOpen}
-        className={`workspace ${libraryOpen ? "workspace-hidden" : ""}`}
-        style={
-          {
-            "--left-panel-width": `${leftPanelWidth}px`,
-            "--right-panel-width": `${rightPanelWidth}px`,
-          } as CSSProperties
-        }
-      >
-        <aside className="left-panel">
-          <Panel
-            mode={mode}
-            stats={stats}
-            model={isolatedModel}
-            selectedNodeIds={selectedNodeIds}
-            onSelectNode={(id, additive) => {
-              selectNode(id, additive);
-              directLayerSelectionRef.current = [...selectedNodeIdsRef.current];
-            }}
-            onAddPage={addPage}
-            onSelectPage={selectPage}
-            onRenamePage={renamePage}
-            onDeletePage={deletePage}
-            onNavigateNode={(node) => rendererRef.current?.centerOnBounds(node)}
-            onReorderNode={(draggedId, targetId, before) => {
-              if (
-                !isolationRootId &&
-                isComponentMasterNode(draggedId, nodesById)
-              )
-                return;
-              if (engineRef.current?.reorder_node(draggedId, targetId, before))
-                refreshDocument();
-            }}
-            onToggleLock={(id, locked) => {
-              if (!isolationRootId && isComponentMasterNode(id, nodesById))
-                return;
-              if (engineRef.current?.set_node_locked(id, locked)) {
-                if (locked && selectedNodeIdsRef.current.includes(id))
-                  refreshDocument(
-                    selectedNodeIdsRef.current.filter(
-                      (selected) => selected !== id,
-                    ),
-                  );
-                else refreshDocument();
-              }
-            }}
-            onRenameNode={(id, name) => {
-              if (!isolationRootId && isComponentMasterNode(id, nodesById))
-                return;
-              if (
-                name.trim() &&
-                engineRef.current?.rename_node(id, name.trim())
-              )
-                refreshDocument();
-            }}
-            onAddNumberVariable={addNumberVariable}
-            onUpdateNumberVariable={updateNumberVariable}
-            onDeleteNumberVariable={deleteNumberVariable}
-            onAddTextStyle={addTextStyle}
-            onUpdateTextStyle={updateTextStyle}
-            onDeleteTextStyle={deleteTextStyle}
-            hasSelectedText={editableSelectedNodes.some(
-              (node) => node.kind === "text",
-            )}
-            onImportImage={importImage}
-            onImportFigma={importFigma}
-            onAddLibraryIcon={addLibraryIcon}
-            onAddNodeFromAsset={addNodeFromAsset}
-            onAddComponentInstance={createComponentInstance}
-            onAddSelectedComponentVariant={addSelectedComponentVariant}
-            onOpenComponentLibrary={(componentId) => {
-              setLibraryComponentId(componentId);
-              setLibrarySection("components");
-              setLibraryOpen(true);
-            }}
-            componentWorkspace={
-              componentWorkspace
-                ? {
-                    componentName: componentWorkspace.component.name,
-                    variantName: componentWorkspace.variant.name,
-                  }
-                : undefined
-            }
-          />
-          <PanelResizeHandle
-            side="left"
-            width={leftPanelWidth}
-            onChange={setLeftPanelWidth}
-          />
-        </aside>
-
-        <section
-          className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
-        >
-          <div className="tool-rail" aria-label="Canvas tools">
-            <ToolButton
-              label="Select (V)"
-              icon={<MousePointer2 />}
-              active={canvasTool === "select" && !pathSession}
-              disabled={mode !== "design"}
-              onClick={() => {
-                setPathSession(undefined);
-                setCanvasTool("select");
-              }}
-            />
-            <ToolButton
-              label="Pen tool"
-              icon={<PenTool />}
-              active={!!pathSession && !pathSession.node}
-              disabled={mode !== "design" || !!shared?.blocked}
-              onClick={() => {
-                setCanvasTool("select");
-                setPathSession({ page: documentModel.active_page_id });
-              }}
-            />
-            <ToolButton
-              label="Edit path"
-              icon={<Spline />}
-              active={!!pathSession?.node}
-              disabled={
-                mode !== "design" ||
-                !!shared?.blocked ||
-                selectedNodes.length !== 1 ||
-                selectedNodes[0]?.vector?.geometry.type !== "path" ||
-                !!selectedNodes[0]?.boolean_operation ||
-                selectedNodes[0]?.locked ||
-                (!!selectedMasterRoot && !isolationRootId) ||
-                !!selectedNodes[0]?.instance_root_id
-              }
+            <button
+              className="theme-toggle"
               onClick={() =>
-                setPathSession({
-                  node: selectedNodes[0],
-                  page: documentModel.active_page_id,
-                })
+                setTheme((current) => (current === "dark" ? "light" : "dark"))
               }
-            />
-            <ToolButton
-              label="Hand (H)"
-              icon={<Hand />}
-              active={canvasTool === "hand"}
-              onClick={() => {
-                setPathSession(undefined);
-                setCanvasTool("hand");
-              }}
-            />
-            <ToolButton
-              label="Artboard"
-              icon={<Frame />}
-              disabled={mode !== "design" || !!shared?.blocked}
-              active={artboardMenuOpen}
-              onClick={() => {
-                setShapeMenuOpen(false);
-                setArtboardMenuOpen((open) => !open);
-              }}
-            />
-            <ToolButton
-              label="Rectangle"
-              icon={<Square />}
-              disabled={mode !== "design" || !!shared?.blocked}
-              onClick={() => addNode("rectangle")}
-            />
-            <ToolButton
-              label="Shapes"
-              icon={<Shapes />}
-              active={shapeMenuOpen}
-              disabled={mode !== "design" || !!shared?.blocked}
-              onClick={() => {
-                setArtboardMenuOpen(false);
-                setShapeMenuOpen((open) => !open);
-              }}
-            />
-            <ToolButton
-              label="Text"
-              icon={<Type />}
-              disabled={mode !== "design" || !!shared?.blocked}
-              onClick={() => addNode("text")}
-            />
-            <ToolButton
-              label="Comment"
-              icon={<MessageCircle />}
-              disabled={mode === "developer"}
-            />
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+              {theme === "dark" ? <Sun /> : <Moon />}
+            </button>
+            {!shared && (
+              <button
+                className="share-button"
+                onClick={async () => {
+                  if (await preserveCurrentDocument()) setShareOpen(true);
+                }}
+              >
+                Share document
+              </button>
+            )}
           </div>
+        </header>
 
-          {artboardMenuOpen && (
-            <ArtboardMenu
-              onChoose={addArtboard}
-              onClose={() => setArtboardMenuOpen(false)}
-            />
-          )}
-          {shapeMenuOpen && (
-            <ShapeMenu
-              onChoose={addVectorShape}
-              onClose={() => setShapeMenuOpen(false)}
-            />
-          )}
-
-          <div className="canvas-wrap">
-            <canvas
-              ref={canvasRef}
-              aria-label="Open Libra WebGPU editor canvas"
-              onPointerMove={(event) => {
-                const cursor = rendererRef.current?.worldPointFromClient(
-                  event.clientX,
-                  event.clientY,
-                );
-                if (cursor) shared?.client.updatePresence({ cursor });
-              }}
-              onPointerLeave={() =>
-                shared?.client.updatePresence({ cursor: null })
+        {libraryOpen && (
+          <LibraryView
+            model={documentModel}
+            focusedComponentId={libraryComponentId}
+            section={librarySection}
+            recentDocuments={recentDocuments}
+            archivedDocuments={archivedDocuments}
+            currentRecentDocumentId={currentRecentDocumentId}
+            onBack={() => setLibraryOpen(false)}
+            onSectionChange={setLibrarySection}
+            onNewDocument={newDocument}
+            onOpenRecent={openRecentDocument}
+            onRemoveRecent={(id) => void removeRecentProject(id)}
+            onRenameRecent={(document) => void renameRecentProject(document)}
+            onDuplicateRecent={(document) =>
+              void duplicateRecentProject(document)
+            }
+            onArchiveRecent={(document) => void archiveRecentProject(document)}
+            onRestoreRecent={(document) => void restoreRecentProject(document)}
+            onSetProjectCover={(document, pageId) =>
+              void setProjectCover(document, pageId)
+            }
+            onRecoverRecent={setRecoveryProject}
+            onInsert={createComponentInstance}
+            onEditMain={editMainComponent}
+            onAddVariant={duplicateComponentVariant}
+          />
+        )}
+        <section
+          aria-hidden={libraryOpen}
+          className={`workspace ${libraryOpen ? "workspace-hidden" : ""}`}
+          style={
+            {
+              "--left-panel-width": `${leftPanelWidth}px`,
+              "--right-panel-width": `${rightPanelWidth}px`,
+            } as CSSProperties
+          }
+        >
+          <aside className="left-panel">
+            {!shared && (
+              <section className="stress-tests" aria-label="Stress tests">
+                <strong>Stress tests</strong>
+                <div className="stress-test-options">
+                  {[1_000, 10_000, 50_000, 100_000].map((count) => (
+                    <button
+                      key={count}
+                      type="button"
+                      aria-label={`${count / 1_000}K Nodes stress test`}
+                      title={`Load ${count.toLocaleString()} temporary shapes`}
+                      aria-pressed={
+                        benchmarkActive &&
+                        documentModel.pages.find(
+                          (page) => page.id === documentModel.active_page_id,
+                        )?.benchmark_node_count === count
+                      }
+                      onClick={() => void startBenchmark(count)}
+                    >
+                      {count / 1_000}K
+                    </button>
+                  ))}
+                </div>
+                <p>Temporary scenes. Edits reset when leaving.</p>
+                {benchmarkActive && (
+                  <>
+                    <p role="status">
+                      {benchmarkLoadMs !== undefined
+                        ? `Loaded in ${Math.round(benchmarkLoadMs)} ms · `
+                        : ""}
+                      {stats.visibleObjects.toLocaleString()} visible ·{" "}
+                      {stats.frameMs.toFixed(1)} ms/frame
+                    </p>
+                    <button type="button" onClick={leaveBenchmark}>
+                      Back to project
+                    </button>
+                  </>
+                )}
+              </section>
+            )}
+            <Panel
+              mode={mode}
+              stats={stats}
+              model={
+                benchmarkActive
+                  ? {
+                      ...isolatedModel,
+                      pages: isolatedModel.pages.filter(
+                        (page) => page.id !== isolatedModel.active_page_id,
+                      ),
+                    }
+                  : isolatedModel
               }
-              onContextMenu={(event) => {
-                event.preventDefault();
-                openCanvasComponentMenu(event.clientX, event.clientY);
+              selectedNodeIds={selectedNodeIds}
+              onSelectNode={(id, additive) => {
+                selectNode(id, additive);
+                directLayerSelectionRef.current = [
+                  ...selectedNodeIdsRef.current,
+                ];
               }}
-              onDragOver={(event) => {
+              onAddPage={addPage}
+              onSelectPage={selectPage}
+              onRenamePage={renamePage}
+              onDeletePage={deletePage}
+              onNavigateNode={(node) =>
+                rendererRef.current?.centerOnBounds(node)
+              }
+              onReorderNode={(draggedId, targetId, before) => {
                 if (
-                  event.dataTransfer.types.includes("Files") ||
-                  event.dataTransfer.types.includes(
-                    "application/x-open-libra-asset",
-                  )
-                ) {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "copy";
+                  !isolationRootId &&
+                  isComponentMasterNode(draggedId, nodesById)
+                )
+                  return;
+                if (
+                  engineRef.current?.reorder_node(draggedId, targetId, before)
+                )
+                  refreshDocument();
+              }}
+              onToggleLock={(id, locked) => {
+                if (!isolationRootId && isComponentMasterNode(id, nodesById))
+                  return;
+                if (engineRef.current?.set_node_locked(id, locked)) {
+                  if (locked && selectedNodeIdsRef.current.includes(id))
+                    refreshDocument(
+                      selectedNodeIdsRef.current.filter(
+                        (selected) => selected !== id,
+                      ),
+                    );
+                  else refreshDocument();
                 }
               }}
-              onDrop={dropAssetOnCanvas}
+              onRenameNode={(id, name) => {
+                if (!isolationRootId && isComponentMasterNode(id, nodesById))
+                  return;
+                if (
+                  name.trim() &&
+                  engineRef.current?.rename_node(id, name.trim())
+                )
+                  refreshDocument();
+              }}
+              onAddNumberVariable={addNumberVariable}
+              onUpdateNumberVariable={updateNumberVariable}
+              onDeleteNumberVariable={deleteNumberVariable}
+              onAddTextStyle={addTextStyle}
+              onUpdateTextStyle={updateTextStyle}
+              onDeleteTextStyle={deleteTextStyle}
+              hasSelectedText={editableSelectedNodes.some(
+                (node) => node.kind === "text",
+              )}
+              onImportImage={importImage}
+              onImportFigma={importFigma}
+              onAddLibraryIcon={addLibraryIcon}
+              onAddNodeFromAsset={addNodeFromAsset}
+              onAddComponentInstance={createComponentInstance}
+              onAddSelectedComponentVariant={addSelectedComponentVariant}
+              onOpenComponentLibrary={(componentId) => {
+                setLibraryComponentId(componentId);
+                setLibrarySection("components");
+                setLibraryOpen(true);
+              }}
+              componentWorkspace={
+                componentWorkspace
+                  ? {
+                      componentName: componentWorkspace.component.name,
+                      variantName: componentWorkspace.variant.name,
+                    }
+                  : undefined
+              }
             />
-            {shared && (
-              <SharedPresence
-                client={shared.client}
-                pageId={documentModel.active_page_id}
-                nodes={documentModel.nodes}
-                rendererRef={rendererRef}
+            <PanelResizeHandle
+              side="left"
+              width={leftPanelWidth}
+              onChange={setLeftPanelWidth}
+            />
+          </aside>
+
+          <section
+            className={`stage ${rulersVisible ? "with-rulers" : ""} toolbar-${toolbarPosition}`}
+          >
+            <div className="tool-rail" aria-label="Canvas tools">
+              <ToolButton
+                label="Select (V)"
+                icon={<MousePointer2 />}
+                active={canvasTool === "select" && !pathSession}
+                disabled={mode !== "design"}
+                onClick={() => {
+                  setPathSession(undefined);
+                  setCanvasTool("select");
+                }}
+              />
+              <ToolButton
+                label="Pen tool"
+                icon={<PenTool />}
+                active={!!pathSession && !pathSession.node}
+                disabled={mode !== "design" || !!shared?.blocked}
+                onClick={() => {
+                  setCanvasTool("select");
+                  setPathSession({ page: documentModel.active_page_id });
+                }}
+              />
+              <ToolButton
+                label="Edit path"
+                icon={<Spline />}
+                active={!!pathSession?.node}
+                disabled={
+                  mode !== "design" ||
+                  !!shared?.blocked ||
+                  selectedNodes.length !== 1 ||
+                  selectedNodes[0]?.vector?.geometry.type !== "path" ||
+                  !!selectedNodes[0]?.boolean_operation ||
+                  selectedNodes[0]?.locked ||
+                  (!!selectedMasterRoot && !isolationRootId) ||
+                  !!selectedNodes[0]?.instance_root_id
+                }
+                onClick={() =>
+                  setPathSession({
+                    node: selectedNodes[0],
+                    page: documentModel.active_page_id,
+                  })
+                }
+              />
+              <ToolButton
+                label="Hand (H)"
+                icon={<Hand />}
+                active={canvasTool === "hand"}
+                onClick={() => {
+                  setPathSession(undefined);
+                  setCanvasTool("hand");
+                }}
+              />
+              <ToolButton
+                label="Artboard"
+                icon={<Frame />}
+                disabled={mode !== "design" || !!shared?.blocked}
+                active={artboardMenuOpen}
+                onClick={() => {
+                  setShapeMenuOpen(false);
+                  setArtboardMenuOpen((open) => !open);
+                }}
+              />
+              <ToolButton
+                label="Rectangle"
+                icon={<Square />}
+                disabled={mode !== "design" || !!shared?.blocked}
+                onClick={() => addNode("rectangle")}
+              />
+              <ToolButton
+                label="Shapes"
+                icon={<Shapes />}
+                active={shapeMenuOpen}
+                disabled={mode !== "design" || !!shared?.blocked}
+                onClick={() => {
+                  setArtboardMenuOpen(false);
+                  setShapeMenuOpen((open) => !open);
+                }}
+              />
+              <ToolButton
+                label="Text"
+                icon={<Type />}
+                disabled={mode !== "design" || !!shared?.blocked}
+                onClick={() => addNode("text")}
+              />
+              <ToolButton
+                label="Comment"
+                icon={<MessageCircle />}
+                disabled={mode === "developer"}
+              />
+            </div>
+
+            {artboardMenuOpen && (
+              <ArtboardMenu
+                onChoose={addArtboard}
+                onClose={() => setArtboardMenuOpen(false)}
               />
             )}
-            {gridVisible && (
-              <CanvasGrid rendererRef={rendererRef} theme={theme} />
-            )}
-            <SceneCanvas
-              revision={modelPatchVersion}
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              assets={documentModel.media_assets}
-              editingTextId={editingTextId}
-              gpuBenchmark={usesGpuBenchmark(documentModel)}
-            />
-            <ArtboardGuides
-              rendererRef={rendererRef}
-              nodes={documentModel.nodes}
-              artboards={guidedArtboards}
-            />
-            {isolationRoot && (
-              <IsolationOverlay
-                rendererRef={rendererRef}
-                root={isolationRoot}
-                theme={theme}
+            {shapeMenuOpen && (
+              <ShapeMenu
+                onChoose={addVectorShape}
+                onClose={() => setShapeMenuOpen(false)}
               />
             )}
-            <SelectionOverlay
-              rendererRef={rendererRef}
-              selected={selectedNodes}
-              nodes={documentModel.nodes}
-              assets={documentModel.media_assets}
-            />
-            {marqueeRect && (
-              <div className="selection-marquee" style={marqueeRect} />
-            )}
-            {snapGuides.x !== undefined && (
-              <div
-                className="snap-guide vertical"
-                style={{ left: snapGuides.x }}
+
+            <div className="canvas-wrap">
+              <canvas
+                ref={canvasRef}
+                aria-label="Open Libra WebGPU editor canvas"
+                onPointerMove={(event) => {
+                  const cursor = rendererRef.current?.worldPointFromClient(
+                    event.clientX,
+                    event.clientY,
+                  );
+                  if (cursor) shared?.client.updatePresence({ cursor });
+                }}
+                onPointerLeave={() =>
+                  shared?.client.updatePresence({ cursor: null })
+                }
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  openCanvasComponentMenu(event.clientX, event.clientY);
+                }}
+                onDragOver={(event) => {
+                  if (
+                    event.dataTransfer.types.includes("Files") ||
+                    event.dataTransfer.types.includes(
+                      "application/x-open-libra-asset",
+                    )
+                  ) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }
+                }}
+                onDrop={dropAssetOnCanvas}
               />
-            )}
-            {snapGuides.y !== undefined && (
-              <div
-                className="snap-guide horizontal"
-                style={{ top: snapGuides.y }}
-              />
-            )}
-            {isolationRoot && (
-              <div
-                className="component-isolation-bar"
-                data-testid="component-isolation"
-              >
-                <Component aria-hidden="true" />
-                <button
-                  className="component-breadcrumb-link"
-                  onClick={() => {
-                    setLibraryComponentId(componentWorkspace?.component.id);
-                    setLibraryOpen(true);
-                  }}
-                >
-                  Components
-                </button>
-                <ChevronRight aria-hidden="true" />
-                <strong>
-                  {componentWorkspace?.component.name ?? isolationRoot.name}
-                </strong>
-                <ChevronRight aria-hidden="true" />
-                <span>{componentWorkspace?.variant.name ?? "Default"}</span>
-                <button
-                  className="component-workspace-done"
-                  onClick={() => setIsolationRootId(undefined)}
-                >
-                  <Check aria-hidden="true" />
-                  Done
-                </button>
-              </div>
-            )}
-            <SpacingOverlay
-              rendererRef={rendererRef}
-              interactionCanvasRef={canvasRef}
-              nodes={documentModel.nodes}
-              selected={selectedNodes}
-            />
-            {pathSession &&
-              pathSession.page === documentModel.active_page_id &&
-              mode === "design" &&
-              !shared?.blocked && (
-                <PathEditor
-                  key={`${pathSession.page}:${pathSession.node?.id ?? "new"}`}
+              {shared && (
+                <SharedPresence
+                  client={shared.client}
+                  pageId={documentModel.active_page_id}
+                  nodes={documentModel.nodes}
                   rendererRef={rendererRef}
-                  node={pathSession.node}
-                  onCommit={commitPath}
-                  onClose={() => setPathSession(undefined)}
                 />
               )}
-            {editingTextNode?.text && (
-              <textarea
-                className="text-editor-overlay"
-                readOnly={shared?.blocked}
-                onFocus={() => shared?.engine.begin_transaction()}
-                defaultValue={editingTextNode.text.content}
-                autoFocus
-                wrap={
-                  editingTextNode.text.sizing === "auto_width" ? "off" : "soft"
-                }
-                style={textEditorStyle(editingTextNode, rendererRef.current)}
-                onBlur={(event) => {
-                  if (
-                    event.currentTarget.value !==
-                    editingTextInitialValueRef.current
-                  )
-                    updateNodeText(editingTextNode, {
-                      ...editingTextNode.text!,
-                      content: event.currentTarget.value,
-                    });
-                  shared?.engine.end_transaction();
-                  setEditingTextId(undefined);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    shared?.engine.end_transaction();
-                    setEditingTextId(undefined);
-                  }
-                }}
-                aria-label="Edit text content"
+              {gridVisible && (
+                <CanvasGrid rendererRef={rendererRef} theme={theme} />
+              )}
+              <SceneCanvas
+                revision={modelPatchVersion}
+                rendererRef={rendererRef}
+                nodes={documentModel.nodes}
+                assets={documentModel.media_assets}
+                editingTextId={editingTextId}
+                gpuBenchmark={usesGpuBenchmark(documentModel)}
               />
-            )}
-            {(error || operationError) && (
-              <div className="error-card">
-                <strong>Editor error</strong>
-                <span>{error || operationError}</span>
-              </div>
-            )}
-            {canvasContextMenu && (
-              <div
-                className="canvas-context-menu"
-                role="menu"
-                style={{
-                  left: canvasContextMenu.x,
-                  top: canvasContextMenu.y,
-                }}
-              >
-                <button
-                  role="menuitem"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => {
-                    editMainComponent(canvasContextMenu.sourceRootId);
-                    setCanvasContextMenu(undefined);
-                  }}
+              <ArtboardGuides
+                rendererRef={rendererRef}
+                nodes={documentModel.nodes}
+                artboards={guidedArtboards}
+              />
+              {isolationRoot && (
+                <IsolationOverlay
+                  rendererRef={rendererRef}
+                  root={isolationRoot}
+                  theme={theme}
+                />
+              )}
+              <SelectionOverlay
+                rendererRef={rendererRef}
+                selected={selectedNodes}
+                nodes={documentModel.nodes}
+                assets={documentModel.media_assets}
+              />
+              {marqueeRect && (
+                <div className="selection-marquee" style={marqueeRect} />
+              )}
+              {snapGuides.x !== undefined && (
+                <div
+                  className="snap-guide vertical"
+                  style={{ left: snapGuides.x }}
+                />
+              )}
+              {snapGuides.y !== undefined && (
+                <div
+                  className="snap-guide horizontal"
+                  style={{ top: snapGuides.y }}
+                />
+              )}
+              {isolationRoot && (
+                <div
+                  className="component-isolation-bar"
+                  data-testid="component-isolation"
                 >
                   <Component aria-hidden="true" />
-                  Edit component
-                </button>
-              </div>
-            )}
-          </div>
-
-          {rulersVisible && <Rulers rendererRef={rendererRef} theme={theme} />}
-
-          <div className="zoom-controls">
-            <button
-              onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
-              aria-label="Zoom out"
-            >
-              −
-            </button>
-            <button onClick={() => rendererRef.current?.resetView()}>
-              {Math.round(stats.zoom * 100)}%
-            </button>
-            <button
-              onClick={() => rendererRef.current?.zoomBy(1.2)}
-              aria-label="Zoom in"
-            >
-              +
-            </button>
-            <button
-              onClick={() => rendererRef.current?.zoomToFit()}
-              title="Zoom to fit (F)"
-            >
-              Fit
-            </button>
-          </div>
-        </section>
-
-        <aside className="right-panel">
-          <PanelResizeHandle
-            side="right"
-            width={rightPanelWidth}
-            onChange={setRightPanelWidth}
-          />
-          <p className="eyebrow">{mode}</p>
-          {mode === "design" &&
-            (selectedComponentMaster &&
-            !isolationRootId &&
-            selectedMasterRoot ? (
-              <div
-                className="component-master-readonly"
-                data-testid="component-master-readonly"
-              >
-                <Component aria-hidden="true" />
-                <strong>Component master</strong>
-                <span>
-                  Open this component workspace before editing its layers.
-                </span>
-                <button
-                  onClick={() => editMainComponent(selectedMasterRoot.id)}
-                >
-                  Edit component
-                </button>
-              </div>
-            ) : (
-              <fieldset
-                disabled={shared?.blocked}
-                className="property-controls"
-              >
-                <Properties
-                  selected={editableSelectedNodes}
-                  documentColors={documentColors}
-                  numberVariables={documentModel.number_variables}
-                  textStyles={documentModel.text_styles}
-                  mediaAssets={documentModel.media_assets}
-                  components={documentModel.components}
-                  onAddDocumentColor={addDocumentColor}
-                  onAlign={alignSelected}
-                  onDelete={deleteSelected}
-                  onGroup={groupSelected}
-                  onBoolean={booleanSelected}
-                  onBooleanChange={changeBoolean}
-                  onBooleanRelease={releaseBoolean}
-                  onMask={maskSelected}
-                  onReleaseMask={releaseMask}
-                  hasMask={
-                    selectedNodes.length === 1 &&
-                    documentModel.nodes.some(
-                      (node) =>
-                        node.parent_id === selectedNodes[0].id &&
-                        node.mask_shape,
+                  <button
+                    className="component-breadcrumb-link"
+                    onClick={() => {
+                      setLibraryComponentId(componentWorkspace?.component.id);
+                      setLibraryOpen(true);
+                    }}
+                  >
+                    Components
+                  </button>
+                  <ChevronRight aria-hidden="true" />
+                  <strong>
+                    {componentWorkspace?.component.name ?? isolationRoot.name}
+                  </strong>
+                  <ChevronRight aria-hidden="true" />
+                  <span>{componentWorkspace?.variant.name ?? "Default"}</span>
+                  <button
+                    className="component-workspace-done"
+                    onClick={() => setIsolationRootId(undefined)}
+                  >
+                    <Check aria-hidden="true" />
+                    Done
+                  </button>
+                </div>
+              )}
+              <SpacingOverlay
+                rendererRef={rendererRef}
+                interactionCanvasRef={canvasRef}
+                nodes={documentModel.nodes}
+                selected={selectedNodes}
+              />
+              {pathSession &&
+                pathSession.page === documentModel.active_page_id &&
+                mode === "design" &&
+                !shared?.blocked && (
+                  <PathEditor
+                    key={`${pathSession.page}:${pathSession.node?.id ?? "new"}`}
+                    rendererRef={rendererRef}
+                    node={pathSession.node}
+                    onCommit={commitPath}
+                    onClose={() => setPathSession(undefined)}
+                  />
+                )}
+              {editingTextNode?.text && (
+                <textarea
+                  className="text-editor-overlay"
+                  readOnly={shared?.blocked}
+                  onFocus={() => shared?.engine.begin_transaction()}
+                  defaultValue={editingTextNode.text.content}
+                  autoFocus
+                  wrap={
+                    editingTextNode.text.sizing === "auto_width"
+                      ? "off"
+                      : "soft"
+                  }
+                  style={textEditorStyle(editingTextNode, rendererRef.current)}
+                  onBlur={(event) => {
+                    if (
+                      event.currentTarget.value !==
+                      editingTextInitialValueRef.current
                     )
-                  }
-                  onUngroup={ungroupSelected}
-                  onExportFrame={(node, scale) =>
-                    void exportSelectedFrame(node, scale)
-                  }
-                  onCreateComponent={createComponent}
-                  onInstanceVariantChange={changeInstanceVariant}
-                  onInstanceReset={resetComponentInstance}
-                  onInstanceDetach={detachComponentInstance}
-                  onInstanceSwap={swapComponentInstance}
-                  onGoToMainComponent={goToMainComponent}
-                  onVectorParametersChange={updateVectorParameters}
-                  onVectorFillRuleChange={updateVectorFillRule}
-                  onVectorConvertToPath={convertVectorToPath}
-                  onEditPath={(node) =>
-                    setPathSession({ node, page: documentModel.active_page_id })
-                  }
-                  onExportVector={exportSelectedVector}
-                  onStyleChange={updateNodeStyle}
-                  onBoundsChange={updateNodeBounds}
-                  onOpacityChange={updateNodeOpacity}
-                  onShadowsChange={updateNodeShadows}
-                  onTextChange={updateNodeText}
-                  onVariableBind={bindNodeVariable}
-                  onTextStyleBind={bindNodeTextStyle}
-                  onCreateVariable={createAndBindVariable}
-                  onCreateTextStyle={createAndBindTextStyle}
-                  onImageFitChange={updateNodeImageFit}
-                  onAssetChange={updateNodeAsset}
-                  onTransformChange={updateNodeTransform}
-                  onLayoutChange={updateNodeLayout}
-                  onWidthSizingChange={updateNodeWidthSizing}
-                  onArtboardGuideChange={updateArtboardGuide}
+                      updateNodeText(editingTextNode, {
+                        ...editingTextNode.text!,
+                        content: event.currentTarget.value,
+                      });
+                    shared?.engine.end_transaction();
+                    setEditingTextId(undefined);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      shared?.engine.end_transaction();
+                      setEditingTextId(undefined);
+                    }
+                  }}
+                  aria-label="Edit text content"
                 />
-              </fieldset>
-            ))}
-          {mode === "developer" && (
-            <Inspect
-              selected={selectedNodes}
-              numberVariables={documentModel.number_variables}
-              textStyles={documentModel.text_styles}
+              )}
+              {(error || operationError) && (
+                <div className="error-card">
+                  <strong>Editor error</strong>
+                  <span>{error || operationError}</span>
+                </div>
+              )}
+              {canvasContextMenu && (
+                <div
+                  className="canvas-context-menu"
+                  role="menu"
+                  style={{
+                    left: canvasContextMenu.x,
+                    top: canvasContextMenu.y,
+                  }}
+                >
+                  <button
+                    role="menuitem"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => {
+                      editMainComponent(canvasContextMenu.sourceRootId);
+                      setCanvasContextMenu(undefined);
+                    }}
+                  >
+                    <Component aria-hidden="true" />
+                    Edit component
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {rulersVisible && (
+              <Rulers rendererRef={rendererRef} theme={theme} />
+            )}
+
+            <div className="zoom-controls">
+              <button
+                onClick={() => rendererRef.current?.zoomBy(1 / 1.2)}
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button onClick={() => rendererRef.current?.resetView()}>
+                {Math.round(stats.zoom * 100)}%
+              </button>
+              <button
+                onClick={() => rendererRef.current?.zoomBy(1.2)}
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+              <button
+                onClick={() => rendererRef.current?.zoomToFit()}
+                title="Zoom to fit (F)"
+              >
+                Fit
+              </button>
+            </div>
+          </section>
+
+          <aside className="right-panel">
+            <PanelResizeHandle
+              side="right"
+              width={rightPanelWidth}
+              onChange={setRightPanelWidth}
             />
-          )}
-          {mode === "review" && <Review />}
-        </aside>
-      </section>
-    </main>
+            <p className="eyebrow">{mode}</p>
+            {mode === "design" &&
+              (selectedComponentMaster &&
+              !isolationRootId &&
+              selectedMasterRoot ? (
+                <div
+                  className="component-master-readonly"
+                  data-testid="component-master-readonly"
+                >
+                  <Component aria-hidden="true" />
+                  <strong>Component master</strong>
+                  <span>
+                    Open this component workspace before editing its layers.
+                  </span>
+                  <button
+                    onClick={() => editMainComponent(selectedMasterRoot.id)}
+                  >
+                    Edit component
+                  </button>
+                </div>
+              ) : (
+                <fieldset
+                  disabled={shared?.blocked}
+                  className="property-controls"
+                >
+                  <Properties
+                    selected={editableSelectedNodes}
+                    documentColors={documentColors}
+                    numberVariables={documentModel.number_variables}
+                    textStyles={documentModel.text_styles}
+                    mediaAssets={documentModel.media_assets}
+                    components={documentModel.components}
+                    onAddDocumentColor={addDocumentColor}
+                    onAlign={alignSelected}
+                    onDelete={deleteSelected}
+                    onGroup={groupSelected}
+                    onBoolean={booleanSelected}
+                    onBooleanChange={changeBoolean}
+                    onBooleanRelease={releaseBoolean}
+                    onMask={maskSelected}
+                    onReleaseMask={releaseMask}
+                    hasMask={
+                      selectedNodes.length === 1 &&
+                      documentModel.nodes.some(
+                        (node) =>
+                          node.parent_id === selectedNodes[0].id &&
+                          node.mask_shape,
+                      )
+                    }
+                    onUngroup={ungroupSelected}
+                    onExportFrame={(node, scale) =>
+                      void exportSelectedFrame(node, scale)
+                    }
+                    onCreateComponent={createComponent}
+                    onInstanceVariantChange={changeInstanceVariant}
+                    onInstanceReset={resetComponentInstance}
+                    onInstanceDetach={detachComponentInstance}
+                    onInstanceSwap={swapComponentInstance}
+                    onGoToMainComponent={goToMainComponent}
+                    onVectorParametersChange={updateVectorParameters}
+                    onVectorFillRuleChange={updateVectorFillRule}
+                    onVectorConvertToPath={convertVectorToPath}
+                    onEditPath={(node) =>
+                      setPathSession({
+                        node,
+                        page: documentModel.active_page_id,
+                      })
+                    }
+                    onExportVector={exportSelectedVector}
+                    onStyleChange={updateNodeStyle}
+                    onBoundsChange={updateNodeBounds}
+                    onOpacityChange={updateNodeOpacity}
+                    onShadowsChange={updateNodeShadows}
+                    onTextChange={updateNodeText}
+                    onVariableBind={bindNodeVariable}
+                    onTextStyleBind={bindNodeTextStyle}
+                    onCreateVariable={createAndBindVariable}
+                    onCreateTextStyle={createAndBindTextStyle}
+                    onImageFitChange={updateNodeImageFit}
+                    onAssetChange={updateNodeAsset}
+                    onTransformChange={updateNodeTransform}
+                    onLayoutChange={updateNodeLayout}
+                    onWidthSizingChange={updateNodeWidthSizing}
+                    onArtboardGuideChange={updateArtboardGuide}
+                  />
+                </fieldset>
+              ))}
+            {mode === "developer" && (
+              <Inspect
+                selected={selectedNodes}
+                numberVariables={documentModel.number_variables}
+                textStyles={documentModel.text_styles}
+              />
+            )}
+            {mode === "review" && <Review />}
+          </aside>
+        </section>
+      </main>
+    </>
   );
 }
 

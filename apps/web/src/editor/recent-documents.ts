@@ -39,6 +39,42 @@ export type RecoverySnapshot = {
   createdAt: number;
 };
 
+type Stored<T> = T & { jsonGzip?: Blob; jsonHash?: string };
+
+async function encodeRecord<T extends { json: string }>(
+  record: T,
+): Promise<Stored<T>> {
+  if (record.json.length < 8 * 1024 * 1024) return record;
+  const compressed = await new Response(
+    new Blob([record.json]).stream().pipeThrough(new CompressionStream("gzip")),
+  ).blob();
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    await compressed.arrayBuffer(),
+  );
+  return {
+    ...record,
+    json: "",
+    jsonGzip: compressed,
+    jsonHash: Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join(""),
+  };
+}
+
+async function decodeRecord<T extends { json: string }>(
+  record: Stored<T>,
+): Promise<T> {
+  if (!record.jsonGzip) return record;
+  const json = await new Response(
+    record.jsonGzip.stream().pipeThrough(new DecompressionStream("gzip")),
+  ).text();
+  const { jsonGzip: _compressed, jsonHash: _hash, ...metadata } = record;
+  void _compressed;
+  void _hash;
+  return { ...metadata, json } as T;
+}
+
 export function createProjectPreview(model: DocumentReadModel): ProjectPreview {
   const visible = model.nodes
     .filter((node) => node.kind !== "group")
@@ -73,15 +109,38 @@ export function createProjectPreview(model: DocumentReadModel): ProjectPreview {
   };
 }
 
+/** Library rows intentionally exclude document payloads. Load one on demand. */
+export async function listProjectSummaries(): Promise<RecentDocument[]> {
+  const database = await openDatabase();
+  try {
+    const records = await requestResult<Stored<RecentDocument>[]>(
+      database.transaction(STORE_NAME).objectStore(STORE_NAME).getAll(),
+    );
+    return records.map(
+      ({ json: _json, jsonGzip: _gzip, jsonHash: _hash, ...metadata }) => {
+        void _json;
+        void _gzip;
+        void _hash;
+        return { ...metadata, json: "" };
+      },
+    );
+  } finally {
+    database.close();
+  }
+}
+
 export async function listStoredDocuments(): Promise<RecentDocument[]> {
   const database = await openDatabase();
   const records = await requestResult<RecentDocument[]>(
     database.transaction(STORE_NAME).objectStore(STORE_NAME).getAll(),
   );
   database.close();
-  return records
-    .filter((record) => !record.archivedAt)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  return Promise.all(
+    records
+      .filter((record) => !record.archivedAt)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((record) => decodeRecord(record)),
+  );
 }
 
 export async function listArchivedDocuments(): Promise<RecentDocument[]> {
@@ -90,9 +149,12 @@ export async function listArchivedDocuments(): Promise<RecentDocument[]> {
     database.transaction(STORE_NAME).objectStore(STORE_NAME).getAll(),
   );
   database.close();
-  return records
-    .filter((record) => record.archivedAt)
-    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+  return Promise.all(
+    records
+      .filter((record) => record.archivedAt)
+      .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
+      .map((record) => decodeRecord(record)),
+  );
 }
 
 export async function getRecentDocument(id: string) {
@@ -101,7 +163,20 @@ export async function getRecentDocument(id: string) {
     database.transaction(STORE_NAME).objectStore(STORE_NAME).get(id),
   );
   database.close();
-  return record;
+  return record ? decodeRecord(record) : undefined;
+}
+
+/** Conflict checks do not need to decompress the document or its journal. */
+export async function getRecentDocumentRevision(id: string) {
+  const database = await openDatabase();
+  try {
+    const record = await requestResult<RecentDocument | undefined>(
+      database.transaction(STORE_NAME).objectStore(STORE_NAME).get(id),
+    );
+    return record ? (record.revision ?? 0) : undefined;
+  } finally {
+    database.close();
+  }
 }
 
 export function getLastDocumentId() {
@@ -146,7 +221,6 @@ export function subscribeToProjectChanges(listener: (id: string) => void) {
 function projectContent(document: RecentDocument) {
   return JSON.stringify([
     document.name,
-    document.json,
     document.pageCount,
     document.objectCount,
     document.preview,
@@ -160,6 +234,7 @@ export async function storeRecentDocument(
   document: RecentDocument,
   expectedRevision: number | null = document.revision ?? 0,
 ): Promise<RecentDocument> {
+  const encoded = await encodeRecord(document);
   const database = await openDatabase();
   try {
     let changed = false;
@@ -175,7 +250,7 @@ export async function storeRecentDocument(
       };
       const request = store.get(document.id);
       request.onsuccess = () => {
-        const previous = request.result as RecentDocument | undefined;
+        const previous = request.result as Stored<RecentDocument> | undefined;
         // Compare and write in one transaction, serialized across browser tabs.
         if ((previous ? (previous.revision ?? 0) : null) !== expectedRevision) {
           failure = new ProjectConflictError();
@@ -183,16 +258,24 @@ export async function storeRecentDocument(
           return;
         }
         const unchanged =
-          previous && projectContent(previous) === projectContent(document);
+          previous &&
+          previous.json === encoded.json &&
+          previous.jsonHash === encoded.jsonHash &&
+          projectContent(previous) === projectContent(document);
         // Opening a project updates recency without invalidating other editors.
         result = unchanged
           ? {
-              ...previous,
+              ...document,
+              revision: previous.revision,
               updatedAt: Math.max(previous.updatedAt, document.updatedAt),
             }
           : { ...document, revision: (previous?.revision ?? 0) + 1 };
         try {
-          store.put(result);
+          store.put({
+            ...encoded,
+            revision: result.revision,
+            updatedAt: result.updatedAt,
+          });
           changed = !unchanged;
         } catch (cause) {
           failure = cause;
@@ -250,6 +333,7 @@ export async function removeRecentDocument(
 }
 
 export async function storeRecoverySnapshot(snapshot: RecoverySnapshot) {
+  const encoded = await encodeRecord(snapshot);
   const database = await openDatabase();
   try {
     const transaction = database.transaction(
@@ -265,7 +349,7 @@ export async function storeRecoverySnapshot(snapshot: RecoverySnapshot) {
     project.onsuccess = () => {
       try {
         if (project.result)
-          transaction.objectStore(SNAPSHOT_STORE_NAME).put(snapshot);
+          transaction.objectStore(SNAPSHOT_STORE_NAME).put(encoded);
       } catch {
         transaction.abort();
       }
@@ -302,7 +386,11 @@ export async function listRecoverySnapshots(documentId: string) {
         .index("documentId")
         .getAll(documentId),
     );
-    return snapshots.sort((a, b) => b.createdAt - a.createdAt);
+    return Promise.all(
+      snapshots
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((record) => decodeRecord(record)),
+    );
   } finally {
     database.close();
   }

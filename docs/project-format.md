@@ -118,10 +118,14 @@ A shape node can carry optional `mask_shape: true` (absent means false). Within 
 
 ## Boolean groups
 
-A group can carry optional `boolean_operation`: `union`, `subtract`, `intersect`, or `exclude`. Its direct children are editable operands, ordered by document paint order. The group’s `vector` stores a derived normalized, closed, even-odd path. Children do not paint separately; canvas selection targets the result, and Layers provides explicit operand selection.
+A group can carry optional `boolean_operation`: `union`, `subtract`, `intersect`, or `exclude`. Its direct children are editable operands. Combination order is captured at creation from document paint order and stored as `boolean_operands`; later layer reordering does not change it. Newly parented operands append. The group’s `vector` stores a derived normalized, closed, even-odd path. Children do not paint separately; canvas selection targets the result, and Layers provides explicit operand selection.
 
 The engine recomputes derived paths after operand edits and shared operation replay, deepest groups first. Native documents store both operands and the result. Creation accepts 2–64 unlocked sibling rectangles or closed vector shapes (including nested boolean results); open paths, ordinary groups, masks, text, images, and component instances are not operands. Removing operands can leave a single-operand or empty result.
 
-Operations combine filled geometry, ignoring operand stroke width, opacity, and visibility. Subtraction folds upper operands into the bottom operand; the group inherits bottom-operand fill/stroke. Curves are flattened with a 0.05 document-pixel tolerance; original Bézier handles remain unchanged. Geometry is capped at 131,072 points per operand/result, with bounded curve subdivision. This is geometric combination, not alpha compositing.
+Operations combine filled geometry, ignoring operand stroke width, opacity, and visibility. Subtraction folds later operands into the first captured operand; the group copies that operand’s fill, stroke, stroke width, and stroke join once at creation (stroke alignment starts centered). The result then owns its paint: operand paint edits and reordering do not change paint or derived geometry, while geometry edits still recompute the result in the captured operand order. Edit the boolean group itself to change its paint. Curves are flattened with a 0.05 document-pixel tolerance; original Bézier handles remain unchanged. Geometry is capped at 131,072 points per operand/result, with bounded curve subdivision. This is geometric combination, not alpha compositing.
 
 Release clears boolean mode and the derived path, restoring an ordinary group of original artwork. Undo restores the operation. Result SVG export exports the derived vector path; PNG uses the same painter as the canvas.
+
+## Temporary benchmark scenes
+
+The local demo's Stress tests are runtime-only workspaces, not project pages. Saves, recovery, Library previews and portable exports always describe the parked project while a test is active. No schema change is needed. Legacy pages with `benchmark_node_count` retain their existing persisted semantics and are never silently removed.

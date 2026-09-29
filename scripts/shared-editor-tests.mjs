@@ -133,6 +133,11 @@ try {
   await a.getByRole("button", { name: "Publish shared copy" }).click();
   await a.waitForURL(/shared=1/);
   await a.getByTestId(`layer-node-${frame}`).waitFor();
+  assert.equal(
+    await a.locator(".stress-tests").count(),
+    0,
+    "Shared sessions must not expose temporary benchmarks",
+  );
   const sharedUrl = a.url(),
     room = new URL(sharedUrl).searchParams.get("room");
   const owner = await a.evaluate(

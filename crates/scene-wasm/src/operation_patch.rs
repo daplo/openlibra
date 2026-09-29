@@ -88,13 +88,19 @@ fn flatten(document: &Document) -> State {
     root.as_object_mut().unwrap().remove("active_page_id");
     let mut state = State::new();
     for name in COLLECTIONS {
-        let items = root[name].as_array().cloned().unwrap_or_default();
+        let items = match root[name].take() {
+            Value::Array(items) => items,
+            _ => Vec::new(),
+        };
         let mut ids = Vec::new();
         for mut item in items {
             let id: EntityId = serde_json::from_value(item["id"].clone()).unwrap();
             ids.push(Value::String(id.to_string()));
             if name == "pages" {
-                let nodes = item["nodes"].as_array().cloned().unwrap_or_default();
+                let nodes = match item["nodes"].take() {
+                    Value::Array(nodes) => nodes,
+                    _ => Vec::new(),
+                };
                 let mut node_ids = Vec::new();
                 for node in nodes {
                     let node_id: EntityId = serde_json::from_value(node["id"].clone()).unwrap();
@@ -169,6 +175,56 @@ fn expand(state: &State, active_page: EntityId) -> Result<Document, String> {
 }
 
 pub(crate) fn diff(before: &Document, after: &Document) -> Vec<Change> {
+    if before == after {
+        return Vec::new();
+    }
+    // Geometry/style edits usually change a handful of nodes. Serializing every
+    // untouched node twice can exhaust WASM memory in a large document.
+    if before.schema_version == after.schema_version
+        && before.color_library == after.color_library
+        && before.number_variables == after.number_variables
+        && before.text_styles == after.text_styles
+        && before.media_assets == after.media_assets
+        && before.components == after.components
+        && before.pages.len() == after.pages.len()
+        && before.pages.iter().zip(&after.pages).all(|(a, b)| {
+            a.id == b.id
+                && a.name == b.name
+                && a.description == b.description
+                && a.benchmark_node_count == b.benchmark_node_count
+                && a.benchmark_modified_node_ids == b.benchmark_modified_node_ids
+                && a.nodes.len() == b.nodes.len()
+                && a.nodes.iter().zip(&b.nodes).all(|(a, b)| a.id == b.id)
+        })
+    {
+        let mut changed = BTreeMap::new();
+        for (a, b) in before.pages.iter().zip(&after.pages) {
+            for (a, b) in a.nodes.iter().zip(&b.nodes) {
+                if a != b {
+                    changed.insert(a.id, (a, b));
+                }
+            }
+        }
+        let mut changes = Vec::new();
+        for (id, (a, b)) in changed {
+            let mut a = serde_json::to_value(a).expect("validated node");
+            let mut b = serde_json::to_value(b).expect("validated node");
+            canonical_numbers(&mut a);
+            canonical_numbers(&mut b);
+            diff_value(
+                &Target::Node { id },
+                &mut Vec::new(),
+                Some(&a),
+                Some(&b),
+                &mut changes,
+            );
+        }
+        return changes;
+    }
+    diff_full(before, after)
+}
+
+fn diff_full(before: &Document, after: &Document) -> Vec<Change> {
     let before = flatten(before);
     let after = flatten(after);
     let keys: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
@@ -283,7 +339,27 @@ fn merge_order(current: &Value, expected: &Value, desired: &Value) -> Result<Val
 }
 
 pub(crate) fn apply(document: &Document, changes: &[Change]) -> Result<Document, String> {
-    let mut state = flatten(document);
+    let node_properties_only = changes
+        .iter()
+        .all(|change| matches!(change.target, Target::Node { .. }) && !change.path.is_empty());
+    let mut state = if node_properties_only {
+        let targets: BTreeSet<_> = changes.iter().map(|change| change.target.clone()).collect();
+        document
+            .pages
+            .iter()
+            .flat_map(|page| &page.nodes)
+            .filter_map(|node| {
+                let target = Target::Node { id: node.id };
+                targets.contains(&target).then(|| {
+                    let mut value = serde_json::to_value(node).expect("validated node");
+                    canonical_numbers(&mut value);
+                    (target, value)
+                })
+            })
+            .collect()
+    } else {
+        flatten(document)
+    };
     for change in changes {
         if change.path.is_empty() {
             if state.get(&change.target) != change.before.as_ref() {
@@ -326,6 +402,25 @@ pub(crate) fn apply(document: &Document, changes: &[Change]) -> Result<Document,
         } else {
             object.remove(field);
         }
+    }
+    if node_properties_only {
+        let mut candidate = document.clone();
+        for node in candidate.pages.iter_mut().flat_map(|page| &mut page.nodes) {
+            if let Some(value) = state.remove(&Target::Node { id: node.id }) {
+                let updated: Node =
+                    serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+                let mut canonical = serde_json::to_value(&updated).expect("validated node");
+                canonical_numbers(&mut canonical);
+                if updated.id != node.id || canonical != value {
+                    return Err(
+                        "Unrecognized fields, orphaned entities or noncanonical changes".into(),
+                    );
+                }
+                *node = updated;
+            }
+        }
+        candidate.validate()?;
+        return Ok(candidate);
     }
     expand(&state, document.active_page_id)
 }
@@ -376,4 +471,37 @@ pub(crate) fn validate_external(changes: &[Change]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fast_diff_tests {
+    use super::*;
+    #[test]
+    fn node_edit_diff_matches_full_document_diff() {
+        let mut engine = DocumentEngine::new_blank();
+        let node = engine.add_rectangle();
+        engine.add_rectangle();
+        let before = engine.document.clone();
+        engine.set_node_bounds(node, 12.0, 25.0, 99.0, 101.0);
+        assert_eq!(
+            diff(&before, &engine.document),
+            diff_full(&before, &engine.document)
+        );
+        let changes = diff(&before, &engine.document);
+        assert_eq!(apply(&before, &changes).unwrap(), engine.document);
+        let mut stale = changes.clone();
+        stale[0].before = Some(serde_json::json!("wrong expected value"));
+        assert!(apply(&before, &stale).is_err());
+        let mut unknown = changes[0].clone();
+        unknown.path = vec!["unknown_node_field".into()];
+        unknown.before = None;
+        unknown.after = Some(serde_json::json!(true));
+        assert!(apply(&before, &[unknown]).is_err());
+        let inverse: Vec<_> = changes.iter().rev().map(Change::inverse).collect();
+        assert_eq!(apply(&engine.document, &inverse).unwrap(), before);
+        assert_eq!(
+            diff(&engine.document, &before),
+            diff_full(&engine.document, &before)
+        );
+    }
 }

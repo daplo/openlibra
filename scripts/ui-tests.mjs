@@ -1,3 +1,5 @@
+import { testPageNavigation } from "./page-navigation-tests.mjs";
+import { testLargeStorage } from "./large-storage-tests.mjs";
 import { testBooleans } from "./boolean-tests.mjs";
 import { testMasks } from "./mask-tests.mjs";
 import { testPathEditing } from "./path-editing-tests.mjs";
@@ -744,10 +746,11 @@ try {
     state: "detached",
   });
 
-  const benchmarkPage = page
-    .getByTestId(/^page-node-/)
-    .filter({ hasText: "1K Nodes" });
-  await benchmarkPage.locator(".page-main").click();
+  const benchmarkPage = page.getByRole("button", {
+    name: "1K Nodes stress test",
+    exact: true,
+  });
+  await benchmarkPage.click();
   await page.waitForFunction(() => {
     const rows = [...document.querySelectorAll(".metrics > div")];
     return rows.some(
@@ -756,7 +759,7 @@ try {
         row.querySelector("dd")?.textContent === "1,000",
     );
   });
-  assert.equal(await benchmarkPage.getAttribute("data-active"), "true");
+  assert.equal(await benchmarkPage.getAttribute("aria-pressed"), "true");
   assert.deepEqual(
     browserErrors,
     [],
@@ -768,6 +771,8 @@ try {
   await testPathEditing(browser, url);
   await testMasks(browser, url);
   await testBooleans(browser, url);
+  await testLargeStorage(browser, url);
+  await testPageNavigation(browser, url);
   await testRenderingInteraction(browser, url);
   await testProjectSafety(browser, url);
   await testCrossTab(browser, url);

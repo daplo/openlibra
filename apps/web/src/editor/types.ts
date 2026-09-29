@@ -69,6 +69,7 @@ export type NodeSummary = {
   parent_id?: EntityId;
   mask_shape?: boolean;
   boolean_operation?: "union" | "subtract" | "intersect" | "exclude";
+  boolean_operands?: EntityId[];
   x: number;
   y: number;
   width: number;

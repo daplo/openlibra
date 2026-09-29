@@ -9,7 +9,7 @@ fn demo_document_has_stable_renderable_nodes() {
         engine.scene_data().len(),
         engine.rect_count() * FLOATS_PER_RECT
     );
-    assert_eq!(engine.document.pages.len(), 5);
+    assert_eq!(engine.document.pages.len(), 1);
     for name in [
         "Finance · Welcome",
         "Finance · Wallet",
@@ -866,46 +866,19 @@ fn text_nodes_are_created_editable_serialized_and_undoable() {
 }
 
 #[test]
-fn benchmark_pages_are_lazy_and_generate_exact_scene_sizes() {
-    let mut document = Document::demo();
-    let benchmarks = [
-        ("1K Nodes · Baseline", 1_000),
-        ("10K Nodes · Large", 10_000),
-        ("50K Nodes · Stress", 50_000),
-        ("100K Nodes · Extreme", 100_000),
-    ];
-
-    for (name, expected_count) in benchmarks {
-        let page = document
-            .pages
-            .iter()
-            .find(|page| page.name == name)
-            .unwrap();
-        assert!(page.nodes.is_empty());
-        assert!(!page.description.is_empty());
-        let page_id = page.id;
-
-        assert!(document.set_active_page(page_id));
-        assert_eq!(document.active_page().nodes.len(), expected_count);
-        assert_eq!(
-            document.scene_data().len(),
-            expected_count * FLOATS_PER_RECT
-        );
+fn benchmark_scenes_generate_exact_sizes() {
+    for count in [1_000, 10_000, 50_000, 100_000] {
+        let document = Document::benchmark(count);
+        assert_eq!(document.pages.len(), 1);
+        assert_eq!(document.active_page().nodes.len(), count);
+        assert_eq!(document.scene_data().len(), count * FLOATS_PER_RECT);
+        document.validate().unwrap();
     }
-
-    document.validate().unwrap();
 }
 
 #[test]
 fn benchmark_hit_testing_uses_grid_coordinates() {
-    let mut document = Document::demo();
-    let page_id = document
-        .pages
-        .iter()
-        .find(|page| page.benchmark_node_count == Some(100_000))
-        .unwrap()
-        .id;
-    assert!(document.set_active_page(page_id));
+    let mut document = Document::benchmark(100_000);
     assert_eq!(
         document.benchmark_hit_test(5.0, 5.0),
         Some(document.active_page().nodes[0].id)
@@ -926,14 +899,7 @@ fn benchmark_hit_testing_uses_grid_coordinates() {
 
 #[test]
 fn benchmark_view_scene_only_contains_intersecting_nodes() {
-    let mut document = Document::demo();
-    let page_id = document
-        .pages
-        .iter()
-        .find(|page| page.benchmark_node_count == Some(100_000))
-        .unwrap()
-        .id;
-    assert!(document.set_active_page(page_id));
+    let mut document = Document::benchmark(100_000);
     let visible = document.scene_data_for_view(-1.0, -1.0, 100.0, 100.0);
     assert_eq!(visible.len() / FLOATS_PER_RECT, 49);
 
@@ -1052,7 +1018,7 @@ fn document_validation_rejects_parent_cycles() {
 fn document_validation_rejects_cross_page_node_ownership() {
     let mut document = Document::demo();
     let duplicate = document.active_page().nodes[0].clone();
-    let other_page = document.pages[1].id;
+    let other_page = document.add_page("Other".into());
     document
         .pages
         .iter_mut()
@@ -1073,7 +1039,8 @@ fn document_validation_rejects_cross_page_and_non_container_parents() {
     let mut cross_page = Document::demo();
     let child = cross_page.active_page().nodes[1].clone();
     cross_page.active_page_mut().nodes.remove(1);
-    cross_page.pages[1].nodes.push(child);
+    cross_page.add_page("Other".into());
+    cross_page.active_page_mut().nodes.push(child);
     assert!(
         cross_page
             .validate()
@@ -1752,8 +1719,7 @@ fn compact_style_history_restores_node_without_document_snapshots() {
 #[test]
 fn benchmark_geometry_transaction_uses_compact_history() {
     let mut engine = DocumentEngine::new();
-    let benchmark_page_id = engine.document.pages[1].id;
-    assert!(engine.document.set_active_page(benchmark_page_id));
+    engine.document = Document::benchmark(1_000);
     let node = engine.document.active_page().nodes[0].clone();
     engine
         .begin_geometry_transaction(&serde_json::to_string(&[node.id]).unwrap())
@@ -1779,8 +1745,7 @@ fn benchmark_geometry_transaction_uses_compact_history() {
 #[test]
 fn benchmark_group_move_and_undo_include_children() {
     let mut engine = DocumentEngine::new();
-    let benchmark_page_id = engine.document.pages[1].id;
-    assert!(engine.document.set_active_page(benchmark_page_id));
+    engine.document = Document::benchmark(1_000);
     let child_ids = [
         engine.document.active_page().nodes[0].id,
         engine.document.active_page().nodes[1].id,
@@ -1848,8 +1813,7 @@ fn selected_nodes_align_to_their_combined_bounds() {
 #[test]
 fn deleting_a_node_mid_geometry_transaction_preserves_undo_history() {
     let mut engine = DocumentEngine::new();
-    let benchmark_page_id = engine.document.pages[1].id;
-    assert!(engine.document.set_active_page(benchmark_page_id));
+    engine.document = Document::benchmark(1_000);
     let doomed_id = engine.document.active_page().nodes[0].id;
     let survivor_id = engine.document.active_page().nodes[1].id;
     let doomed_original = {
@@ -2546,6 +2510,35 @@ fn boolean_holes_nested_shapes_and_empty_results() {
 }
 
 #[test]
+fn boolean_apis_report_failure_when_sync_rolls_back() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    let b = engine.add_rectangle();
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "union")
+        .unwrap();
+    // Corrupt the group with an open operand so every later sync fails.
+    let line = engine.add_vector_shape("line".into(), "".into());
+    engine
+        .document
+        .active_node_mut(parse_entity_id(&line))
+        .unwrap()
+        .parent_id = Some(parse_entity_id(&group));
+    let before = engine.document.clone();
+    assert!(!engine.set_boolean_operation(group.clone(), "subtract"));
+    assert_eq!(engine.document, before);
+    // boolean_nodes builds a JsValue on error, so exercise its mutation path directly.
+    let ids = [engine.add_rectangle(), engine.add_rectangle()].map(|id| parse_entity_id(&id));
+    let before = engine.document.clone();
+    assert!(
+        engine
+            .try_mutate(|d| d.create_boolean(&ids, BooleanOperation::Union))
+            .is_err()
+    );
+    assert_eq!(engine.document, before);
+}
+
+#[test]
 fn boolean_rejects_open_operands_without_mutation() {
     let mut engine = DocumentEngine::new_blank();
     let a = engine.add_rectangle();
@@ -2581,4 +2574,157 @@ fn boolean_transformed_operand_keeps_its_footprint() {
     assert!(engine.hit_test(0.0, 0.0).is_empty());
     assert_eq!(engine.hit_test(50.0, -10.0), group);
     assert_eq!(engine.hit_test(350.0, 50.0), group);
+}
+
+#[test]
+fn page_navigation_does_not_record_edits_or_recompute_geometry() {
+    let mut engine = DocumentEngine::new_blank();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    let first = engine.document.active_page_id.to_string();
+    let second = engine.add_page("Second".into());
+    let state = engine.operation_state_json();
+    assert!(engine.set_active_page(first.clone()));
+    assert_eq!(engine.document.active_page_id.to_string(), first);
+    assert_eq!(engine.operation_state_json(), state);
+    assert!(engine.set_active_page(second.clone()));
+    assert_eq!(engine.operation_state_json(), state);
+    let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+    assert_eq!(loaded.document.active_page_id.to_string(), second);
+    assert!(engine.undo());
+    assert_eq!(engine.document.pages.len(), 1);
+}
+
+#[test]
+fn boolean_reorder_does_not_change_subtract_geometry() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    engine.set_node_bounds(a.clone(), 0.0, 0.0, 100.0, 100.0);
+    let b = engine.add_rectangle();
+    engine.set_node_bounds(b.clone(), 50.0, 0.0, 100.0, 100.0);
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "subtract")
+        .unwrap();
+    assert_eq!(engine.hit_test(25.0, 50.0), group);
+    assert!(engine.hit_test(75.0, 50.0).is_empty());
+    assert!(engine.hit_test(125.0, 50.0).is_empty());
+    assert!(engine.reorder_node(b, a, true));
+    assert_eq!(engine.hit_test(25.0, 50.0), group);
+    assert!(engine.hit_test(75.0, 50.0).is_empty());
+    assert!(engine.hit_test(125.0, 50.0).is_empty());
+    engine.document.validate().unwrap();
+}
+
+#[test]
+fn boolean_result_paint_is_copied_once_and_remains_independently_editable() {
+    let mut engine = DocumentEngine::new_blank();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    let a = engine.add_rectangle();
+    let b = engine.add_rectangle();
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "union")
+        .unwrap();
+    let root_id = parse_entity_id(&group);
+    let initial = engine.document.active_node(root_id).unwrap().clone();
+    assert_eq!(
+        initial.fill,
+        engine
+            .document
+            .active_node(parse_entity_id(&a))
+            .unwrap()
+            .fill
+    );
+    engine.mutate(|d| {
+        let source = d.active_node_mut(parse_entity_id(&a)).unwrap();
+        source.fill = [1.0, 0.0, 0.0, 1.0];
+        source.stroke = [0.0, 0.0, 1.0, 1.0];
+        source.stroke_width = 7.0;
+    });
+    let result = engine.document.active_node(root_id).unwrap();
+    assert_eq!(result.fill, initial.fill);
+    assert_eq!(result.stroke, initial.stroke);
+    assert_eq!(result.stroke_width, initial.stroke_width);
+    engine.mutate(|d| {
+        let root = d.active_node_mut(root_id).unwrap();
+        root.fill = [0.0, 1.0, 0.0, 1.0];
+        root.stroke_width = 3.0;
+    });
+    engine.set_node_bounds(a, 10.0, 20.0, 200.0, 100.0);
+    let result = engine.document.active_node(root_id).unwrap();
+    assert_eq!(result.fill, [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(result.stroke_width, 3.0);
+    assert!(engine.undo());
+    let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+    assert_eq!(
+        loaded.document.active_node(root_id).unwrap().fill,
+        [0.0, 1.0, 0.0, 1.0]
+    );
+}
+
+#[test]
+fn temporary_benchmarks_do_not_change_project_or_history() {
+    let mut engine = DocumentEngine::new();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    engine.add_rectangle();
+    let saved = engine.document_json();
+    let model = engine.project_read_model_json();
+    let key = engine.document_snapshot_key();
+    let history = engine.operation_state_json();
+    let home = engine.document.active_page_id.to_string();
+    for count in [1_000, 10_000, 50_000, 100_000, 1_000] {
+        assert!(engine.start_benchmark(count));
+        assert_eq!(engine.document.pages.len(), 1);
+        assert_eq!(engine.document.active_page().nodes.len(), count);
+        let node = engine.document.active_page().nodes[0].id.to_string();
+        engine.begin_transaction();
+        assert!(engine.set_node_bounds(node, 10.0, 20.0, 40.0, 50.0));
+        engine.end_transaction();
+        assert!(!engine.can_undo());
+        assert!(!engine.undo());
+        assert_eq!(engine.document_json(), saved);
+        assert_eq!(engine.project_read_model_json(), model);
+        assert_eq!(engine.document_snapshot_key(), key);
+        let project = engine.benchmark_project.as_ref().unwrap();
+        assert!(project.benchmark_project.is_none());
+        assert_eq!(project.operation_state_json(), history);
+    }
+    assert!(engine.set_active_page(home));
+    assert!(!engine.is_benchmark());
+    assert_eq!(engine.document_json(), saved);
+    assert_eq!(engine.operation_state_json(), history);
+    assert!(engine.undo());
+    assert!(engine.redo());
+    assert!(engine.start_benchmark(1_000));
+    assert_eq!(engine.document.active_page().nodes[0].width, 12.0);
+    assert!(!engine.start_benchmark(123));
+    assert_eq!(engine.document.active_page().nodes.len(), 1_000);
+    engine.add_page("New project page".into());
+    assert!(!engine.is_benchmark());
+    assert_eq!(engine.document.pages.len(), 2);
+    assert!(
+        engine
+            .document
+            .pages
+            .iter()
+            .all(|page| page.benchmark_node_count.is_none())
+    );
+}
+
+#[test]
+fn legacy_saved_benchmark_pages_remain_editable_and_persisted() {
+    let mut engine = DocumentEngine::new_blank();
+    engine.document = Document::benchmark(1_000);
+    let node = engine.document.active_page().nodes[0].id.to_string();
+    assert!(engine.set_node_bounds(node, 8.0, 9.0, 32.0, 24.0));
+    let saved = engine.document_json();
+    let mut restored = DocumentEngine::load_json(&saved).unwrap();
+    assert!(!restored.is_benchmark());
+    assert!(restored.start_benchmark(10_000));
+    assert!(restored.end_benchmark());
+    assert_eq!(restored.document_json(), saved);
 }

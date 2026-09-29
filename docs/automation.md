@@ -25,7 +25,7 @@ openlibra template rectangle
 openlibra apply design.libra --operations edits.json --expected-sha256 HASH --output updated.libra
 ```
 
-Commands return JSON. Errors go to stderr with a nonzero exit status. `--root DIRECTORY` sets the workspace boundary (default: current directory). Document paths must resolve inside it, including paths through symlinked directories. Existing parent directories are required.
+Commands return JSON. Errors go to stderr with a nonzero exit status. `--root DIRECTORY` sets the workspace boundary (default: current directory). Document and operations-file paths must resolve inside it, including paths through symlinked directories. Existing parent directories are required.
 
 Inspection returns page IDs, node counts, schema version, operation revision, and a SHA-256 of the exact file bytes. A document without operation history has revision zero and no operation document ID until its first edit.
 
