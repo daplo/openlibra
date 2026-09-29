@@ -359,7 +359,11 @@ export class OpenLibraRenderer {
 
   setScene(rectData: Float32Array, sceneBuildMs = this.sceneBuildMs) {
     const uploadStarted = performance.now();
-    if (rectData.byteLength > this.instanceBufferCapacity) {
+    if (
+      rectData.byteLength > this.instanceBufferCapacity ||
+      (this.instanceBufferCapacity > 1024 * 1024 &&
+        rectData.byteLength < this.instanceBufferCapacity / 4)
+    ) {
       const nextBuffer = createBuffer(
         this.device,
         rectData,
@@ -370,7 +374,12 @@ export class OpenLibraRenderer {
       this.instanceBufferCapacity = Math.max(4, rectData.byteLength);
     }
     this.sceneData = rectData;
-    if (this.visibleSceneData.length < rectData.length)
+    // Release large scratch buffers when leaving a stress scene.
+    if (
+      this.visibleSceneData.length < rectData.length ||
+      (this.visibleSceneData.byteLength > 1024 * 1024 &&
+        rectData.length < this.visibleSceneData.length / 4)
+    )
       this.visibleSceneData = new Float32Array(rectData.length);
     this.totalObjectCount = rectData.length / FLOATS_PER_RECT;
     this.objectCount = this.totalObjectCount;

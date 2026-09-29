@@ -125,3 +125,7 @@ The engine recomputes derived paths after operand edits and shared operation rep
 Operations combine filled geometry, ignoring operand stroke width, opacity, and visibility. Subtraction folds later operands into the first captured operand; the group copies that operand’s fill, stroke, stroke width, and stroke join once at creation (stroke alignment starts centered). The result then owns its paint: operand paint edits and reordering do not change paint or derived geometry, while geometry edits still recompute the result in the captured operand order. Edit the boolean group itself to change its paint. Curves are flattened with a 0.05 document-pixel tolerance; original Bézier handles remain unchanged. Geometry is capped at 131,072 points per operand/result, with bounded curve subdivision. This is geometric combination, not alpha compositing.
 
 Release clears boolean mode and the derived path, restoring an ordinary group of original artwork. Undo restores the operation. Result SVG export exports the derived vector path; PNG uses the same painter as the canvas.
+
+## Temporary benchmark scenes
+
+The local demo's Stress tests are runtime-only workspaces, not project pages. Saves, recovery, Library previews and portable exports always describe the parked project while a test is active. No schema change is needed. Legacy pages with `benchmark_node_count` retain their existing persisted semantics and are never silently removed.

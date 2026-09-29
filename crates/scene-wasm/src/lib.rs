@@ -436,6 +436,14 @@ impl DocumentEngine {
         serde_json::to_string(&model).expect("read model is serializable")
     }
 
+    /// Metadata/previews for persistence must describe the project, not a temporary scene.
+    pub fn project_read_model_json(&self) -> String {
+        self.benchmark_project.as_ref().map_or_else(
+            || self.read_model_json(),
+            |project| project.read_model_json(),
+        )
+    }
+
     /// Identity of the committed snapshot exposed by document_json. Untracked
     /// engines deliberately return no key so callers cannot cache mutable state.
     pub fn document_snapshot_key(&self) -> String {

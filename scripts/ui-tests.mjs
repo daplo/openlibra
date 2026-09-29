@@ -746,7 +746,10 @@ try {
     state: "detached",
   });
 
-  const benchmarkPage = page.getByRole("button", { name: "1K Nodes stress test", exact: true });
+  const benchmarkPage = page.getByRole("button", {
+    name: "1K Nodes stress test",
+    exact: true,
+  });
   await benchmarkPage.click();
   await page.waitForFunction(() => {
     const rows = [...document.querySelectorAll(".metrics > div")];

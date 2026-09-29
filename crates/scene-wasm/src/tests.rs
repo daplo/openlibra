@@ -2672,6 +2672,7 @@ fn temporary_benchmarks_do_not_change_project_or_history() {
         .unwrap();
     engine.add_rectangle();
     let saved = engine.document_json();
+    let model = engine.project_read_model_json();
     let key = engine.document_snapshot_key();
     let history = engine.operation_state_json();
     let home = engine.document.active_page_id.to_string();
@@ -2686,6 +2687,7 @@ fn temporary_benchmarks_do_not_change_project_or_history() {
         assert!(!engine.can_undo());
         assert!(!engine.undo());
         assert_eq!(engine.document_json(), saved);
+        assert_eq!(engine.project_read_model_json(), model);
         assert_eq!(engine.document_snapshot_key(), key);
         let project = engine.benchmark_project.as_ref().unwrap();
         assert!(project.benchmark_project.is_none());

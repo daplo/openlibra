@@ -63,6 +63,21 @@ try {
   verify();
   const loaded = DocumentEngine.load_json(serializeDocument(tracked));
   loaded.free();
+  const projectSnapshot = serializeDocument(tracked);
+  const projectModel = engine.read_model_json();
+  engine.start_benchmark(1000);
+  assert.throws(
+    () => engine.enable_operations(randomUUID()),
+    /cannot join collaboration/,
+  );
+  const temporaryNode = JSON.parse(engine.read_model_json()).nodes[0].id;
+  engine.set_node_bounds(temporaryNode, 10, 20, 50, 60);
+  assert.equal(serializeDocument(tracked), projectSnapshot);
+  assert.equal(engine.project_read_model_json(), projectModel);
+  assert.equal(engine.can_undo(), false);
+  engine.end_benchmark();
+  assert.equal(engine.read_model_json(), projectModel);
+  assert.equal(serializeDocument(tracked), projectSnapshot);
   const untracked = DocumentEngine.new_blank();
   try {
     const before = serializeDocument(untracked);
