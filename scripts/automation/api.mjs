@@ -53,13 +53,24 @@ export function automation(root = process.cwd()) {
   }
   function readBytes(file) {
     const filename = resolve(file);
-    if (
-      !fs.statSync(filename).isFile() ||
-      fs.statSync(filename).size > 64 * 1024 * 1024
-    )
-      throw Error("Expected a file no larger than 64 MiB");
-    const bytes = fs.readFileSync(filename);
-    return { filename, bytes };
+    // Validate the opened descriptor rather than the path, so a symlink swapped
+    // in after the workspace check cannot redirect the read outside root.
+    const fd = fs.openSync(
+      filename,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const opened = fs.fstatSync(fd);
+      const current = fs.statSync(resolve(file));
+      if (opened.dev !== current.dev || opened.ino !== current.ino)
+        throw Error("File changed while it was being opened");
+      if (!opened.isFile() || opened.size > 64 * 1024 * 1024)
+        throw Error("Expected a file no larger than 64 MiB");
+      const bytes = fs.readFileSync(fd);
+      return { filename, bytes };
+    } finally {
+      fs.closeSync(fd);
+    }
   }
   function read(file) {
     const { filename, bytes } = readBytes(file);

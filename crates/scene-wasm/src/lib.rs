@@ -731,7 +731,8 @@ impl DocumentEngine {
         let mode: BooleanOperation =
             serde_json::from_value(serde_json::Value::String(operation.into()))
                 .map_err(|_| JsValue::from_str("Unknown boolean operation"))?;
-        self.mutate(|d| d.create_boolean(&ids, mode))
+        self.try_mutate(|d| d.create_boolean(&ids, mode))
+            .and_then(|result| result)
             .map(|id| id.to_string())
             .map_err(|e| JsValue::from_str(&e))
     }
@@ -743,7 +744,7 @@ impl DocumentEngine {
             return false;
         };
         let id = parse_entity_id(&id);
-        self.mutate(|d| {
+        self.try_mutate(|d| {
             let Some(node) = d.active_node_mut(id) else {
                 return false;
             };
@@ -753,11 +754,12 @@ impl DocumentEngine {
             node.boolean_operation = Some(mode);
             true
         })
+        .unwrap_or(false)
     }
 
     pub fn release_boolean(&mut self, id: String) -> bool {
         let id = parse_entity_id(&id);
-        self.mutate(|d| {
+        self.try_mutate(|d| {
             let Some(node) = d.active_node_mut(id) else {
                 return false;
             };
@@ -773,6 +775,7 @@ impl DocumentEngine {
             node.name = "Group".into();
             true
         })
+        .unwrap_or(false)
     }
 
     pub fn mask_nodes(&mut self, node_ids_json: &str) -> String {
@@ -1750,6 +1753,22 @@ impl DocumentEngine {
 
 impl DocumentEngine {
     fn mutate<R>(&mut self, operation: impl FnOnce(&mut Document) -> R) -> R {
+        self.mutate_checked(operation).0
+    }
+
+    /// Like `mutate`, but also returns the boolean synchronization error that
+    /// caused the edit to be rolled back, so callers do not report success.
+    fn try_mutate<R>(&mut self, operation: impl FnOnce(&mut Document) -> R) -> Result<R, String> {
+        match self.mutate_checked(operation) {
+            (result, None) => Ok(result),
+            (_, Some(error)) => Err(error),
+        }
+    }
+
+    fn mutate_checked<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Document) -> R,
+    ) -> (R, Option<String>) {
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             let before = self.document.has_booleans().then(|| self.document.clone());
             let result = operation(&mut self.document);
@@ -1757,28 +1776,29 @@ impl DocumentEngine {
                 if let Some(before) = before {
                     self.document = before;
                 }
-                self.operation_error = Some(error);
+                self.operation_error = Some(error.clone());
+                return (result, Some(error));
             }
-            return result;
+            return (result, None);
         }
         let before = self.document.clone();
         let result = operation(&mut self.document);
         if let Err(error) = self.document.sync_booleans() {
             self.document = before;
-            self.operation_error = Some(error);
-            return result;
+            self.operation_error = Some(error.clone());
+            return (result, Some(error));
         }
         if component_source_changed(&before, &self.document) {
             self.document.sync_component_instances();
         }
         if let Err(error) = self.document.sync_booleans() {
             self.document = before;
-            self.operation_error = Some(error);
-            return result;
+            self.operation_error = Some(error.clone());
+            return (result, Some(error));
         }
         if self.operation_session.is_some() {
             self.record_operation(&before);
-            return result;
+            return (result, None);
         }
         if before != self.document {
             if self.transaction_start.is_none() {
@@ -1786,7 +1806,7 @@ impl DocumentEngine {
             }
             self.redo_stack.clear();
         }
-        result
+        (result, None)
     }
 
     fn edit_command(

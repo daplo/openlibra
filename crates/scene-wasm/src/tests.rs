@@ -2546,6 +2546,35 @@ fn boolean_holes_nested_shapes_and_empty_results() {
 }
 
 #[test]
+fn boolean_apis_report_failure_when_sync_rolls_back() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    let b = engine.add_rectangle();
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "union")
+        .unwrap();
+    // Corrupt the group with an open operand so every later sync fails.
+    let line = engine.add_vector_shape("line".into(), "".into());
+    engine
+        .document
+        .active_node_mut(parse_entity_id(&line))
+        .unwrap()
+        .parent_id = Some(parse_entity_id(&group));
+    let before = engine.document.clone();
+    assert!(!engine.set_boolean_operation(group.clone(), "subtract"));
+    assert_eq!(engine.document, before);
+    // boolean_nodes builds a JsValue on error, so exercise its mutation path directly.
+    let ids = [engine.add_rectangle(), engine.add_rectangle()].map(|id| parse_entity_id(&id));
+    let before = engine.document.clone();
+    assert!(
+        engine
+            .try_mutate(|d| d.create_boolean(&ids, BooleanOperation::Union))
+            .is_err()
+    );
+    assert_eq!(engine.document, before);
+}
+
+#[test]
 fn boolean_rejects_open_operands_without_mutation() {
     let mut engine = DocumentEngine::new_blank();
     let a = engine.add_rectangle();
