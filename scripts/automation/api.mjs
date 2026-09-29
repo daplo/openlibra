@@ -51,14 +51,18 @@ export function automation(root = process.cwd()) {
       throw Error("Output symlinks are not supported");
     return resolved;
   }
-  function read(file) {
+  function readBytes(file) {
     const filename = resolve(file);
     if (
       !fs.statSync(filename).isFile() ||
       fs.statSync(filename).size > 64 * 1024 * 1024
     )
-      throw Error("Expected a document file no larger than 64 MiB");
+      throw Error("Expected a file no larger than 64 MiB");
     const bytes = fs.readFileSync(filename);
+    return { filename, bytes };
+  }
+  function read(file) {
+    const { filename, bytes } = readBytes(file);
     const parsed = JSON.parse(bytes.toString("utf8"));
     if (
       parsed.format !== undefined &&
@@ -137,6 +141,9 @@ export function automation(root = process.cwd()) {
     }
   }
   return {
+    readOperations({ file }) {
+      return JSON.parse(readBytes(file).bytes.toString("utf8"));
+    },
     template({ kind }) {
       if (
         ![

@@ -1,3 +1,7 @@
+import {
+  documentContentKey,
+  serializeDocument,
+} from "./editor/document-snapshot";
 import { PathEditor } from "./components/PathEditor";
 import type { VectorContour } from "./editor/types";
 import { SharedPresence } from "./components/SharedPresence";
@@ -76,8 +80,8 @@ import {
   createProjectPreview,
   getLastDocumentId,
   getRecentDocument,
-  listArchivedDocuments,
-  listStoredDocuments,
+  getRecentDocumentRevision,
+  listProjectSummaries,
   removeRecentDocument,
   storeRecentDocument,
   storeRecoverySnapshot,
@@ -175,9 +179,9 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   const [documentName, setDocumentName] = useState("Engine study.libra");
   const [isDocumentDirty, setIsDocumentDirty] = useState(false);
   const savedDocumentJsonRef = useRef<string | undefined>(undefined);
-  const browserSavedRef = useRef<{ json: string; name: string } | undefined>(
-    undefined,
-  );
+  const browserSavedRef = useRef<
+    { json: string; name: string; contentKey?: string } | undefined
+  >(undefined);
   const persistenceIdRef = useRef<string | undefined>(undefined);
   const projectSessionsRef = useRef(
     new WeakMap<
@@ -315,11 +319,24 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     void refreshRecentDocuments();
   }, []);
 
+  const contentRevision = engineRef.current
+    ? documentContentKey(engineRef.current)
+    : "";
+  function browserSnapshotMatches(engine: DocumentEngine) {
+    const saved = browserSavedRef.current;
+    return (
+      !!saved &&
+      (saved.contentKey
+        ? saved.contentKey === documentContentKey(engine)
+        : saved.json === serializeDocument(engine))
+    );
+  }
+
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
     if (
-      browserSavedRef.current?.json === engine.document_json() &&
+      browserSnapshotMatches(engine) &&
       browserSavedRef.current?.name === documentName
     )
       return;
@@ -327,7 +344,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     return () => window.clearTimeout(timeout);
     // documentModel changes after every committed engine mutation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentModel, isDocumentDirty, documentName, currentRecentDocumentId]);
+  }, [contentRevision, isDocumentDirty, documentName, currentRecentDocumentId]);
 
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -335,7 +352,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       const engine = engineRef.current;
       if (
         !engine ||
-        (browserSavedRef.current?.json === engine.document_json() &&
+        (browserSnapshotMatches(engine) &&
           browserSavedRef.current?.name === documentName)
       )
         return;
@@ -353,7 +370,12 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     });
   }, [shared, documentModel.active_page_id, selectedNodeIds]);
 
-  function refreshDocument(selection = selectedNodeIdsRef.current) {
+  const pageModelsRef = useRef(new Map<string, DocumentReadModel>());
+
+  function refreshDocument(
+    selection = selectedNodeIdsRef.current,
+    navigation = false,
+  ) {
     const engine = engineRef.current;
     if (!engine) return;
     const operationState = JSON.parse(engine.operation_state_json()) as {
@@ -361,7 +383,18 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     } | null;
     if (engineRef.current === engine)
       setOperationError(operationState?.error ?? undefined);
-    const model = JSON.parse(engine.read_model_json()) as DocumentReadModel;
+    const modelKey = engine.document_snapshot_key();
+    const pageModels = pageModelsRef.current;
+    if (!navigation) pageModels.clear();
+    const model =
+      (navigation && pageModels.get(modelKey)) ||
+      (JSON.parse(engine.read_model_json()) as DocumentReadModel);
+    if (modelKey) {
+      pageModels.set(modelKey, model);
+      // Bound retained page data; edits invalidate every cached page.
+      if (pageModels.size > 2)
+        pageModels.delete(pageModels.keys().next().value!);
+    }
     const validSelection = selection.filter(
       (id) =>
         model.nodes.some((node) => node.id === id) || !!shared?.client.pending,
@@ -374,18 +407,19 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       selectedNodeIdsRef.current = validSelection;
       setSelectedNodeIds(validSelection);
     }
+    const documentJson = navigation ? undefined : serializeDocument(engine);
     setDocumentModel(model);
-    setDownloadRequested(false);
-    setAutosaveState(
-      browserSavedRef.current?.json === engine.document_json() &&
-        browserSavedRef.current?.name === documentName
-        ? "saved"
-        : "idle",
-    );
-    if (savedDocumentJsonRef.current !== undefined)
-      setIsDocumentDirty(
-        engine.document_json() !== savedDocumentJsonRef.current,
+    if (!navigation) {
+      setDownloadRequested(false);
+      setAutosaveState(
+        browserSavedRef.current?.json === documentJson &&
+          browserSavedRef.current?.name === documentName
+          ? "saved"
+          : "idle",
       );
+      if (savedDocumentJsonRef.current !== undefined)
+        setIsDocumentDirty(documentJson !== savedDocumentJsonRef.current);
+    }
     setHistoryState({ canUndo: engine.can_undo(), canRedo: engine.can_redo() });
     const selected = model.nodes.filter((node) =>
       validSelection.includes(node.id),
@@ -491,7 +525,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     engineRef.current = engine;
     projectSessionsRef.current.set(engine, { revision, conflicted: false });
     setProjectConflict(false);
-    savedDocumentJsonRef.current = engine.document_json();
+    savedDocumentJsonRef.current = serializeDocument(engine);
     setDocumentName(name);
     persistenceIdRef.current = recentDocumentId;
     browserSavedRef.current = undefined;
@@ -589,7 +623,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     const engine = engineRef.current;
     if (!engine) return;
     setFileMenuOpen(false);
-    const json = engine.document_json();
+    const json = serializeDocument(engine);
     const blob = new Blob([serializeProject(json)], {
       type: OPEN_LIBRA_PROJECT_MIME,
     });
@@ -614,18 +648,27 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
 
   async function refreshRecentDocuments() {
     try {
-      const [recent, archived] = await Promise.all([
-        listStoredDocuments(),
-        listArchivedDocuments(),
-      ]);
-      setRecentDocuments(recent);
-      setArchivedDocuments(archived);
+      const rows = await listProjectSummaries();
+      setRecentDocuments(
+        rows
+          .filter((row) => !row.archivedAt)
+          .sort((a, b) => b.updatedAt - a.updatedAt),
+      );
+      setArchivedDocuments(
+        rows
+          .filter((row) => row.archivedAt)
+          .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+      );
     } catch {
       // IndexedDB may be unavailable in hardened/private browser contexts.
       setRecentDocuments([]);
       setArchivedDocuments([]);
     }
   }
+
+  useEffect(() => {
+    if (libraryOpen || documentSwitcherOpen) void refreshRecentDocuments();
+  }, [libraryOpen, documentSwitcherOpen]);
 
   function showProjectConflict(engine: DocumentEngine) {
     const session = projectSessionsRef.current.get(engine);
@@ -638,28 +681,28 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
 
   useEffect(() => {
     async function checkProject(id = persistenceIdRef.current) {
-      void refreshRecentDocuments();
       const engine = engineRef.current;
       if (!engine || !id || id !== persistenceIdRef.current) return;
       const session = projectSessionsRef.current.get(engine);
       if (!session || session.revision === null) return;
       const expectedRevision = session.revision;
       try {
-        const latest = await getRecentDocument(id);
+        const latestRevision = await getRecentDocumentRevision(id);
         if (
           engineRef.current !== engine ||
           session.revision !== expectedRevision
         )
           return;
-        if (!latest || (latest.revision ?? 0) !== session.revision)
+        if (latestRevision === undefined || latestRevision !== session.revision)
           showProjectConflict(engine);
       } catch {
         // Atomic revision checks still protect writes when notification reads fail.
       }
     }
-    const unsubscribe = subscribeToProjectChanges(
-      (id) => void checkProject(id),
-    );
+    const unsubscribe = subscribeToProjectChanges((id) => {
+      void checkProject(id);
+      if (libraryOpen || documentSwitcherOpen) void refreshRecentDocuments();
+    });
     const refresh = () => {
       void checkProject();
     };
@@ -670,7 +713,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, []);
+  }, [libraryOpen, documentSwitcherOpen]);
 
   async function reloadLatestProject() {
     const previous = engineRef.current;
@@ -695,8 +738,9 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       const engine = DocumentEngine.load_json(latest.json);
       replaceDocumentEngine(engine, latest.name, id, latest.revision ?? 0);
       browserSavedRef.current = {
-        json: engine.document_json(),
+        json: serializeDocument(engine),
         name: latest.name,
+        contentKey: documentContentKey(engine),
       };
       setAutosaveState("saved");
       setLastDocumentId(id);
@@ -708,7 +752,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   async function saveConflictCopy() {
     const current = engineRef.current;
     if (!current) return;
-    const engine = DocumentEngine.load_json(current.document_json());
+    const engine = DocumentEngine.load_json(serializeDocument(current));
     const name = `${documentName.replace(/\.(libra|olibra|json)$/i, "")} copy.libra`;
     const id = crypto.randomUUID();
     replaceDocumentEngine(engine, name, id);
@@ -723,7 +767,8 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     if (shared) return true;
     const session = projectSessionsRef.current.get(engine)!;
     if (session.conflicted) return false;
-    const json = engine.document_json();
+    const json = serializeDocument(engine);
+    const contentKey = documentContentKey(engine);
     const operationState = JSON.parse(engine.operation_state_json()) as {
       error?: string;
     } | null;
@@ -736,7 +781,10 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     const save = saveQueueRef.current.then(async () => {
       if (session.conflicted) return false;
       try {
-        const existing = await getRecentDocument(id);
+        const existing =
+          recentDocuments.find((item) => item.id === id) ??
+          archivedDocuments.find((item) => item.id === id) ??
+          (await getRecentDocument(id));
         const saved = await storeRecentDocument(
           {
             id,
@@ -757,12 +805,27 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         );
         session.revision = saved.revision ?? 0;
         if (engineRef.current === engine) {
-          browserSavedRef.current = { json, name };
+          browserSavedRef.current = { json, name, contentKey };
           setCurrentRecentDocumentId(id);
           setLastDocumentId(id);
-          setAutosaveState(engine.document_json() === json ? "saved" : "idle");
+          setAutosaveState(
+            documentContentKey(engine) === contentKey ? "saved" : "idle",
+          );
         }
-        await refreshRecentDocuments();
+        // The saved row is already available. Reloading every full project twice
+        // here copied all document histories on each autosave and stalled input.
+        setRecentDocuments((items) =>
+          [
+            ...items.filter((item) => item.id !== id),
+            ...(saved.archivedAt ? [] : [{ ...saved, json: "" }]),
+          ].sort((a, b) => b.updatedAt - a.updatedAt),
+        );
+        setArchivedDocuments((items) =>
+          [
+            ...items.filter((item) => item.id !== id),
+            ...(saved.archivedAt ? [{ ...saved, json: "" }] : []),
+          ].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+        );
         return true;
       } catch (cause) {
         if (cause instanceof ProjectConflictError) showProjectConflict(engine);
@@ -782,7 +845,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       persistenceIdRef.current ??
       (persistenceIdRef.current = crypto.randomUUID());
     const name = documentName;
-    const snapshotJson = engine.document_json();
+    const snapshotJson = serializeDocument(engine);
     setAutosaveState("saving");
     const stored = await rememberDocument(engine, name, id);
     if (engineRef.current !== engine) return;
@@ -811,11 +874,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       }
     }
     if (engineRef.current !== engine) return;
-    setAutosaveState(
-      browserSavedRef.current?.json === engine.document_json()
-        ? "saved"
-        : "idle",
-    );
+    setAutosaveState(browserSnapshotMatches(engine) ? "saved" : "idle");
   }
 
   function nextUntitledDocumentName() {
@@ -831,6 +890,16 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     return number === 1 ? "Untitled.libra" : `Untitled ${number}.libra`;
   }
 
+  async function loadProjectPayload(
+    document: RecentDocument,
+  ): Promise<RecentDocument> {
+    if (document.json) return document;
+    const stored = await getRecentDocument(document.id);
+    if (!stored || (stored.revision ?? 0) !== (document.revision ?? 0))
+      throw new ProjectConflictError();
+    return { ...document, json: stored.json };
+  }
+
   async function openRecentDocument(document: RecentDocument) {
     setDocumentSwitcherOpen(false);
     if (document.id === currentRecentDocumentId) {
@@ -839,6 +908,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     }
     if (!(await preserveCurrentDocument())) return;
     try {
+      document = await loadProjectPayload(document);
       const engine = DocumentEngine.load_json(document.json);
       replaceDocumentEngine(
         engine,
@@ -907,6 +977,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         (loaded.conflicted || loaded.revision !== (document.revision ?? 0))
       )
         throw new ProjectConflictError();
+      document = await loadProjectPayload(document);
       const saved = await storeRecentDocument(document);
       const engine = engineRef.current;
       const session = engine && projectSessionsRef.current.get(engine);
@@ -958,7 +1029,8 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       archivedAt: undefined,
     };
     try {
-      await storeRecentDocument(copy, null);
+      const source = await loadProjectPayload(document);
+      await storeRecentDocument({ ...copy, json: source.json }, null);
       await refreshRecentDocuments();
     } catch {
       setError("Could not save the duplicated project.");
@@ -1005,6 +1077,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   async function setProjectCover(document: RecentDocument, pageId: string) {
     let engine: DocumentEngine | undefined;
     try {
+      document = await loadProjectPayload(document);
       engine = DocumentEngine.load_json(document.json);
       if (!engine.set_active_page(pageId)) return;
       const operationState = JSON.parse(engine.operation_state_json()) as {
@@ -1244,8 +1317,20 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   }
 
   function selectPage(id: string) {
-    if (!engineRef.current?.set_active_page(id)) return;
-    refreshDocument([]);
+    if (documentModelRef.current?.active_page_id === id) return;
+    flushPendingSceneRefresh();
+    engineRef.current?.end_transaction();
+    const engine = engineRef.current;
+    if (!engine) return;
+    const before = documentContentKey(engine);
+    if (!engine.set_active_page(id)) return;
+    const navigationOnly = before === documentContentKey(engine);
+    try {
+      sessionStorage.setItem(`open-libra-page:${before.split(":")[0]}`, id);
+    } catch {
+      /* optional view state */
+    }
+    refreshDocument([], navigationOnly);
     rendererRef.current?.resetView();
   }
 
@@ -2443,6 +2528,16 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         engine = new DocumentEngine();
       }
       engine.enable_operations(operationActor());
+      if (!shared) {
+        try {
+          const page = sessionStorage.getItem(
+            `open-libra-page:${documentContentKey(engine).split(":")[0]}`,
+          );
+          if (page) engine.set_active_page(page);
+        } catch {
+          /* optional view state */
+        }
+      }
       engineRef.current = engine;
       setHistoryState({
         canUndo: engine.can_undo(),
@@ -2452,7 +2547,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
         revision: storedDocument ? (storedDocument.revision ?? 0) : null,
         conflicted: false,
       });
-      savedDocumentJsonRef.current = engine.document_json();
+      savedDocumentJsonRef.current = serializeDocument(engine);
       const initialDocumentId = storedDocument?.id ?? crypto.randomUUID();
       const initialDocumentName = shared
         ? "Shared document.libra"
@@ -2460,7 +2555,11 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       setCurrentRecentDocumentId(initialDocumentId);
       persistenceIdRef.current = initialDocumentId;
       browserSavedRef.current = storedDocument
-        ? { json: engine.document_json(), name: initialDocumentName }
+        ? {
+            json: serializeDocument(engine),
+            name: initialDocumentName,
+            contentKey: documentContentKey(engine),
+          }
         : undefined;
       setDocumentName(initialDocumentName);
       setAutosaveState(storedDocument ? "saved" : "idle");
@@ -2697,7 +2796,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     <main className={`app-shell ${shared ? "is-shared" : ""}`}>
       {shareOpen && (
         <ShareDocument
-          documentJson={() => engineRef.current!.document_json()}
+          documentJson={() => serializeDocument(engineRef.current!)}
           onClose={() => setShareOpen(false)}
         />
       )}

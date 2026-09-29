@@ -55,6 +55,8 @@ impl Document {
         let root = self.active_node_mut(group).unwrap();
         root.name = format!("Boolean / {operation:?}");
         root.boolean_operation = Some(operation);
+        // Seed independent result paint once; syncing operand geometry must
+        // not overwrite styling applied directly to the boolean group.
         root.fill = first.fill;
         root.stroke = first.stroke;
         root.stroke_width = first.stroke_width;

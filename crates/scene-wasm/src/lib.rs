@@ -400,17 +400,42 @@ impl DocumentEngine {
         serde_json::to_string(&self.document.read_model()).expect("read model is serializable")
     }
 
+    /// Identity of the committed snapshot exposed by document_json. Untracked
+    /// engines deliberately return no key so callers cannot cache mutable state.
+    pub fn document_snapshot_key(&self) -> String {
+        let Some(session) = &self.operation_session else {
+            return String::new();
+        };
+        let document = self.transaction_start.as_ref().unwrap_or(&self.document);
+        format!(
+            "{}:{}:{}",
+            session.journal.document_id,
+            session.revision(),
+            document.active_page_id
+        )
+    }
+
     pub fn document_json(&self) -> String {
-        let mut value = serde_json::to_value(if self.operation_session.is_some() {
+        #[derive(serde::Serialize)]
+        struct Snapshot<'a> {
+            #[serde(flatten)]
+            document: &'a Document,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            operation_history: Option<&'a operations::Journal>,
+        }
+        let document = if self.operation_session.is_some() {
             self.transaction_start.as_ref().unwrap_or(&self.document)
         } else {
             &self.document
+        };
+        serde_json::to_string(&Snapshot {
+            document,
+            operation_history: self
+                .operation_session
+                .as_ref()
+                .map(|session| &session.journal),
         })
-        .expect("document is serializable");
-        if let Some(session) = &self.operation_session {
-            value["operation_history"] = serde_json::to_value(&session.journal).unwrap();
-        }
-        value.to_string()
+        .expect("document is serializable")
     }
 
     pub fn enable_operations(&mut self, actor_id: &str) -> Result<(), JsValue> {
@@ -858,7 +883,17 @@ impl DocumentEngine {
     }
 
     pub fn set_active_page(&mut self, page_id: String) -> bool {
-        self.mutate(|document| document.set_active_page(parse_entity_id(&page_id)))
+        let page_id = parse_entity_id(&page_id);
+        let Some(page) = self.document.pages.iter().find(|page| page.id == page_id) else {
+            return false;
+        };
+        if page.benchmark_node_count.is_some() && page.nodes.is_empty() {
+            // Initial lazy benchmark generation adds real nodes and must be
+            // journaled. Ordinary navigation changes only local view state.
+            return self.mutate(|document| document.set_active_page(page_id));
+        }
+        self.document.active_page_id = page_id;
+        true
     }
 
     pub fn delete_node(&mut self, node_id: String) -> bool {
@@ -1661,30 +1696,44 @@ impl DocumentEngine {
 
     pub fn load_json(json: &str) -> Result<DocumentEngine, JsValue> {
         console_error_panic_hook::set_once();
-        let mut value: serde_json::Value = serde_json::from_str(json)
+        #[derive(serde::Deserialize)]
+        struct Header {
+            schema_version: Option<u32>,
+            operation_history: Option<operations::Journal>,
+        }
+        // Deserialize current files directly. Building a generic Value tree for
+        // the document AND its journal can exhaust the WASM address space.
+        let header: Header = serde_json::from_str(json)
             .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
-        let journal = value
-            .as_object_mut()
-            .and_then(|v| v.remove("operation_history"));
-        migrate_legacy_document_ids(&mut value);
-        let mut document: Document = serde_json::from_value(value)
-            .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
+        let mut document: Document = if header.schema_version == Some(SCHEMA_VERSION) {
+            serde_json::from_str(json)
+        } else {
+            let mut value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+                JsValue::from_str(&format!("Invalid Open Libra document: {error}"))
+            })?;
+            if let Some(object) = value.as_object_mut() {
+                object.remove("operation_history");
+            }
+            migrate_legacy_document_ids(&mut value);
+            serde_json::from_value(value)
+        }
+        .map_err(|error| JsValue::from_str(&format!("Invalid Open Libra document: {error}")))?;
         document
             .validate()
             .map_err(|error| JsValue::from_str(&error))?;
-        let operation_session = journal
-            .map(|value| {
-                let journal = serde_json::from_value(value)
-                    .map_err(|e| format!("Invalid operation history: {e}"))?;
-                operations::Session::restore(journal, &document, Uuid::now_v7())
-            })
+        let operation_session = header
+            .operation_history
+            .map(|journal| operations::Session::restore(journal, &document, Uuid::now_v7()))
             .transpose()
             .map_err(|e| JsValue::from_str(&e))?;
-        let before_population = document.clone();
-        document.populate_active_benchmark();
         let mut operation_session = operation_session;
-        if let Some(session) = &mut operation_session {
-            session.record(&before_population, &document, None);
+        let page = document.active_page();
+        if page.benchmark_node_count.is_some() && page.nodes.is_empty() {
+            let before_population = document.clone();
+            document.populate_active_benchmark();
+            if let Some(session) = &mut operation_session {
+                session.record(&before_population, &document, None);
+            }
         }
         Ok(Self {
             document,

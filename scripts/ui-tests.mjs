@@ -1,3 +1,5 @@
+import { testPageNavigation } from "./page-navigation-tests.mjs";
+import { testLargeStorage } from "./large-storage-tests.mjs";
 import { testBooleans } from "./boolean-tests.mjs";
 import { testMasks } from "./mask-tests.mjs";
 import { testPathEditing } from "./path-editing-tests.mjs";
@@ -768,6 +770,8 @@ try {
   await testPathEditing(browser, url);
   await testMasks(browser, url);
   await testBooleans(browser, url);
+  await testLargeStorage(browser, url);
+  await testPageNavigation(browser, url);
   await testRenderingInteraction(browser, url);
   await testProjectSafety(browser, url);
   await testCrossTab(browser, url);

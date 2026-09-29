@@ -251,8 +251,8 @@ export function Properties(props: {
             {selected.length === 1 && node.boolean_operation && (
               <>
                 <p className="path-edit-hint">
-                  Edit original shapes in Layers. The result updates
-                  automatically.
+                  Edit original shapes in Layers to update the geometry. Edit
+                  this group’s fill and border to style the result.
                 </p>
                 <button
                   className="secondary-button mask-action"

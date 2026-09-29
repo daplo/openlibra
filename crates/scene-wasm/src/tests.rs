@@ -2582,3 +2582,71 @@ fn boolean_transformed_operand_keeps_its_footprint() {
     assert_eq!(engine.hit_test(50.0, -10.0), group);
     assert_eq!(engine.hit_test(350.0, 50.0), group);
 }
+
+#[test]
+fn page_navigation_does_not_record_edits_or_recompute_geometry() {
+    let mut engine = DocumentEngine::new_blank();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    let first = engine.document.active_page_id.to_string();
+    let second = engine.add_page("Second".into());
+    let state = engine.operation_state_json();
+    assert!(engine.set_active_page(first.clone()));
+    assert_eq!(engine.document.active_page_id.to_string(), first);
+    assert_eq!(engine.operation_state_json(), state);
+    assert!(engine.set_active_page(second.clone()));
+    assert_eq!(engine.operation_state_json(), state);
+    let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+    assert_eq!(loaded.document.active_page_id.to_string(), second);
+    assert!(engine.undo());
+    assert_eq!(engine.document.pages.len(), 1);
+}
+
+#[test]
+fn boolean_result_paint_is_copied_once_and_remains_independently_editable() {
+    let mut engine = DocumentEngine::new_blank();
+    engine
+        .enable_operations(&Uuid::now_v7().to_string())
+        .unwrap();
+    let a = engine.add_rectangle();
+    let b = engine.add_rectangle();
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "union")
+        .unwrap();
+    let root_id = parse_entity_id(&group);
+    let initial = engine.document.active_node(root_id).unwrap().clone();
+    assert_eq!(
+        initial.fill,
+        engine
+            .document
+            .active_node(parse_entity_id(&a))
+            .unwrap()
+            .fill
+    );
+    engine.mutate(|d| {
+        let source = d.active_node_mut(parse_entity_id(&a)).unwrap();
+        source.fill = [1.0, 0.0, 0.0, 1.0];
+        source.stroke = [0.0, 0.0, 1.0, 1.0];
+        source.stroke_width = 7.0;
+    });
+    let result = engine.document.active_node(root_id).unwrap();
+    assert_eq!(result.fill, initial.fill);
+    assert_eq!(result.stroke, initial.stroke);
+    assert_eq!(result.stroke_width, initial.stroke_width);
+    engine.mutate(|d| {
+        let root = d.active_node_mut(root_id).unwrap();
+        root.fill = [0.0, 1.0, 0.0, 1.0];
+        root.stroke_width = 3.0;
+    });
+    engine.set_node_bounds(a, 10.0, 20.0, 200.0, 100.0);
+    let result = engine.document.active_node(root_id).unwrap();
+    assert_eq!(result.fill, [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(result.stroke_width, 3.0);
+    assert!(engine.undo());
+    let loaded = DocumentEngine::load_json(&engine.document_json()).unwrap();
+    assert_eq!(
+        loaded.document.active_node(root_id).unwrap().fill,
+        [0.0, 1.0, 0.0, 1.0]
+    );
+}

@@ -76,3 +76,29 @@ HEADLESS=false npm run benchmark:mixed
 ```
 
 Synthetic flat-rectangle pages continue using WebGPU. Their earlier FPS measurements must not be applied to mixed documents.
+
+## Page navigation and browser snapshots
+
+Page navigation for already materialized pages bypasses document editing and operation-history generation. The editor caches one committed JSON snapshot per engine/revision; navigation updates only its root active-page field. Gestures continue to expose their committed baseline until the transaction finishes. Snapshot serialization streams directly from Rust structs instead of constructing an intermediate JSON tree.
+
+Autosave reuses that snapshot, compares document strings directly, and updates the saved Library row without reloading every full project. Browser project and recovery records larger than 8 MiB use asynchronous gzip compression to avoid oversized IndexedDB records. Reads transparently restore the original JSON; existing uncompressed records remain supported. Portable .libra files are unchanged.
+
+The synthetic 50K/100K pages still generate their nodes and initial journal on first entry; that one-time work is distinct from subsequent navigation. Regression coverage includes snapshot invalidation across edits/undo/redo and compressed browser storage, recovery, unchanged-save revisions, and stale-write rejection.
+
+Repeated page visits reuse at most two parsed page read models. Any editor
+refresh caused by an edit clears that cache. Ordinary page navigation does not
+serialize or autosave the document: its selected page is tab-local session state,
+restored on reload. First-time benchmark generation still adds real document
+content and must be saved. Downloads and later content saves include the current
+page. Cross-tab conflict checks read revisions without decompressing documents;
+Library listings retain metadata only and load project contents on demand.
+
+The browser navigation regression measures click-to-paint time separately from
+browser automation overhead. Tests also ensure metadata reads do not decompress
+large document payloads and retain cross-tab conflict protection.
+
+Current-schema project loading deserializes the document and journal directly,
+without a second generic JSON tree. Legacy formats still use migrations. Replay
+still validates every operation and the final head; identical heads avoid allocating
+full property-diff maps. Already-populated benchmark pages no longer clone and
+record an unchanged document during load.

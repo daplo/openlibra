@@ -4,6 +4,7 @@ import type { DocumentChange } from "./operations";
 
 const reads = new Set([
   "document_json",
+  "document_snapshot_key",
   "read_model_json",
   "operation_state_json",
   "node_json",
