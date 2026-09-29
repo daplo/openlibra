@@ -746,10 +746,8 @@ try {
     state: "detached",
   });
 
-  const benchmarkPage = page
-    .getByTestId(/^page-node-/)
-    .filter({ hasText: "1K Nodes" });
-  await benchmarkPage.locator(".page-main").click();
+  const benchmarkPage = page.getByRole("button", { name: "1K Nodes stress test", exact: true });
+  await benchmarkPage.click();
   await page.waitForFunction(() => {
     const rows = [...document.querySelectorAll(".metrics > div")];
     return rows.some(
@@ -758,7 +756,7 @@ try {
         row.querySelector("dd")?.textContent === "1,000",
     );
   });
-  assert.equal(await benchmarkPage.getAttribute("data-active"), "true");
+  assert.equal(await benchmarkPage.getAttribute("aria-pressed"), "true");
   assert.deepEqual(
     browserErrors,
     [],
