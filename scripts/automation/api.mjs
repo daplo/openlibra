@@ -28,48 +28,103 @@ const allowed = new Set([
 ]);
 export function automation(root = process.cwd()) {
   root = fs.realpathSync(root);
-  function resolve(file, output = false) {
+  const directoryFlags =
+    fs.constants.O_RDONLY |
+    (fs.constants.O_DIRECTORY ?? 0) |
+    (fs.constants.O_NOFOLLOW ?? 0);
+  const rootFd = fs.openSync(root, directoryFlags);
+  function pathParts(file) {
     const candidate = path.resolve(root, file);
-    const resolved = output
-      ? path.join(
-          fs.realpathSync(path.dirname(candidate)),
-          path.basename(candidate),
-        )
-      : fs.realpathSync(candidate);
-    const relative = path.relative(root, resolved);
+    const relative = path.relative(root, candidate);
     if (
       relative === ".." ||
       relative.startsWith(".." + path.sep) ||
-      path.isAbsolute(relative)
+      path.isAbsolute(relative) ||
+      !relative
     )
       throw Error("File must be inside the configured workspace root");
-    if (
-      output &&
-      fs.existsSync(resolved) &&
-      fs.lstatSync(resolved).isSymbolicLink()
-    )
-      throw Error("Output symlinks are not supported");
-    return resolved;
+    return relative.split(path.sep);
+  }
+  function descriptorPath(fd, name) {
+    return `/proc/self/fd/${fd}/${name}`;
+  }
+  function openParent(file) {
+    const parts = pathParts(file);
+    let fd = rootFd;
+    try {
+      for (const part of parts.slice(0, -1)) {
+        const next = fs.openSync(descriptorPath(fd, part), directoryFlags);
+        if (fd !== rootFd) fs.closeSync(fd);
+        fd = next;
+      }
+      return {
+        fd,
+        name: parts.at(-1),
+        filename: path.join(root, ...parts),
+      };
+    } catch (error) {
+      if (fd !== rootFd) fs.closeSync(fd);
+      throw Error("File must be inside the configured workspace root", {
+        cause: error,
+      });
+    }
+  }
+  function resolve(file, output = false) {
+    const { fd, name, filename } = openParent(file);
+    try {
+      const target = descriptorPath(fd, name);
+      if (!output) {
+        let opened;
+        try {
+          opened = fs.openSync(
+            target,
+            fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+          );
+        } catch (error) {
+          if (error.code === "ELOOP")
+            throw Error("File must be inside the configured workspace root", {
+              cause: error,
+            });
+          throw error;
+        }
+        fs.closeSync(opened);
+      } else if (
+        fs.existsSync(target) &&
+        fs.lstatSync(target).isSymbolicLink()
+      ) {
+        throw Error("Output symlinks are not supported");
+      }
+      return filename;
+    } finally {
+      if (fd !== rootFd) fs.closeSync(fd);
+    }
   }
   function readBytes(file) {
-    const filename = resolve(file);
+    const { fd: parentFd, name, filename } = openParent(file);
     // Validate the opened descriptor rather than the path, so a symlink swapped
     // in after the workspace check cannot redirect the read outside root.
-    const fd = fs.openSync(
-      filename,
-      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
-    );
+    let fd;
     try {
+      try {
+        fd = fs.openSync(
+          descriptorPath(parentFd, name),
+          fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+        );
+      } catch (error) {
+        if (error.code === "ELOOP")
+          throw Error("File must be inside the configured workspace root", {
+            cause: error,
+          });
+        throw error;
+      }
       const opened = fs.fstatSync(fd);
-      const current = fs.statSync(resolve(file));
-      if (opened.dev !== current.dev || opened.ino !== current.ino)
-        throw Error("File changed while it was being opened");
       if (!opened.isFile() || opened.size > 64 * 1024 * 1024)
         throw Error("Expected a file no larger than 64 MiB");
       const bytes = fs.readFileSync(fd);
       return { filename, bytes };
     } finally {
-      fs.closeSync(fd);
+      if (fd !== undefined) fs.closeSync(fd);
+      if (parentFd !== rootFd) fs.closeSync(parentFd);
     }
   }
   function read(file) {
@@ -109,46 +164,57 @@ export function automation(root = process.cwd()) {
     }
   }
   function save(engine, destination, input) {
-    const filename = resolve(destination, true);
+    const { fd: parentFd, name, filename } = openParent(destination);
+    const target = descriptorPath(parentFd, name);
     const inPlace = filename === input?.filename;
-    if (!inPlace && fs.existsSync(filename))
-      throw Error("Output already exists; choose a new file");
-    const temp = path.join(
-      path.dirname(filename),
-      ".openlibra-" + randomUUID() + ".tmp",
-    );
-    const data =
-      JSON.stringify(
-        {
-          format: "open-libra-project",
-          format_version: 1,
-          document: JSON.parse(engine.document_json()),
-        },
-        null,
-        2,
-      ) + "\n";
     try {
-      const fd = fs.openSync(temp, "wx", 0o600);
+      if (
+        !inPlace &&
+        fs.existsSync(target) &&
+        fs.lstatSync(target).isSymbolicLink()
+      )
+        throw Error("Output symlinks are not supported");
+      if (!inPlace && fs.existsSync(target))
+        throw Error("Output already exists; choose a new file");
+      const temp = path.join(
+        `/proc/self/fd/${parentFd}`,
+        ".openlibra-" + randomUUID() + ".tmp",
+      );
+      const data =
+        JSON.stringify(
+          {
+            format: "open-libra-project",
+            format_version: 1,
+            document: JSON.parse(engine.document_json()),
+          },
+          null,
+          2,
+        ) + "\n";
       try {
-        fs.writeFileSync(fd, data);
-        fs.fsyncSync(fd);
+        const fd = fs.openSync(temp, "wx", 0o600);
+        try {
+          fs.writeFileSync(fd, data);
+          fs.fsyncSync(fd);
+        } finally {
+          fs.closeSync(fd);
+        }
+        if (inPlace) {
+          if (hash(readBytes(filename).bytes) !== input.sha256)
+            throw Error("Document changed during editing; inspect again");
+          fs.renameSync(temp, target);
+        } else {
+          fs.linkSync(temp, target); // Exclusive publication: never overwrite a concurrent new file.
+        }
+        return {
+          file: path.relative(root, filename),
+          sha256: hash(data),
+          ...describe(engine),
+        };
       } finally {
-        fs.closeSync(fd);
+        if (fs.existsSync(temp)) fs.unlinkSync(temp);
       }
-      if (inPlace) {
-        if (hash(fs.readFileSync(filename)) !== input.sha256)
-          throw Error("Document changed during editing; inspect again");
-        fs.renameSync(temp, filename);
-      } else {
-        fs.linkSync(temp, filename); // Exclusive publication: never overwrite a concurrent new file.
-      }
-      return {
-        file: path.relative(root, filename),
-        sha256: hash(data),
-        ...describe(engine),
-      };
     } finally {
-      if (fs.existsSync(temp)) fs.unlinkSync(temp);
+      if (parentFd !== rootFd) fs.closeSync(parentFd);
     }
   }
   return {

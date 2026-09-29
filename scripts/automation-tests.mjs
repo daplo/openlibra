@@ -47,6 +47,11 @@ try {
     const external = path.join(outside, "edits.json");
     fs.writeFileSync(external, JSON.stringify([move]));
     fs.symlinkSync(external, path.join(root, "escaped-edits.json"));
+    fs.symlinkSync(outside, path.join(root, "escaped-directory"));
+    assert.throws(
+      () => api.readOperations({ file: "escaped-directory/edits.json" }),
+      /workspace root/,
+    );
     for (const operations of [
       external,
       path.relative(root, external),

@@ -155,11 +155,11 @@ export function createScenePainter(nodes: NodeSummary[], assets: MediaAsset[]) {
     paths.set(node.id, nodePath(node));
     let box = nodeBounds(node);
     ownBounds.set(node.id, box);
-    const descendants = node.boolean_operation
-      ? []
-      : (children.get(node.id) ?? []);
-    for (const child of descendants)
-      box = union(box, prepare(child));
+const descendants = children.get(node.id) ?? [];
+    for (const child of descendants) {
+      const childBox = prepare(child);
+      if (!node.boolean_operation) box = union(box, childBox);
+    }
     bounds.set(node.id, box);
     return box;
   };
