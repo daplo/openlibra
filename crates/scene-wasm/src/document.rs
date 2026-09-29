@@ -255,30 +255,6 @@ impl Document {
         document.media_assets.clear();
         document.build_finance_mobile_demo();
 
-        for (name, description, count) in [
-            (
-                "1K Nodes · Baseline",
-                "A lightweight grid for validating normal editor responsiveness.",
-                1_000,
-            ),
-            (
-                "10K Nodes · Large",
-                "A large scene for measuring interaction and rendering headroom.",
-                10_000,
-            ),
-            (
-                "50K Nodes · Stress",
-                "A stress scene for observing frame rate and memory pressure.",
-                50_000,
-            ),
-            (
-                "100K Nodes · Extreme",
-                "An extreme scene for testing engine and GPU scaling limits.",
-                100_000,
-            ),
-        ] {
-            document.add_benchmark_page(name, description, count);
-        }
         document
     }
 
@@ -932,16 +908,14 @@ impl Document {
         self.relayout_container(sidebar);
     }
 
-    fn add_benchmark_page(&mut self, name: &str, description: &str, node_count: usize) {
-        let id = self.allocate_id();
-        self.pages.push(Page {
-            id,
-            name: name.into(),
-            description: description.into(),
-            nodes: Vec::new(),
-            benchmark_node_count: Some(node_count),
-            benchmark_modified_node_ids: Vec::new(),
-        });
+    pub(crate) fn benchmark(node_count: usize) -> Self {
+        let mut document = Self::blank();
+        let page = document.active_page_mut();
+        page.name = format!("{}K Nodes", node_count / 1_000);
+        page.description = "Temporary stress test. Changes reset when leaving.".into();
+        page.benchmark_node_count = Some(node_count);
+        document.populate_active_benchmark();
+        document
     }
 
     pub(crate) fn populate_active_benchmark(&mut self) {

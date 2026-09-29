@@ -175,6 +175,9 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   });
   const [stats, setStats] = useState(EMPTY_STATS);
   const [error, setError] = useState<string>();
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [benchmarkLoadMs, setBenchmarkLoadMs] = useState<number>();
+  const benchmarkActive = !shared && !!engineRef.current?.is_benchmark();
   const [initializing, setInitializing] = useState(true);
   const [initializationError, setInitializationError] = useState<string>();
   const [operationError, setOperationError] = useState<string>();
@@ -385,11 +388,13 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
     } | null;
     if (engineRef.current === engine)
       setOperationError(operationState?.error ?? undefined);
-    const modelKey = engine.document_snapshot_key();
+    const temporary = !shared && engine.is_benchmark();
+    if (temporary) navigation = true;
+    const modelKey = temporary ? "" : engine.document_snapshot_key();
     const pageModels = pageModelsRef.current;
-    if (!navigation) pageModels.clear();
+    if (!navigation || temporary) pageModels.clear();
     const model =
-      (navigation && pageModels.get(modelKey)) ||
+      (navigation && modelKey && pageModels.get(modelKey)) ||
       (JSON.parse(engine.read_model_json()) as DocumentReadModel);
     if (modelKey) {
       pageModels.set(modelKey, model);
@@ -1313,13 +1318,58 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
   function addPage() {
     const engine = engineRef.current;
     if (!engine) return;
-    engine.add_page(`Page ${documentModel.pages.length + 1}`);
+    engine.add_page(`Page ${documentModel.pages.length + (benchmarkActive ? 0 : 1)}`);
     refreshDocument([]);
+    rendererRef.current?.resetView();
+  }
+
+  async function startBenchmark(count: number) {
+    const engine = engineRef.current;
+    if (!engine || shared || benchmarkLoading) return;
+    flushPendingSceneRefresh();
+    engine.end_transaction();
+    setBenchmarkLoading(true);
+    setPathSession(undefined);
+    setEditingTextId(undefined);
+    setIsolationRootId(undefined);
+    copiedNodeIdsRef.current = [];
+    try {
+      // Paint feedback before synchronous generation, then finish after the scene paints.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => setTimeout(resolve, 0)),
+      );
+      if (engineRef.current !== engine) return;
+      const started = performance.now();
+      if (!engine.start_benchmark(count)) throw new Error("Unsupported stress test size");
+      pageModelsRef.current.clear();
+      refreshDocument([], true);
+      rendererRef.current?.resetView();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      if (engineRef.current === engine) setBenchmarkLoadMs(performance.now() - started);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (engineRef.current === engine) setBenchmarkLoading(false);
+    }
+  }
+
+  function leaveBenchmark() {
+    flushPendingSceneRefresh();
+    if (!engineRef.current?.end_benchmark()) return;
+    pageModelsRef.current.clear();
+    copiedNodeIdsRef.current = [];
+    setPathSession(undefined);
+    setEditingTextId(undefined);
+    setIsolationRootId(undefined);
+    refreshDocument([], true);
     rendererRef.current?.resetView();
   }
 
   function selectPage(id: string) {
     if (documentModelRef.current?.active_page_id === id) return;
+    if (!shared && engineRef.current?.is_benchmark()) leaveBenchmark();
     flushPendingSceneRefresh();
     engineRef.current?.end_transaction();
     const engine = engineRef.current;
@@ -2809,7 +2859,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
 
   return (
     <>
-      {initializing && (
+      {(initializing || benchmarkLoading) && (
         <div className="editor-loading-overlay">
           <div
             className="editor-loading-card"
@@ -2822,7 +2872,7 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
             <strong>
               {initializationError
                 ? "Unable to open document"
-                : "Opening your document…"}
+                : benchmarkLoading ? "Loading stress test…" : "Opening your document…"}
             </strong>
             <p>
               {initializationError ??
@@ -2838,8 +2888,8 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
       )}
       <main
         className={`app-shell ${shared ? "is-shared" : ""}`}
-        inert={initializing}
-        aria-busy={initializing}
+        inert={initializing || benchmarkLoading}
+        aria-busy={initializing || benchmarkLoading}
       >
         {shareOpen && (
           <ShareDocument
@@ -3244,10 +3294,36 @@ export function App({ shared }: { shared?: SharedEditorBridge }) {
           }
         >
           <aside className="left-panel">
+            {!shared && (
+              <section className="stress-tests" aria-label="Stress tests">
+                <strong>Stress tests</strong>
+                <div className="stress-test-options">
+                  {[1_000, 10_000, 50_000, 100_000].map((count) => (
+                    <button key={count} type="button"
+                      aria-label={`${count / 1_000}K Nodes stress test`}
+                      title={`Load ${count.toLocaleString()} temporary shapes`}
+                      aria-pressed={benchmarkActive && documentModel.pages.find((page) => page.id === documentModel.active_page_id)?.benchmark_node_count === count}
+                      onClick={() => void startBenchmark(count)}>
+                      {count / 1_000}K
+                    </button>
+                  ))}
+                </div>
+                <p>Temporary scenes. Edits reset when leaving.</p>
+                {benchmarkActive && (
+                  <>
+                    <p role="status">{benchmarkLoadMs !== undefined ? `Loaded in ${Math.round(benchmarkLoadMs)} ms · ` : ""}{stats.visibleObjects.toLocaleString()} visible · {stats.frameMs.toFixed(1)} ms/frame</p>
+                    <button type="button" onClick={leaveBenchmark}>Back to project</button>
+                  </>
+                )}
+              </section>
+            )}
             <Panel
               mode={mode}
               stats={stats}
-              model={isolatedModel}
+              model={benchmarkActive ? {
+                ...isolatedModel,
+                pages: isolatedModel.pages.filter((page) => page.id !== isolatedModel.active_page_id),
+              } : isolatedModel}
               selectedNodeIds={selectedNodeIds}
               onSelectNode={(id, additive) => {
                 selectNode(id, additive);

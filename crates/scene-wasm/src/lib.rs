@@ -353,6 +353,8 @@ pub struct DocumentEngine {
     geometry_transaction_start: Option<HistoryEntry>,
     operation_session: Option<operations::Session>,
     operation_error: Option<String>,
+    // Moved, never cloned: the saved project is parked while a temporary scene is active.
+    benchmark_project: Option<Box<DocumentEngine>>,
 }
 
 #[wasm_bindgen]
@@ -368,6 +370,7 @@ impl DocumentEngine {
             geometry_transaction_start: None,
             operation_session: None,
             operation_error: None,
+            benchmark_project: None,
         }
     }
 
@@ -381,7 +384,34 @@ impl DocumentEngine {
             geometry_transaction_start: None,
             operation_session: None,
             operation_error: None,
+            benchmark_project: None,
         }
+    }
+
+    /// Temporary scenes have no journal and are never part of a project snapshot.
+    pub fn start_benchmark(&mut self, node_count: usize) -> bool {
+        if ![1_000, 10_000, 50_000, 100_000].contains(&node_count) {
+            return false;
+        }
+        self.end_benchmark();
+        self.end_transaction();
+        let mut scene = Self::new_blank();
+        scene.document = Document::benchmark(node_count);
+        let project = std::mem::replace(self, scene);
+        self.benchmark_project = Some(Box::new(project));
+        true
+    }
+
+    pub fn end_benchmark(&mut self) -> bool {
+        let Some(project) = self.benchmark_project.take() else {
+            return false;
+        };
+        *self = *project;
+        true
+    }
+
+    pub fn is_benchmark(&self) -> bool {
+        self.benchmark_project.is_some()
     }
 
     pub fn scene_data(&self) -> Vec<f32> {
@@ -397,12 +427,21 @@ impl DocumentEngine {
     }
 
     pub fn read_model_json(&self) -> String {
-        serde_json::to_string(&self.document.read_model()).expect("read model is serializable")
+        let mut model = self.document.read_model();
+        if let Some(project) = &self.benchmark_project {
+            let mut pages = project.document.read_model().pages;
+            pages.append(&mut model.pages);
+            model.pages = pages;
+        }
+        serde_json::to_string(&model).expect("read model is serializable")
     }
 
     /// Identity of the committed snapshot exposed by document_json. Untracked
     /// engines deliberately return no key so callers cannot cache mutable state.
     pub fn document_snapshot_key(&self) -> String {
+        if let Some(project) = &self.benchmark_project {
+            return project.document_snapshot_key();
+        }
         let Some(session) = &self.operation_session else {
             return String::new();
         };
@@ -416,6 +455,9 @@ impl DocumentEngine {
     }
 
     pub fn document_json(&self) -> String {
+        if let Some(project) = &self.benchmark_project {
+            return project.document_json();
+        }
         #[derive(serde::Serialize)]
         struct Snapshot<'a> {
             #[serde(flatten)]
@@ -439,6 +481,11 @@ impl DocumentEngine {
     }
 
     pub fn enable_operations(&mut self, actor_id: &str) -> Result<(), JsValue> {
+        if self.is_benchmark() {
+            return Err(JsValue::from_str(
+                "Temporary stress tests cannot join collaboration",
+            ));
+        }
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             return Err(JsValue::from_str(
                 "Finish the active transaction before changing actor",
@@ -712,15 +759,18 @@ impl DocumentEngine {
     }
 
     pub fn add_page(&mut self, name: String) -> String {
+        self.end_benchmark();
         self.mutate(|document| document.add_page(name)).to_string()
     }
 
     pub fn rename_page(&mut self, page_id: String, name: String) -> bool {
+        self.end_benchmark();
         let page_id = parse_entity_id(&page_id);
         self.mutate(|document| document.rename_page(page_id, name))
     }
 
     pub fn delete_page(&mut self, page_id: String) -> bool {
+        self.end_benchmark();
         let page_id = parse_entity_id(&page_id);
         self.mutate(|document| document.delete_page(page_id))
     }
@@ -887,6 +937,17 @@ impl DocumentEngine {
     }
 
     pub fn set_active_page(&mut self, page_id: String) -> bool {
+        if let Some(project) = &self.benchmark_project {
+            if !project
+                .document
+                .pages
+                .iter()
+                .any(|page| page.id.to_string() == page_id)
+            {
+                return false;
+            }
+            self.end_benchmark();
+        }
         let page_id = parse_entity_id(&page_id);
         let Some(page) = self.document.pages.iter().find(|page| page.id == page_id) else {
             return false;
@@ -1486,12 +1547,18 @@ impl DocumentEngine {
     }
 
     pub fn begin_transaction(&mut self) {
+        if self.is_benchmark() {
+            return;
+        }
         if self.transaction_start.is_none() {
             self.transaction_start = Some(self.document.clone());
         }
     }
 
     pub fn begin_geometry_transaction(&mut self, node_ids_json: &str) -> Result<(), JsValue> {
+        if self.is_benchmark() {
+            return Ok(());
+        }
         if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
             return Ok(());
         }
@@ -1545,6 +1612,9 @@ impl DocumentEngine {
     }
 
     pub fn end_transaction(&mut self) {
+        if self.is_benchmark() {
+            return;
+        }
         if let Some(before) = self.transaction_start.take() {
             if component_source_changed(&before, &self.document) {
                 self.document.sync_component_instances();
@@ -1747,6 +1817,7 @@ impl DocumentEngine {
             geometry_transaction_start: None,
             operation_session,
             operation_error: None,
+            benchmark_project: None,
         })
     }
 }
@@ -1769,7 +1840,10 @@ impl DocumentEngine {
         &mut self,
         operation: impl FnOnce(&mut Document) -> R,
     ) -> (R, Option<String>) {
-        if self.transaction_start.is_some() || self.geometry_transaction_start.is_some() {
+        if self.is_benchmark()
+            || self.transaction_start.is_some()
+            || self.geometry_transaction_start.is_some()
+        {
             let before = self.document.has_booleans().then(|| self.document.clone());
             let result = operation(&mut self.document);
             if let Err(error) = self.document.sync_booleans() {
@@ -1873,6 +1947,9 @@ impl DocumentEngine {
     }
 
     fn push_undo(&mut self, entry: HistoryEntry) {
+        if self.is_benchmark() {
+            return;
+        }
         const HISTORY_LIMIT: usize = 100;
         if self.undo_stack.len() == HISTORY_LIMIT {
             self.undo_stack.remove(0);

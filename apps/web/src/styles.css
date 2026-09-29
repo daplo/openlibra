@@ -3729,3 +3729,14 @@ canvas[data-tool="hand"]:active {
     animation: none;
   }
 }
+
+/* Benchmarks are a separate, disposable workspace, never project pages. */
+.stress-tests {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #30343b);
+  font-size: 12px;
+}
+.stress-test-options { display: flex; gap: 6px; margin-top: 8px; }
+.stress-test-options button { flex: 1; padding: 7px 0; }
+.stress-test-options button[aria-pressed="true"] { background: #86e4bc; color: #12231c; }
+.stress-tests p { margin: 8px 0; font-size: 11px; line-height: 1.5; color: var(--text-muted, #9da4af); }
