@@ -2604,6 +2604,26 @@ fn page_navigation_does_not_record_edits_or_recompute_geometry() {
 }
 
 #[test]
+fn boolean_reorder_does_not_change_subtract_geometry() {
+    let mut engine = DocumentEngine::new_blank();
+    let a = engine.add_rectangle();
+    engine.set_node_bounds(a.clone(), 0.0, 0.0, 100.0, 100.0);
+    let b = engine.add_rectangle();
+    engine.set_node_bounds(b.clone(), 50.0, 0.0, 100.0, 100.0);
+    let group = engine
+        .boolean_nodes(&serde_json::to_string(&[&a, &b]).unwrap(), "subtract")
+        .unwrap();
+    assert_eq!(engine.hit_test(25.0, 50.0), group);
+    assert!(engine.hit_test(75.0, 50.0).is_empty());
+    assert!(engine.hit_test(125.0, 50.0).is_empty());
+    assert!(engine.reorder_node(b, a, true));
+    assert_eq!(engine.hit_test(25.0, 50.0), group);
+    assert!(engine.hit_test(75.0, 50.0).is_empty());
+    assert!(engine.hit_test(125.0, 50.0).is_empty());
+    engine.document.validate().unwrap();
+}
+
+#[test]
 fn boolean_result_paint_is_copied_once_and_remains_independently_editable() {
     let mut engine = DocumentEngine::new_blank();
     engine

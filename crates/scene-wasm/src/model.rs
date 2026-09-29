@@ -98,6 +98,8 @@ pub struct Node {
     pub(crate) mask_shape: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) boolean_operation: Option<BooleanOperation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) boolean_operands: Vec<EntityId>,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) width: f32,

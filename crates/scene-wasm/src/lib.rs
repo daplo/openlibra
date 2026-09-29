@@ -765,6 +765,7 @@ impl DocumentEngine {
                 return false;
             }
             node.boolean_operation = None;
+            node.boolean_operands.clear();
             node.vector = None;
             node.fill = [0.0; 4];
             node.stroke_width = 0.0;

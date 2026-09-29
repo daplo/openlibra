@@ -55,6 +55,7 @@ impl Document {
         let root = self.active_node_mut(group).unwrap();
         root.name = format!("Boolean / {operation:?}");
         root.boolean_operation = Some(operation);
+        root.boolean_operands = selected.iter().map(|n| n.id).collect();
         // Seed independent result paint once; syncing operand geometry must
         // not overwrite styling applied directly to the boolean group.
         root.fill = first.fill;
@@ -95,16 +96,32 @@ impl Document {
                 .collect();
             groups.sort_by_key(|(_, depth)| std::cmp::Reverse(*depth));
             for (id, _) in groups {
-                let operands: Vec<_> = page
+                let mut operands: Vec<_> = page
                     .nodes
                     .iter()
                     .filter(|n| n.parent_id == Some(id))
                     .cloned()
                     .collect();
+                let stored = page
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .map(|n| n.boolean_operands.clone())
+                    .unwrap_or_default();
+                if !stored.is_empty() {
+                    operands.sort_by_key(|n| {
+                        stored
+                            .iter()
+                            .position(|operand| *operand == n.id)
+                            .unwrap_or(usize::MAX)
+                    });
+                }
                 if operands.len() > 64 || operands.iter().any(|n| !supported(n) || n.mask_shape) {
                     return Err("Boolean operands must be closed shapes (maximum 64)".into());
                 }
+                let order: Vec<_> = operands.iter().map(|n| n.id).collect();
                 let root = page.nodes.iter_mut().find(|n| n.id == id).unwrap();
+                root.boolean_operands = order;
                 root.vector = Some(result_vector(
                     root,
                     combine(&operands, root.boolean_operation.unwrap())?,

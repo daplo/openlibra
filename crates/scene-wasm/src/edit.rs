@@ -42,6 +42,11 @@ impl Document {
             node.parent_id = node
                 .parent_id
                 .map(|parent| id_map.get(&parent).copied().unwrap_or(parent));
+            node.boolean_operands = node
+                .boolean_operands
+                .iter()
+                .filter_map(|id| id_map.get(id).copied())
+                .collect();
             node.instance_root_id = node
                 .instance_root_id
                 .map(|root| id_map.get(&root).copied().unwrap_or(root));
@@ -141,6 +146,11 @@ impl Document {
                     let mut clone = source.clone();
                     // The same source slot in the same instance has a stable identity on replay.
                     clone.id = uuid::Uuid::new_v5(&root_id, source.id.as_bytes());
+                    clone.boolean_operands = clone
+                        .boolean_operands
+                        .iter()
+                        .map(|id| uuid::Uuid::new_v5(&root_id, id.as_bytes()))
+                        .collect();
                     clone.parent_id = source
                         .parent_id
                         .and_then(|parent| instance_by_slot.get(&parent).copied());
@@ -386,6 +396,11 @@ impl Document {
                 } else {
                     node.parent_id.and_then(|id| id_map.get(&id).copied())
                 };
+                node.boolean_operands = node
+                    .boolean_operands
+                    .iter()
+                    .filter_map(|id| id_map.get(id).copied())
+                    .collect();
                 node.x += dx;
                 node.y += dy;
                 node.component_slot_id = Some(source_id);
